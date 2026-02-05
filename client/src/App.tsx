@@ -89,12 +89,23 @@ function Router() {
   
   // Check if we're on a trial detail page
   if (location.startsWith('/trial/')) {
+    if (location.endsWith('/assistant')) {
+      const trialId = location.split('/')[2];
+      breadcrumbs = [
+        { label: "Workspace", href: "/" },
+        { label: "Trial Workspace", href: "/trial-workspace" },
+        { label: trialId ? `Trial ${trialId}` : "Trial" },
+        { label: "Document AI Assistant" },
+      ];
+      breadcrumbIcon = FileText;
+    } else {
     breadcrumbs = [
       { label: "Clinical Hub", href: "/" },
       { label: "Trial Workspace", href: "/trial-workspace" },
       { label: "Trial Details" },
     ];
     breadcrumbIcon = TrialElements;
+    }
   }
 
   return (
@@ -103,6 +114,9 @@ function Router() {
         <Route path="/" component={Overview} />
         <Route path="/workspace" component={TrialWorkspace} />
         <Route path="/trial-workspace" component={TrialWorkspace} />
+        <Route path="/trial/:id/assistant">{(params) => (
+          <DocumentAIAssistant trialId={params.id} />
+        )}</Route>
         <Route path="/trial/:id" component={TrialDetail} />
         <Route path="/documents">{() => {
           // Extract trialId from query params

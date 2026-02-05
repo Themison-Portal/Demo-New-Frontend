@@ -31,6 +31,9 @@ if (process.env.NODE_ENV === "development") {
   console.log(
     `[Env] OPENAI_API_KEY ${openaiApiKey ? "loaded" : "missing"} (length: ${openaiApiKey.length})`
   );
+  console.log(
+    `[Env] OPENAI_MODEL ${process.env.OPENAI_MODEL ?? "gpt-4o-mini"}`
+  );
 }
 
 export const ENV = {

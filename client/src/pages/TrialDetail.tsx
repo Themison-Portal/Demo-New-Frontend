@@ -361,7 +361,7 @@ export default function TrialDetail() {
               <Button 
                 variant="outline" 
                 className="flex items-center gap-2 text-sm"
-                onClick={() => navigate(`/documents?trialId=${trialId}`)}
+                onClick={() => navigate(`/trial/${trialId}/assistant`)}
               >
                 <Sparkles className="h-4 w-4" />
                 AI Assistant

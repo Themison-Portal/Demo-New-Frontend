@@ -68,6 +68,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const [pdfViewerExpanded, setPdfViewerExpanded] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<{name: string, url: string, page?: number} | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
+  const [taskPaneOpen, setTaskPaneOpen] = useState(false);
+  const [taskPaneExpanded, setTaskPaneExpanded] = useState(false);
   // If trialId is provided, we're in trial-specific mode; otherwise, search all trials
   const searchMode = trialId ? 'single' : 'all';
   const selectedTrialId = trialId || 'all';
@@ -87,7 +89,10 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
   const renderSourceModal = () => (
     <Dialog open={sourceModalOpen} onOpenChange={setSourceModalOpen}>
-      <DialogContent className="max-w-4xl h-[600px] p-0 overflow-hidden flex flex-col">
+      <DialogContent
+        showCloseButton={false}
+        className="!w-[1200px] !max-w-[90vw] h-[680px] p-0 overflow-hidden flex flex-col"
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <DialogTitle className="text-lg font-semibold text-gray-900">
             Select Document
@@ -105,13 +110,16 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           <div className="w-1/3 border-r border-gray-200 overflow-y-auto">
             <div className="p-2">
               {trialId ? (
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded transition-colors text-left bg-blue-50 text-blue-700"
-                >
+                <div className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded text-left bg-blue-50 text-blue-700">
+                  <input
+                    type="checkbox"
+                    checked
+                    readOnly
+                    className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                  />
                   <FlaskConical className="w-4 h-4 shrink-0" />
                   <span className="truncate">{scopedTrial?.title || trialId}</span>
-                </button>
+                </div>
               ) : trialsWithDocs && trialsWithDocs.length > 0 ? (
                 <div className="space-y-0.5">
                   {trialsWithDocs.map((trial) => {
@@ -133,6 +141,19 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                             : "text-gray-700 hover:bg-gray-50"
                         }`}
                       >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => {
+                            if (selected) {
+                              setSelectedTrials(selectedTrials.filter(t => t !== trial.id));
+                            } else {
+                              setSelectedTrials([...selectedTrials, trial.id]);
+                            }
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                        />
                         <FlaskConical className="w-4 h-4 shrink-0" />
                         <span className="truncate">{trial.name}</span>
                       </button>
@@ -181,6 +202,19 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                     : "border-transparent hover:bg-gray-50"
                                 }`}
                               >
+                                <input
+                                  type="checkbox"
+                                  checked={selected}
+                                  onChange={() => {
+                                    if (selected) {
+                                      setSelectedDocuments(selectedDocuments.filter(id => id !== doc.id));
+                                    } else {
+                                      setSelectedDocuments([...selectedDocuments, doc.id]);
+                                    }
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600"
+                                />
                                 <FileText className="w-5 h-5 text-gray-400 shrink-0 mt-0.5" />
                                 <div className="flex-1 min-w-0 space-y-1">
                                   <div className="flex items-center gap-2">
@@ -321,6 +355,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         role: 'assistant',
         content: response.message,
         thinking: response.thinking,
+        thoughtsSummary: response.thinking,
       }]);
     } catch (error) {
       console.error('Error in chat:', error);
@@ -420,11 +455,28 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
       {/* Split Pane Container - fills remaining height */}
       <div className="flex-1 flex overflow-hidden relative transition-opacity duration-500 ease-in-out" style={{opacity: isTransitioning ? 0 : 1}}>
         {/* Left: Chat Area */}
-        <div className={`flex flex-col transition-all duration-300 ${
-          pdfViewerOpen && !pdfViewerExpanded ? 'w-1/2' : 'w-full'
-        }`}>
+        <div
+          className={`flex flex-col transition-all duration-300 ${
+            taskPaneOpen
+              ? "w-[45%]"
+              : pdfViewerOpen && !pdfViewerExpanded
+                ? "w-1/2"
+                : "w-full"
+          }`}
+          style={{ display: taskPaneExpanded ? "none" : undefined }}
+        >
           {/* Chat Messages Area */}
           <div className="flex-1 overflow-y-auto py-8 relative">
+            <div className="absolute right-6 top-2 z-10">
+              <button
+                type="button"
+                onClick={() => setTaskPaneOpen(true)}
+                className="flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm hover:bg-gray-50"
+              >
+                <CheckSquare className="h-4 w-4" />
+                Task Pane
+              </button>
+            </div>
             <div className="max-w-5xl mx-auto px-6 space-y-8 relative">
               {chatHistory.length === 0 ? (
                 <div className="flex flex-col items-center text-center space-y-10 pt-6">
@@ -456,7 +508,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       />
                       <div className="flex items-center mt-3 justify-between">
                         <div className="flex items-center gap-2">
-                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-accent/80 rounded-full p-1.5">
+                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5">
                             <Paperclip className="w-4 h-4" />
                           </button>
                           <button className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors">
@@ -469,7 +521,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                             <Sparkles className="w-3.5 h-3.5" />
                             Auto
                           </button>
-                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-accent/80 rounded-full p-1.5">
+                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5">
                             <Mic className="w-4 h-4" />
                           </button>
                           <button
@@ -561,7 +613,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                               <ChevronDown className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" />
                             </summary>
                             <div className="rounded-b-lg border border-t-0 border-gray-200 px-4 py-3 text-sm text-gray-600 bg-white/60 whitespace-pre-wrap">
-                              {msg.thoughtsSummary || "Thought summaries will appear here."}
+                              {msg.thoughtsSummary || msg.thinking || "Thought summaries will appear here."}
                             </div>
                           </details>
                         )}
@@ -973,8 +1025,107 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           )}
         </div>
 
+        {/* Task Pane - Right Side */}
+        {taskPaneOpen && (
+          <div
+            className={`${taskPaneExpanded ? "fixed inset-0 z-[999] bg-white" : "w-[55%] pl-4 pr-6 pb-4 pt-2"} transition-all duration-500 ease-out`}
+          >
+            <div
+              className={`${taskPaneExpanded ? "h-full rounded-none" : "h-full rounded-2xl"} bg-white border border-gray-200 flex flex-col`}
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Task Pane</p>
+                  <p className="text-xs text-gray-500">AI-generated follow-ups</p>
+                </div>
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setTaskPaneExpanded(prev => !prev)}
+                    className="text-gray-400 hover:text-gray-600"
+                    aria-label={taskPaneExpanded ? "Exit fullscreen" : "Expand pane"}
+                  >
+                    {taskPaneExpanded ? (
+                      <Minimize2 className="h-4 w-4" />
+                    ) : (
+                      <Maximize2 className="h-4 w-4" />
+                    )}
+                  </button>
+                  <div className="h-4 w-px bg-gray-200" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTaskPaneExpanded(false);
+                      setTaskPaneOpen(false);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                    aria-label="Close pane"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-gray-900">Task completed</p>
+                    <span className="text-xs text-emerald-600">✔ Done</span>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-2">
+                    Generated exclusion criteria summary.
+                  </p>
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Suggested follow-ups
+                  </p>
+                  <div className="space-y-2">
+                    {[
+                      "Generate a visit checklist for Visit 5",
+                      "Summarize key safety monitoring steps",
+                      "Draft patient eligibility notes for the team",
+                    ].map((item, idx) => (
+                      <button
+                        key={idx}
+                        className="w-full text-left px-3 py-2 rounded-lg border border-gray-100 hover:bg-gray-50 text-sm text-gray-700"
+                      >
+                        {item}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                    Task List
+                  </p>
+                  <div className="space-y-2">
+                    {[
+                      "Review protocol section 6.2",
+                      "Confirm visit window ranges",
+                      "Send summary to sponsor",
+                    ].map((item, idx) => (
+                      <label key={idx} className="flex items-center gap-2 text-sm text-gray-700">
+                        <input type="checkbox" className="h-4 w-4 rounded border-gray-300 text-blue-600" />
+                        {item}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="border-t border-gray-100 px-6 py-4 flex items-center gap-2">
+                <Button variant="outline" className="flex-1">
+                  Save
+                </Button>
+                <Button className="flex-1">Create Task</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Right: PDF Viewer Pane - Fixed Position */}
-        {pdfViewerOpen && selectedDocument && !pdfViewerExpanded && (
+        {pdfViewerOpen && selectedDocument && !pdfViewerExpanded && !taskPaneOpen && (
           <div className="absolute top-0 right-0 w-1/2 h-full flex flex-col pt-0 pb-3 pr-6 pl-3">
             <div className="flex-1 bg-white flex flex-col rounded-xl overflow-hidden">
             {/* PDF Viewer Header */}

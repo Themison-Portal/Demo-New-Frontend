@@ -73,10 +73,13 @@ interface NavSection {
 
 export function Sidebar() {
   const [location, navigate] = useLocation();
-  const isDocumentAssistant = location.startsWith("/documents");
-  const trialIdFromQuery = isDocumentAssistant
-    ? new URLSearchParams(window.location.search).get("trialId")
-    : null;
+  const isTrialAssistantRoute = location.startsWith("/trial/") && location.endsWith("/assistant");
+  const isDocumentAssistant = location.startsWith("/documents") || isTrialAssistantRoute;
+  const trialIdFromQuery = isTrialAssistantRoute
+    ? location.split("/")[2]
+    : isDocumentAssistant
+      ? new URLSearchParams(window.location.search).get("trialId")
+      : null;
   const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
   // Get trials from database

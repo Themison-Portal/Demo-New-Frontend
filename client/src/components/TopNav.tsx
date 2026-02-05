@@ -77,6 +77,18 @@ export function TopNav() {
   // Get breadcrumb based on current location (returns section, page, and optional subpage)
   const getBreadcrumb = () => {
     if (location === '/') return { section: 'General', page: 'Dashboard' };
+    if (location.startsWith('/trial/') && location.endsWith('/assistant')) {
+      const trialId = location.split('/')[2]?.toLowerCase();
+      const trial = trials.find(t => t.id === trialId);
+      const trialName = trial ? trial.title : 'Trial';
+      return {
+        section: 'Workspace',
+        sectionHref: '/',
+        page: trialName,
+        pageHref: `/trial/${trialId}`,
+        subpage: 'Document AI Assistant',
+      };
+    }
     if (location.startsWith('/trial/')) {
       // Extract trial ID from URL and normalize to lowercase
       const trialId = location.split('/')[2]?.toLowerCase();
@@ -122,6 +134,7 @@ export function TopNav() {
   // Get breadcrumb icon based on current location
   const getBreadcrumbIcon = () => {
     if (location === '/') return Home;
+    if (location.startsWith('/trial/') && location.endsWith('/assistant')) return FileText;
     if (location.startsWith('/trial/')) return FlaskConical;
     if (location.startsWith('/workspace')) return FlaskConical;
     if (location.startsWith('/trial-workspace')) return FlaskConical;
