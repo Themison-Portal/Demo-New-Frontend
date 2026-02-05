@@ -118,10 +118,69 @@ ${conversationHistory}`;
           storeNames
         );
 
+        let sources: Array<{
+          fileId?: string;
+          filename?: string;
+          fileUrl?: string;
+          protocolId?: number;
+          excerpt?: string;
+          section?: string;
+        }> = [];
+
+        if (citations && citations.length > 0) {
+          const fileIds = Array.from(
+            new Set(
+              citations
+                .map((citation: any) => citation.file_id)
+                .filter((id: string | undefined): id is string => Boolean(id))
+            )
+          );
+
+          if (fileIds.length > 0) {
+            const { inArray } = await import("drizzle-orm");
+            const fileDocs = await db
+              .select()
+              .from(fileSearchDocuments)
+              .where(inArray(fileSearchDocuments.documentName, fileIds));
+
+            const protocolIds = Array.from(
+              new Set(fileDocs.map(doc => doc.protocolId))
+            );
+
+            const protocolRows = protocolIds.length
+              ? await db
+                  .select()
+                  .from(protocols)
+                  .where(inArray(protocols.id, protocolIds))
+              : [];
+
+            const fileDocById = new Map(fileDocs.map(doc => [doc.documentName, doc]));
+            const protocolById = new Map(protocolRows.map(protocol => [protocol.id, protocol]));
+
+            sources = citations.map((citation: any) => {
+              const fileId = citation.file_id;
+              const fileDoc = fileId ? fileDocById.get(fileId) : undefined;
+              const protocol = fileDoc ? protocolById.get(fileDoc.protocolId) : undefined;
+
+              return {
+                fileId,
+                filename: protocol?.filename || fileDoc?.displayName || citation.file_name || fileId,
+                fileUrl: protocol?.fileUrl,
+                protocolId: fileDoc?.protocolId,
+                category: protocol?.category,
+                excerpt: citation.text,
+                section: citation.section,
+                page: citation.page_number,
+              };
+            });
+          }
+        }
+
         return {
           message: answer,
           thinking: `Searching through ${storeNames.length} document store(s) to find relevant information. Analyzing document contents and extracting key information to answer your question accurately.`,
           citations,
+          sources,
         };
       } catch (error: any) {
         console.error('Error querying with File Search:', error);

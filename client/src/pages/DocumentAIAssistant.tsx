@@ -53,7 +53,7 @@ interface ChatMessage {
   content: string;
   thinking?: string; // AI's reasoning/thought process
   thoughtsSummary?: string; // UI-friendly summary (no raw chain-of-thought)
-  sources?: Array<{ filename: string; category: string }>;
+  sources?: Array<{ filename: string; section?: string; excerpt?: string; fileId?: string; fileUrl?: string; protocolId?: number; page?: number; category?: string }>;
 }
 
 export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProps) {
@@ -70,6 +70,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [taskPaneOpen, setTaskPaneOpen] = useState(false);
   const [taskPaneExpanded, setTaskPaneExpanded] = useState(false);
+  const [taskPaneDocument, setTaskPaneDocument] = useState<{ name: string; url: string; section?: string; page?: number } | null>(null);
   // If trialId is provided, we're in trial-specific mode; otherwise, search all trials
   const searchMode = trialId ? 'single' : 'all';
   const selectedTrialId = trialId || 'all';
@@ -351,11 +352,14 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {})
       });
 
+      const sources = (response as any).sources as Array<any> | undefined;
+
       setChatHistory(prev => [...prev, {
         role: 'assistant',
         content: response.message,
         thinking: response.thinking,
         thoughtsSummary: response.thinking,
+        sources,
       }]);
     } catch (error) {
       console.error('Error in chat:', error);
@@ -387,6 +391,19 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
       page,
     });
     setPdfViewerOpen(true);
+  };
+
+  const handleOpenTaskDocument = (source: { filename: string; section?: string; page?: number; fileUrl?: string }) => {
+    const baseUrl = source.fileUrl || 'https://pdfobject.com/pdf/sample.pdf';
+    const urlWithPage = source.page ? `${baseUrl}#page=${source.page}` : baseUrl;
+    setTaskPaneDocument({
+      name: source.filename,
+      section: source.section,
+      page: source.page,
+      url: urlWithPage,
+    });
+    setTaskPaneExpanded(false);
+    setTaskPaneOpen(true);
   };
 
   const handleClosePdfViewer = () => {
@@ -604,18 +621,21 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
                       <div className="space-y-3">
                         {msg.role === "assistant" && (
-                          <details className="group mb-4 max-w-4xl mx-auto">
-                            <summary className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 transition-colors">
-                              <div className="flex items-center gap-2">
-                                <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                                <span className="font-medium">Thoughts</span>
+                          <div className="max-w-4xl mx-auto">
+                            <details className="group mb-4">
+                              <summary className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 transition-colors">
+                                <div className="flex items-center gap-2">
+                                  <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0" />
+                                  <span className="font-medium">Thoughts</span>
+                                </div>
+                                <ChevronDown className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" />
+                              </summary>
+                              <div className="rounded-b-lg border border-t-0 border-gray-200 px-4 py-3 text-sm text-gray-600 bg-white/60 whitespace-pre-wrap">
+                                {msg.thoughtsSummary || msg.thinking || "Thought summaries will appear here."}
                               </div>
-                              <ChevronDown className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" />
-                            </summary>
-                            <div className="rounded-b-lg border border-t-0 border-gray-200 px-4 py-3 text-sm text-gray-600 bg-white/60 whitespace-pre-wrap">
-                              {msg.thoughtsSummary || msg.thinking || "Thought summaries will appear here."}
-                            </div>
-                          </details>
+                            </details>
+                            <div className="mt-4 border-t border-gray-200" />
+                          </div>
                         )}
 
                         <div
@@ -721,7 +741,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                   em: ({ children }) => <em className="italic">{children}</em>,
                                 }}
                               >
-                                {msg.content}
+                                {msg.content.replace(/【[^】]+】/g, "").trim()}
                               </ReactMarkdown>
                             ) : (
                               <div className="whitespace-pre-wrap break-words leading-relaxed bg-white px-4 py-3 rounded-lg text-sm">
@@ -731,9 +751,53 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                           </div>
                         </div>
 
+                    {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                          <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                            <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase">
+                              Evidence from study documents (click to open)
+                            </p>
+                            {msg.sources.map((source, sourceIndex) => {
+                              return (
+                                <div
+                                  key={sourceIndex}
+                                  className="bg-white/70 border border-gray-100 rounded-xl p-3 space-y-2"
+                                >
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex items-start gap-3">
+                                      <FileText className="w-5 h-5 text-blue-600 mt-0.5" />
+                                      <div>
+                                        <p className="text-sm font-semibold text-gray-900">
+                                          {source.category || "Document"}
+                                        </p>
+                                        <p className="text-[11px] text-gray-500 mt-0.5">
+                                          {source.section ? `Section "${source.section}"` : "Section not available"}
+                                          {" · "}
+                                          {source.page ? `Page ${source.page}` : "Page not available"}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <p className="text-xs text-gray-600 italic ml-8 mt-2">
+                                    {source.excerpt
+                                      ? source.excerpt.replace(/【[^】]+】/g, "").trim() || "Excerpt not available."
+                                      : "Excerpt not available."}
+                                  </p>
+                                  <button
+                                    onClick={() => handleOpenTaskDocument(source)}
+                                    className="inline-flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg mt-2"
+                                  >
+                                    Open in {source.category || "Document"}
+                                    <ExternalLink className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
                         {msg.role === "assistant" && (
-                          <div className="max-w-4xl mx-auto">
-                            <div className="mt-3 flex items-center gap-2 text-gray-500">
+                          <div className="max-w-4xl mx-auto mt-6 pt-4 border-t border-gray-200">
+                            <div className="flex items-center gap-2 text-gray-500">
                               <div className="relative group">
                                 <button
                                   className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
@@ -862,52 +926,6 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        )}
-
-                        {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
-                          <div className="mt-4 space-y-3 max-w-3xl mx-auto">
-                            {msg.sources.map((source, sourceIndex) => {
-                              const borderColors = [
-                                "border-l-blue-500",
-                                "border-l-green-500",
-                                "border-l-orange-500",
-                                "border-l-purple-500",
-                              ];
-                              const borderColor = borderColors[sourceIndex % borderColors.length];
-
-                              return (
-                                <div
-                                  key={sourceIndex}
-                                  className={`bg-gray-50 border-l-4 ${borderColor} rounded-r-lg p-4 space-y-3`}
-                                >
-                                  <div className="flex items-start justify-between">
-                                    <div className="flex items-center gap-2">
-                                      <FileText className="w-5 h-5 text-gray-600" />
-                                      <div>
-                                        <p className="font-medium text-gray-900">{source.filename}</p>
-                                        <p className="text-xs text-gray-500">
-                                          Section "{source.category}"
-                                        </p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <p className="text-sm text-gray-700 italic">
-                                    "At Visit 3, the subject must undergo a safety assessment including
-                                    vital signs, physical examination, and review of adverse events.
-                                    Blood samples must be collected according to the Schedule of
-                                    Activities."
-                                  </p>
-                                  <button
-                                    onClick={() => handleOpenDocument(source.filename, 3)}
-                                    className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700"
-                                  >
-                                    Open in {source.filename}
-                                    <ExternalLink className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              );
-                            })}
                           </div>
                         )}
                       </div>
@@ -1066,6 +1084,28 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+                {taskPaneDocument && (
+                  <div className="rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-3 bg-gray-50">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{taskPaneDocument.name}</p>
+                        {taskPaneDocument.section && (
+                          <p className="text-xs text-gray-500">Section: {taskPaneDocument.section}</p>
+                        )}
+                      </div>
+                      {taskPaneDocument.page && (
+                        <span className="text-xs text-gray-500">Page {taskPaneDocument.page}</span>
+                      )}
+                    </div>
+                    <div className="h-64 bg-white">
+                      <iframe
+                        src={taskPaneDocument.url}
+                        className="w-full h-full"
+                        title={taskPaneDocument.name}
+                      />
+                    </div>
+                  </div>
+                )}
                 <div className="rounded-xl border border-gray-100 bg-gray-50/60 p-4">
                   <div className="flex items-center justify-between">
                     <p className="text-sm font-medium text-gray-900">Task completed</p>

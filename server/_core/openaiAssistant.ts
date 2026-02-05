@@ -180,10 +180,41 @@ Always cite the specific documents and sections you reference in your answers.`,
     const answer = textContent.text.value;
 
     // Extract citations from annotations
-    const citations = textContent.text.annotations?.map(annotation => ({
-      text: annotation.text,
-      file_citation: 'file_citation' in annotation ? annotation.file_citation : undefined,
-    })) || [];
+    const rawCitations =
+      textContent.text.annotations?.map(annotation => ({
+        text: annotation.text,
+        file_citation: "file_citation" in annotation ? annotation.file_citation : undefined,
+        page_number:
+          "file_citation" in annotation
+            ? (annotation.file_citation as any)?.page_number ?? (annotation.file_citation as any)?.page
+            : undefined,
+      })) || [];
+
+    const fileNameCache = new Map<string, string>();
+    const citations = await Promise.all(
+      rawCitations.map(async (citation) => {
+        const fileId = citation.file_citation?.file_id;
+        if (!fileId) {
+          return { ...citation };
+        }
+
+        if (!fileNameCache.has(fileId)) {
+          try {
+            const fileInfo = await openai.files.retrieve(fileId);
+            fileNameCache.set(fileId, fileInfo.filename || fileId);
+          } catch (error) {
+            fileNameCache.set(fileId, fileId);
+          }
+        }
+
+        return {
+          ...citation,
+          file_id: fileId,
+          file_name: fileNameCache.get(fileId),
+          page_number: citation.page_number,
+        };
+      })
+    );
 
     // Clean up: delete the temporary assistant
     await openai.beta.assistants.delete(assistant.id);
