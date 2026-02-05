@@ -1,0 +1,37 @@
+{
+  "query": "SHOW TABLES;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SHOW TABLES;",
+  "rows": [
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "__drizzle_migrations"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "phaseTransitions"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "phases"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "protocolSections"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "protocols"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "taskDependencies"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "taskScaffolds"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "tasks"
+    },
+    {
+      "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ": "users"
+    }
+  ],
+  "messages": [],
+  "stdout": "Tables_in_a8ihUWLsqjdGiLpLtrJkcZ\n__drizzle_migrations\nphaseTransitions\nphases\nprotocolSections\nprotocols\ntaskDependencies\ntaskScaffolds\ntasks\nusers\n",
+  "stderr": "",
+  "execution_time_ms": 351
+}

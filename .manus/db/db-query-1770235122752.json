@@ -1,0 +1,70 @@
+{
+  "query": "SELECT id, trialId, filename, category FROM protocols LIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT id, trialId, filename, category FROM protocols LIMIT 10;",
+  "rows": [
+    {
+      "id": "3",
+      "trialId": "abc-123",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "5",
+      "trialId": "1",
+      "filename": "test-protocol.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "30001",
+      "trialId": "def-456",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "30002",
+      "trialId": "test-trial-1770073419128",
+      "filename": "test-protocol.pdf",
+      "category": "Protocol"
+    },
+    {
+      "id": "30003",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "protocol.pdf",
+      "category": "Protocol"
+    },
+    {
+      "id": "30004",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "lab-manual.pdf",
+      "category": "Lab Manual"
+    },
+    {
+      "id": "30005",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "pharmacy-manual.pdf",
+      "category": "Pharmacy Manual"
+    },
+    {
+      "id": "30006",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "schedule-of-assessments-(soa).pdf",
+      "category": "Schedule of Assessments (SoA)"
+    },
+    {
+      "id": "30007",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "informed-consent-form-(icf).pdf",
+      "category": "Informed Consent Form (ICF)"
+    },
+    {
+      "id": "30008",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "edc/crf-completion-guide.pdf",
+      "category": "EDC/CRF Completion Guide"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttrialId\tfilename\tcategory\n3\tabc-123\t1769665367011_Protocol_Oncology.pdf\tProtocols\n5\t1\ttest-protocol.pdf\tProtocols\n30001\tdef-456\t1769665367011_Protocol_Oncology.pdf\tProtocols\n30002\ttest-trial-1770073419128\ttest-protocol.pdf\tProtocol\n30003\ttest-trial-bidirectional-1770073652305\tprotocol.pdf\tProtocol\n30004\ttest-trial-bidirectional-1770073652305\tlab-manual.pdf\tLab Manual\n30005\ttest-trial-bidirectional-1770073652305\tpharmacy-manual.pdf\tPharmacy Manual\n30006\ttest-trial-bidirectional-1770073652305\tschedule-of-assessments-(soa).pdf\tSchedule of Assessments (SoA)\n30007\ttest-trial-bidirectional-1770073652305\tinformed-consent-form-(icf).pdf\tInformed Consent Form (ICF)\n30008\ttest-trial-bidirectional-1770073652305\tedc/crf-completion-guide.pdf\tEDC/CRF Completion Guide\n",
+  "stderr": "",
+  "execution_time_ms": 407
+}

@@ -1,0 +1,34 @@
+{
+  "query": "SELECT * FROM protocols ORDER BY createdAt DESC LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT * FROM protocols ORDER BY createdAt DESC LIMIT 5;",
+  "rows": [
+    {
+      "id": "2",
+      "trialId": "1",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "fileUrl": "https://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/KRV5b_cDA1U-qocU59i1p.pdf",
+      "fileKey": "protocols/1/KRV5b_cDA1U-qocU59i1p.pdf",
+      "uploadedBy": "1",
+      "createdAt": "2026-02-02 16:13:20",
+      "updatedAt": "2026-02-02 16:13:20",
+      "fileSize": "970039",
+      "category": "Protocols"
+    },
+    {
+      "id": "1",
+      "trialId": "1",
+      "filename": "Protocol_Diabetes_Tirzepatide.pdf",
+      "fileUrl": "https://example.com/protocols/diabetes-tirzepatide.pdf",
+      "fileKey": "protocols/diabetes-tirzepatide.pdf",
+      "uploadedBy": "1",
+      "createdAt": "2026-02-02 15:58:53",
+      "updatedAt": "2026-02-02 15:58:53",
+      "fileSize": "0",
+      "category": ""
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttrialId\tfilename\tfileUrl\tfileKey\tuploadedBy\tcreatedAt\tupdatedAt\tfileSize\tcategory\n2\t1\t1769665367011_Protocol_Oncology.pdf\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/KRV5b_cDA1U-qocU59i1p.pdf\tprotocols/1/KRV5b_cDA1U-qocU59i1p.pdf\t1\t2026-02-02 16:13:20\t2026-02-02 16:13:20\t970039\tProtocols\n1\t1\tProtocol_Diabetes_Tirzepatide.pdf\thttps://example.com/protocols/diabetes-tirzepatide.pdf\tprotocols/diabetes-tirzepatide.pdf\t1\t2026-02-02 15:58:53\t2026-02-02 15:58:53\t0\t\n",
+  "stderr": "",
+  "execution_time_ms": 397
+}

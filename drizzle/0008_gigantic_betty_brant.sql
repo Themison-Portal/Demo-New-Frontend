@@ -1,0 +1,20 @@
+CREATE TABLE `trials` (
+	`id` varchar(50) NOT NULL,
+	`title` varchar(500) NOT NULL,
+	`protocolNumber` varchar(100),
+	`description` text,
+	`phase` enum('Phase I','Phase II','Phase III','Phase IV'),
+	`status` enum('active','recruiting','on-hold','completed','terminated') NOT NULL DEFAULT 'active',
+	`sponsor` varchar(255),
+	`location` varchar(255),
+	`startDate` timestamp,
+	`endDate` timestamp,
+	`principalInvestigator` varchar(255),
+	`enrolledPatients` int DEFAULT 0,
+	`targetPatients` int,
+	`completionPercentage` int DEFAULT 0,
+	`createdBy` int NOT NULL,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	`updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `trials_id` PRIMARY KEY(`id`)
+);

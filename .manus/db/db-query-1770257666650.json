@@ -1,0 +1,19 @@
+{
+  "query": "-- Delete all old Google File Search documents\nDELETE FROM fileSearchDocuments;\n\n-- Delete all old Google File Search stores\nDELETE FROM fileSearchStores;\n\n-- Verify cleanup\nSELECT COUNT(*) as remaining_stores FROM fileSearchStores;\nSELECT COUNT(*) as remaining_documents FROM fileSearchDocuments;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute -- Delete all old Google File Search documents\nDELETE FROM fileSearchDocuments;\n\n-- Delete all old Google File Search stores\nDELETE FROM fileSearchStores;\n\n-- Verify cleanup\nSELECT COUNT(*) as remaining_stores FROM fileSearchStores;\nSELECT COUNT(*) as remaining_documents FROM fileSearchDocuments;",
+  "rows": [
+    {
+      "remaining_stores": "0"
+    },
+    {
+      "remaining_stores": "remaining_documents"
+    },
+    {
+      "remaining_stores": "0"
+    }
+  ],
+  "messages": [],
+  "stdout": "remaining_stores\n0\nremaining_documents\n0\n",
+  "stderr": "",
+  "execution_time_ms": 125
+}

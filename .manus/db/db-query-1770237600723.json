@@ -1,0 +1,40 @@
+{
+  "query": "SELECT id, trialId, filename, category FROM protocols LIMIT 5;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT id, trialId, filename, category FROM protocols LIMIT 5;",
+  "rows": [
+    {
+      "id": "3",
+      "trialId": "abc-123",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "5",
+      "trialId": "1",
+      "filename": "test-protocol.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "30001",
+      "trialId": "def-456",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "category": "Protocols"
+    },
+    {
+      "id": "30002",
+      "trialId": "test-trial-1770073419128",
+      "filename": "test-protocol.pdf",
+      "category": "Protocol"
+    },
+    {
+      "id": "30003",
+      "trialId": "test-trial-bidirectional-1770073652305",
+      "filename": "protocol.pdf",
+      "category": "Protocol"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttrialId\tfilename\tcategory\n3\tabc-123\t1769665367011_Protocol_Oncology.pdf\tProtocols\n5\t1\ttest-protocol.pdf\tProtocols\n30001\tdef-456\t1769665367011_Protocol_Oncology.pdf\tProtocols\n30002\ttest-trial-1770073419128\ttest-protocol.pdf\tProtocol\n30003\ttest-trial-bidirectional-1770073652305\tprotocol.pdf\tProtocol\n",
+  "stderr": "",
+  "execution_time_ms": 3554
+}

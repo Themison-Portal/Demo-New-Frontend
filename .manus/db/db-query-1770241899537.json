@@ -1,0 +1,9 @@
+{
+  "query": "INSERT INTO documentCategories (name, isDefault) VALUES\n('Protocol', true),\n('Lab Manual', true),\n('Pharmacy Manual', true),\n('Schedule of Assessments (SoA)', true),\n('Informed Consent Form (ICF)', true),\n('EDC/CRF Completion Guide', true),\n('Safety Reporting Manual', true),\n('Monitoring Plan', true)\nON DUPLICATE KEY UPDATE name=name;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute INSERT INTO documentCategories (name, isDefault) VALUES\n('Protocol', true),\n('Lab Manual', true),\n('Pharmacy Manual', true),\n('Schedule of Assessments (SoA)', true),\n('Informed Consent Form (ICF)', true),\n('EDC/CRF Completion Guide', true),\n('Safety Reporting Manual', true),\n('Monitoring Plan', true)\nON DUPLICATE KEY UPDATE name=name;",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 396
+}

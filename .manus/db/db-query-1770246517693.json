@@ -1,0 +1,24 @@
+{
+  "query": "SELECT p.id, p.trialId, p.filename, p.createdAt,\n       CASE WHEN fsd.id IS NOT NULL THEN 'Indexed' ELSE 'Processing' END as status\nFROM protocols p\nLEFT JOIN fileSearchDocuments fsd ON p.id = fsd.protocolId\nWHERE p.filename LIKE '%Protocol_Oncology%'\nORDER BY p.createdAt DESC\nLIMIT 3;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT p.id, p.trialId, p.filename, p.createdAt,\n       CASE WHEN fsd.id IS NOT NULL THEN 'Indexed' ELSE 'Processing' END as status\nFROM protocols p\nLEFT JOIN fileSearchDocuments fsd ON p.id = fsd.protocolId\nWHERE p.filename LIKE '%Protocol_Oncology%'\nORDER BY p.createdAt DESC\nLIMIT 3;",
+  "rows": [
+    {
+      "id": "120010",
+      "trialId": "2",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "createdAt": "2026-02-04 23:06:23",
+      "status": "Indexed"
+    },
+    {
+      "id": "3",
+      "trialId": "abc-123",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "createdAt": "2026-02-02 16:41:48",
+      "status": "Processing"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\ttrialId\tfilename\tcreatedAt\tstatus\n120010\t2\t1769665367011_Protocol_Oncology.pdf\t2026-02-04 23:06:23\tIndexed\n3\tabc-123\t1769665367011_Protocol_Oncology.pdf\t2026-02-02 16:41:48\tProcessing\n",
+  "stderr": "",
+  "execution_time_ms": 60
+}

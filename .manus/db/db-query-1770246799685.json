@@ -1,0 +1,9 @@
+{
+  "query": "SELECT DISTINCT trialId FROM protocols WHERE trialId LIKE '%def%' OR trialId LIKE '%DEF%';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT DISTINCT trialId FROM protocols WHERE trialId LIKE '%def%' OR trialId LIKE '%DEF%';",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 56
+}

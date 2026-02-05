@@ -1,0 +1,26 @@
+{
+  "query": "SELECT fsd.id, fsd.protocolId, fsd.documentName, fsd.displayName, p.filename, p.trialId \nFROM fileSearchDocuments fsd \nJOIN protocols p ON fsd.protocolId = p.id \nLIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT fsd.id, fsd.protocolId, fsd.documentName, fsd.displayName, p.filename, p.trialId \nFROM fileSearchDocuments fsd \nJOIN protocols p ON fsd.protocolId = p.id \nLIMIT 10;",
+  "rows": [
+    {
+      "id": "1",
+      "protocolId": "5",
+      "documentName": "fileSearchStores/trial-1-documents-lhlaebusfbqs",
+      "displayName": "test-protocol.pdf",
+      "filename": "test-protocol.pdf",
+      "trialId": "1"
+    },
+    {
+      "id": "30002",
+      "protocolId": "90001",
+      "documentName": "fileSearchStores/trial-2-documents-go7zdh07md31",
+      "displayName": "1769665367011_Protocol_Oncology.pdf",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "trialId": "2"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tprotocolId\tdocumentName\tdisplayName\tfilename\ttrialId\n1\t5\tfileSearchStores/trial-1-documents-lhlaebusfbqs\ttest-protocol.pdf\ttest-protocol.pdf\t1\n30002\t90001\tfileSearchStores/trial-2-documents-go7zdh07md31\t1769665367011_Protocol_Oncology.pdf\t1769665367011_Protocol_Oncology.pdf\t2\n",
+  "stderr": "",
+  "execution_time_ms": 56
+}

@@ -1,0 +1,1 @@
+ALTER TABLE `protocols` MODIFY COLUMN `trialId` varchar(50) NOT NULL;

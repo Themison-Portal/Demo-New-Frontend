@@ -1,0 +1,38 @@
+{
+  "query": "SELECT id, filename, fileUrl, trialId, createdAt FROM protocols ORDER BY createdAt DESC LIMIT 10;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute SELECT id, filename, fileUrl, trialId, createdAt FROM protocols ORDER BY createdAt DESC LIMIT 10;",
+  "rows": [
+    {
+      "id": "4",
+      "filename": "test-protocol.pdf",
+      "fileUrl": "https://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/kHfOKLKllMsSTJCblFwvs.pdf",
+      "trialId": "1",
+      "createdAt": "2026-02-02 16:51:13"
+    },
+    {
+      "id": "3",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "fileUrl": "https://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/abc-123/diSh78F-yhG5aYycKe07T.pdf",
+      "trialId": "abc-123",
+      "createdAt": "2026-02-02 16:41:48"
+    },
+    {
+      "id": "2",
+      "filename": "1769665367011_Protocol_Oncology.pdf",
+      "fileUrl": "https://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/KRV5b_cDA1U-qocU59i1p.pdf",
+      "trialId": "1",
+      "createdAt": "2026-02-02 16:13:20"
+    },
+    {
+      "id": "1",
+      "filename": "Protocol_Diabetes_Tirzepatide.pdf",
+      "fileUrl": "https://example.com/protocols/diabetes-tirzepatide.pdf",
+      "trialId": "1",
+      "createdAt": "2026-02-02 15:58:53"
+    }
+  ],
+  "messages": [],
+  "stdout": "id\tfilename\tfileUrl\ttrialId\tcreatedAt\n4\ttest-protocol.pdf\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/kHfOKLKllMsSTJCblFwvs.pdf\t1\t2026-02-02 16:51:13\n3\t1769665367011_Protocol_Oncology.pdf\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/abc-123/diSh78F-yhG5aYycKe07T.pdf\tabc-123\t2026-02-02 16:41:48\n2\t1769665367011_Protocol_Oncology.pdf\thttps://d2xsxph8kpxj0f.cloudfront.net/310519663285192680/a8ihUWLsqjdGiLpLtrJkcZ/protocols/1/KRV5b_cDA1U-qocU59i1p.pdf\t1\t2026-02-02 16:13:20\n1\tProtocol_Diabetes_Tirzepatide.pdf\thttps://example.com/protocols/diabetes-tirzepatide.pdf\t1\t2026-02-02 15:58:53\n",
+  "stderr": "",
+  "execution_time_ms": 383
+}

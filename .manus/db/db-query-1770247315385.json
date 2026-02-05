@@ -1,0 +1,9 @@
+{
+  "query": "UPDATE protocols SET trialId = 'def-456' WHERE trialId = '2';",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway03.us-east-1.prod.aws.tidbcloud.com --port 4000 --user 3HmWqdVV1TeDuGa.root --database a8ihUWLsqjdGiLpLtrJkcZ --execute UPDATE protocols SET trialId = 'def-456' WHERE trialId = '2';",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 61
+}
