@@ -208,6 +208,7 @@ interface DemoStateContextType {
   resetDemo: () => void;
   loadSampleData: () => void;
   loadFullDataset: () => void;
+  setBuildingMode: () => void;
   getCompletedTasksCount: () => number;
   getActiveTasksCount: () => number;
   getCurrentDataMode: () => 'sample' | 'full' | 'building';
@@ -340,6 +341,13 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(fullDataset));
   };
 
+  const setBuildingMode = () => {
+    setState((prev) => ({
+      ...prev,
+      dataMode: 'building',
+    }));
+  };
+
   const getCompletedTasksCount = () => {
     return state.tasks.filter((task) => task.completed).length;
   };
@@ -362,6 +370,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
         resetDemo,
         loadSampleData,
         loadFullDataset,
+        setBuildingMode,
         getCompletedTasksCount,
         getActiveTasksCount,
         getCurrentDataMode,

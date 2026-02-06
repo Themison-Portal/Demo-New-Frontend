@@ -39,7 +39,7 @@ import { Check } from "lucide-react";
 export function TopNav() {
   const [location] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
-  const { state, resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
+  const { state, resetDemo, loadSampleData, loadFullDataset, setBuildingMode, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
   
   // Fetch trials from database for breadcrumb display
@@ -47,7 +47,7 @@ export function TopNav() {
   
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
-    type: 'reset' | 'sample' | 'full' | null;
+    type: 'reset' | 'sample' | 'full' | 'full-reset' | null;
   }>({ open: false, type: null });
 
   const handleConfirmAction = () => {
@@ -60,6 +60,17 @@ export function TopNav() {
     } else if (confirmDialog.type === 'full') {
       loadFullDataset();
       toast.success("Full dataset loaded");
+    } else if (confirmDialog.type === 'full-reset') {
+      if (currentDataMode === 'sample') {
+        loadSampleData();
+        toast.success("Sample data reset to defaults");
+      } else if (currentDataMode === 'full') {
+        loadFullDataset();
+        toast.success("Full dataset reset to defaults");
+      } else {
+        resetDemo();
+        toast.success("Building mode reset to empty");
+      }
     }
     setConfirmDialog({ open: false, type: null });
   };
@@ -311,8 +322,11 @@ export function TopNav() {
                     {currentDataMode === 'full' && <Check className="h-4 w-4 ml-4" />}
                   </DropdownMenuItem>
                   <DropdownMenuItem 
-                    className="flex items-center justify-between cursor-default"
-                    onSelect={(e) => e.preventDefault()}
+                    className="flex items-center justify-between"
+                    onClick={() => {
+                      setBuildingMode();
+                      toast.success("Building mode enabled");
+                    }}
                   >
                     <span>Building Mode</span>
                     {currentDataMode === 'building' && <Check className="h-4 w-4 ml-4" />}
@@ -323,6 +337,12 @@ export function TopNav() {
                     className="flex items-center justify-between"
                   >
                     <span>Reset to Empty</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem 
+                    onClick={() => setConfirmDialog({ open: true, type: 'full-reset' })}
+                    className="flex items-center justify-between"
+                  >
+                    <span>Full Reset</span>
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
@@ -343,6 +363,7 @@ export function TopNav() {
               {confirmDialog.type === 'reset' && 'Reset to Empty?'}
               {confirmDialog.type === 'sample' && 'Load Sample Data?'}
               {confirmDialog.type === 'full' && 'Load Full Dataset?'}
+              {confirmDialog.type === 'full-reset' && 'Full Reset?'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmDialog.type === 'reset' && 
@@ -351,12 +372,14 @@ export function TopNav() {
                 'This will replace all current data with 8 preset trials and sample content.'}
               {confirmDialog.type === 'full' && 
                 'This will replace all current data with 25+ preset trials and extensive mock data.'}
+              {confirmDialog.type === 'full-reset' && 
+                'This will reset the current demo mode back to its original default state.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmAction}>
-              {confirmDialog.type === 'reset' ? 'Reset' : 'Load Data'}
+              {confirmDialog.type === 'reset' ? 'Reset' : confirmDialog.type === 'full-reset' ? 'Reset' : 'Load Data'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
