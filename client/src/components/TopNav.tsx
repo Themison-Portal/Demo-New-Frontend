@@ -23,7 +23,7 @@ import { useDemoState } from "@/contexts/DemoStateContext";
 import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,40 +39,79 @@ import { Check } from "lucide-react";
 export function TopNav() {
   const [location] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
-  const { state, resetDemo, loadSampleData, loadFullDataset, setBuildingMode, getCurrentDataMode } = useDemoState();
+  const { state, resetDemo, loadSampleData, loadFullDataset, fullResetLocal, setBuildingMode, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+  const utils = trpc.useUtils();
   
   // Fetch trials from database for breadcrumb display
-  const { data: trials = [] } = trpc.trials.list.useQuery();
+  const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
+
+  const resetToEmptyMutation = trpc.demo.resetToEmpty.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate();
+      await utils.documents.list.invalidate();
+    },
+  });
+
+  const loadSampleMutation = trpc.demo.loadSampleData.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate();
+      await utils.documents.list.invalidate();
+    },
+  });
+
+  const loadFullMutation = trpc.demo.loadFullDataset.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate();
+      await utils.documents.list.invalidate();
+    },
+  });
+  const fullResetMutation = trpc.demo.fullReset.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate();
+      await utils.documents.list.invalidate();
+    },
+  });
   
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
-    type: 'reset' | 'sample' | 'full' | 'full-reset' | null;
+    type: 'reset' | 'sample' | 'full' | 'full-reset' | 'building' | null;
   }>({ open: false, type: null });
 
-  const handleConfirmAction = () => {
-    if (confirmDialog.type === 'reset') {
-      resetDemo();
-      toast.success("Data reset to empty state");
-    } else if (confirmDialog.type === 'sample') {
-      loadSampleData();
-      toast.success("Sample data loaded");
-    } else if (confirmDialog.type === 'full') {
-      loadFullDataset();
-      toast.success("Full dataset loaded");
-    } else if (confirmDialog.type === 'full-reset') {
-      if (currentDataMode === 'sample') {
-        loadSampleData();
-        toast.success("Sample data reset to defaults");
-      } else if (currentDataMode === 'full') {
-        loadFullDataset();
-        toast.success("Full dataset reset to defaults");
-      } else {
+  useEffect(() => {
+    toast.dismiss("demo-reset");
+  }, [currentDataMode]);
+
+  const handleConfirmAction = async () => {
+    try {
+      toast.loading("Updating demo data...", { id: "demo-reset" });
+      if (confirmDialog.type === 'reset') {
+        await resetToEmptyMutation.mutateAsync();
         resetDemo();
-        toast.success("Building mode reset to empty");
+        toast.success("Data reset to empty state");
+      } else if (confirmDialog.type === 'sample') {
+        await loadSampleMutation.mutateAsync();
+        loadSampleData();
+        toast.success("Sample data loaded");
+      } else if (confirmDialog.type === 'full') {
+        await loadFullMutation.mutateAsync();
+        loadFullDataset();
+        toast.success("Full dataset loaded");
+      } else if (confirmDialog.type === 'full-reset') {
+        await fullResetMutation.mutateAsync();
+        fullResetLocal(currentDataMode);
+        toast.success("All demo modes reset to defaults");
+      } else if (confirmDialog.type === 'building') {
+        setBuildingMode();
+        toast.success("Building mode enabled");
       }
+      toast.dismiss("demo-reset");
+      setConfirmDialog({ open: false, type: null });
+    } catch (error) {
+      console.error(error);
+      toast.dismiss("demo-reset");
+      toast.error("Demo reset failed. Please try again.");
     }
-    setConfirmDialog({ open: false, type: null });
   };
 
   // Get current organization context
@@ -323,10 +362,7 @@ export function TopNav() {
                   </DropdownMenuItem>
                   <DropdownMenuItem 
                     className="flex items-center justify-between"
-                    onClick={() => {
-                      setBuildingMode();
-                      toast.success("Building mode enabled");
-                    }}
+                    onClick={() => setConfirmDialog({ open: true, type: 'building' })}
                   >
                     <span>Building Mode</span>
                     {currentDataMode === 'building' && <Check className="h-4 w-4 ml-4" />}
@@ -364,22 +400,29 @@ export function TopNav() {
               {confirmDialog.type === 'sample' && 'Load Sample Data?'}
               {confirmDialog.type === 'full' && 'Load Full Dataset?'}
               {confirmDialog.type === 'full-reset' && 'Full Reset?'}
+              {confirmDialog.type === 'building' && 'Switch to Building Mode?'}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmDialog.type === 'reset' && 
-                'This will delete all trials, documents, tasks, and activity. This action cannot be undone.'}
+                'This will delete all trials, documents, tasks, and activity in building mode. This action cannot be undone.'}
               {confirmDialog.type === 'sample' && 
-                'This will replace all current data with 8 preset trials and sample content.'}
+                'Switch to the Sample dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'}
               {confirmDialog.type === 'full' && 
-                'This will replace all current data with 25+ preset trials and extensive mock data.'}
+                'Switch to the Full dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'}
               {confirmDialog.type === 'full-reset' && 
-                'This will reset the current demo mode back to its original default state.'}
+                'This will reset all demo modes (sample, full, and building) back to their original default states.'}
+              {confirmDialog.type === 'building' &&
+                'Switch to Building Mode. Your building-mode data is preserved unless you choose Reset to Empty.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmAction}>
-              {confirmDialog.type === 'reset' ? 'Reset' : confirmDialog.type === 'full-reset' ? 'Reset' : 'Load Data'}
+              {confirmDialog.type === 'reset' || confirmDialog.type === 'full-reset'
+                ? 'Reset'
+                : confirmDialog.type === 'building'
+                ? 'Switch'
+                : 'Load Data'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

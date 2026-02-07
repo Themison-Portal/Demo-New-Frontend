@@ -3,7 +3,7 @@
  * Design: Clinical Modernism - Card-based trial overview with filters and status grouping
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,21 +19,100 @@ import { toast } from "sonner";
 import { TrialCard } from "@/components/TrialCard";
 import { trpc } from "@/lib/trpc";
 import { useDemoState } from "@/contexts/DemoStateContext";
+import { logEvent } from "@/lib/telemetry";
 
 export function TrialWorkspace() {
-  const [locationFilter, setLocationFilter] = useState<"all" | "copenhagen">("all");
+  const [locationFilter, setLocationFilter] = useState("all");
   const [showAssignedToMe, setShowAssignedToMe] = useState(true);
   const [showPaused, setShowPaused] = useState(true);
   const [createTrialOpen, setCreateTrialOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(720);
   const isResizingRef = useRef(false);
-  const { getCurrentDataMode } = useDemoState();
+  const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+  const utils = trpc.useUtils();
+
+  const [trialName, setTrialName] = useState("");
+  const [protocolNumber, setProtocolNumber] = useState("");
+  const [trialStatus, setTrialStatus] = useState<string>("");
+  const [trialPhase, setTrialPhase] = useState<string>("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [sponsor, setSponsor] = useState("");
+  const [location, setLocation] = useState("");
+  const [description, setDescription] = useState("");
 
   // Fetch trials from database
-  const { data: trials = [], isLoading } = trpc.trials.list.useQuery();
+  const { data: trials = [], isLoading } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
+  const createTrialMutation = trpc.trials.create.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      logEvent({
+        eventType: "trial_created",
+        action: "created",
+        entityType: "trial",
+        payload: { demoMode: currentDataMode, title: trialName.trim() },
+      });
+      toast.success("Trial created");
+      setCreateTrialOpen(false);
+      setTrialName("");
+      setProtocolNumber("");
+      setTrialStatus("");
+      setTrialPhase("");
+      setStartDate("");
+      setEndDate("");
+      setSponsor("");
+      setLocation("");
+      setDescription("");
+    },
+    onError: (error) => {
+      toast.error(`Failed to create trial: ${error.message}`);
+    },
+  });
 
-  const visibleTrials = currentDataMode === "building" ? [] : trials;
+  const locationOptions = useMemo(() => {
+    if (!trials.length) return [];
+    const trialLocations = trials
+      .map((trial) => trial.location)
+      .filter((site): site is string => Boolean(site));
+    const memberSites = (state.teamMembers || [])
+      .map((member) => member.site)
+      .filter((site): site is string => Boolean(site));
+    const fallbackSites = ["Copenhagen", "Brussels", "Amsterdam", "London", "Berlin", "Paris", "Lisbon"];
+    const baseSites = trialLocations.length
+      ? trialLocations
+      : memberSites.length
+      ? memberSites
+      : fallbackSites;
+
+    const unique = Array.from(new Set(baseSites));
+    return unique.map((site) => ({
+      label: site,
+      value: site.toLowerCase(),
+    }));
+  }, [trials, state.teamMembers]);
+
+  const visibleTrials = useMemo(() => {
+    const memberSites = (state.teamMembers || [])
+      .map((member) => member.site)
+      .filter((site): site is string => Boolean(site));
+    const fallbackSites = ["Copenhagen", "Brussels", "Amsterdam", "London", "Berlin", "Paris", "Lisbon"];
+    const baseSites = memberSites.length ? memberSites : fallbackSites;
+
+    const withLocations = trials.map((trial) => {
+      const derivedLocation = trial.location
+        ? trial.location
+        : baseSites[
+            trial.id.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % baseSites.length
+          ];
+      return { ...trial, __derivedLocation: derivedLocation };
+    });
+
+    if (locationFilter === "all") return withLocations;
+    return withLocations.filter((trial) =>
+      trial.__derivedLocation.toLowerCase().includes(locationFilter)
+    );
+  }, [trials, state.teamMembers, locationFilter]);
 
   // Group trials by status
   const assignedTrials = visibleTrials.filter(t => 
@@ -44,6 +123,41 @@ export function TrialWorkspace() {
   const handleCreateTrial = () => {
     setPanelWidth(720);
     setCreateTrialOpen(true);
+    logEvent({
+      eventType: "feature_used",
+      action: "opened",
+      entityType: "trial_create_panel",
+      payload: { demoMode: currentDataMode },
+    });
+  };
+
+  const handleSubmitTrial = async () => {
+    if (!trialName.trim()) {
+      toast.error("Trial name is required");
+      return;
+    }
+    const slug = trialName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)+/g, "");
+    const randomSuffix = Math.random().toString(36).slice(2, 6);
+    const trialId = `${slug || "trial"}-${randomSuffix}`;
+
+    await createTrialMutation.mutateAsync({
+      id: trialId,
+      title: trialName.trim(),
+      protocolNumber: protocolNumber.trim() || undefined,
+      phase: trialPhase ? (trialPhase as any) : undefined,
+      status: trialStatus ? (trialStatus as any) : "active",
+      sponsor: sponsor.trim() || undefined,
+      location: location.trim() || undefined,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      description: description.trim() || undefined,
+      enrolledPatients: 0,
+      completionPercentage: 0,
+      demoMode: currentDataMode,
+    });
   };
 
   useEffect(() => {
@@ -107,18 +221,28 @@ export function TrialWorkspace() {
               <div className="grid grid-cols-1 gap-5">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Trial Name</label>
-                  <Input className="mt-2" placeholder="e.g., Colitis Research Trial" />
+                  <Input
+                    className="mt-2"
+                    placeholder="e.g., Colitis Research Trial"
+                    value={trialName}
+                    onChange={(e) => setTrialName(e.target.value)}
+                  />
                 </div>
 
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Protocol Number</label>
-                  <Input className="mt-2" placeholder="e.g., DIAB-2024-001" />
+                  <Input
+                    className="mt-2"
+                    placeholder="e.g., DIAB-2024-001"
+                    value={protocolNumber}
+                    onChange={(e) => setProtocolNumber(e.target.value)}
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Status</label>
-                    <Select>
+                    <Select value={trialStatus} onValueChange={setTrialStatus}>
                       <SelectTrigger className="mt-2">
                         <SelectValue placeholder="Select status" />
                       </SelectTrigger>
@@ -132,15 +256,15 @@ export function TrialWorkspace() {
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Phase</label>
-                    <Select>
+                    <Select value={trialPhase} onValueChange={setTrialPhase}>
                       <SelectTrigger className="mt-2">
                         <SelectValue placeholder="Select phase" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="phase-1">Phase I</SelectItem>
-                        <SelectItem value="phase-2">Phase II</SelectItem>
-                        <SelectItem value="phase-3">Phase III</SelectItem>
-                        <SelectItem value="phase-4">Phase IV</SelectItem>
+                        <SelectItem value="Phase I">Phase I</SelectItem>
+                        <SelectItem value="Phase II">Phase II</SelectItem>
+                        <SelectItem value="Phase III">Phase III</SelectItem>
+                        <SelectItem value="Phase IV">Phase IV</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -149,27 +273,52 @@ export function TrialWorkspace() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Start Date</label>
-                    <Input className="mt-2" type="date" />
+                    <Input
+                      className="mt-2"
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                    />
                   </div>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">End Date</label>
-                    <Input className="mt-2" type="date" />
+                    <Input
+                      className="mt-2"
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                    />
                   </div>
                 </div>
 
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Sponsor</label>
-                  <Input className="mt-2" placeholder="e.g., Novo Nordisk" />
+                  <Input
+                    className="mt-2"
+                    placeholder="e.g., Novo Nordisk"
+                    value={sponsor}
+                    onChange={(e) => setSponsor(e.target.value)}
+                  />
                 </div>
 
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Location</label>
-                  <Input className="mt-2" placeholder="e.g., Copenhagen, Denmark" />
+                  <Input
+                    className="mt-2"
+                    placeholder="e.g., Copenhagen, Denmark"
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                  />
                 </div>
 
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Description</label>
-                  <Textarea className="mt-2 min-h-[120px]" placeholder="Brief trial summary" />
+                  <Textarea
+                    className="mt-2 min-h-[120px]"
+                    placeholder="Brief trial summary"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  />
                 </div>
               </div>
             </div>
@@ -178,9 +327,8 @@ export function TrialWorkspace() {
               <Button variant="outline" className="flex-1" onClick={() => setCreateTrialOpen(false)}>
                 Cancel
               </Button>
-              <Button className="flex-1" onClick={() => toast.info("Create trial coming soon")}
-              >
-                Create Trial
+              <Button className="flex-1" onClick={handleSubmitTrial} disabled={createTrialMutation.isPending}>
+                {createTrialMutation.isPending ? "Creating..." : "Create Trial"}
               </Button>
             </div>
           </div>
@@ -207,30 +355,35 @@ export function TrialWorkspace() {
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-4 mb-6">
-          <div className="inline-flex items-center bg-gray-200 rounded-lg p-0.5" style={{backgroundColor: '#f0f0f0'}}>
-            <button
-              onClick={() => setLocationFilter("all")}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                locationFilter === "all"
-                  ? "bg-white text-foreground shadow-sm"
-                  : "text-gray-600 hover:text-foreground"
-              }`}
-            >
-              All Locations
-            </button>
-            <button
-              onClick={() => setLocationFilter("copenhagen")}
-              className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
-                locationFilter === "copenhagen"
-                  ? "bg-white text-foreground shadow-sm"
-                  : "text-gray-600 hover:text-foreground"
-              }`}
-            >
-              Copenhagen
-            </button>
+        {locationOptions.length > 0 && (
+          <div className="flex items-center gap-4 mb-6">
+            <div className="inline-flex items-center bg-gray-200 rounded-lg p-0.5" style={{backgroundColor: '#f0f0f0'}}>
+              <button
+                onClick={() => setLocationFilter("all")}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                  locationFilter === "all"
+                    ? "bg-white text-foreground shadow-sm"
+                    : "text-gray-600 hover:text-foreground"
+                }`}
+              >
+                All Locations
+              </button>
+              {locationOptions.map((option) => (
+                <button
+                  key={option.value}
+                  onClick={() => setLocationFilter(option.value)}
+                  className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    locationFilter === option.value
+                      ? "bg-white text-foreground shadow-sm"
+                      : "text-gray-600 hover:text-foreground"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Trial Cards Grid */}
         <div className="space-y-8">
