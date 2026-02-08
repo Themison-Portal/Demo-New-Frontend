@@ -64,6 +64,20 @@
       "when": 1770249359637,
       "tag": "0008_gigantic_betty_brant",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1770466388641,
+      "tag": "0009_optimal_gravity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1770549893876,
+      "tag": "0010_luxuriant_ultimates",
+      "breakpoints": true
     }
   ]
 }

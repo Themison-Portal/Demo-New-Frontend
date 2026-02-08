@@ -3,12 +3,163 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { invokeLLM } from "./_core/llm";
 import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
+import { type DemoMode } from "./_core/demoMode";
+import { logTelemetryEvent } from "./_core/telemetry";
+import { storagePut } from "./storage";
+import { randomUUID } from "crypto";
 
 /**
  * Study Setup Wizard Router
  * Handles protocol analysis and task scaffold generation
  */
 export const studySetupWizardRouter = router({
+  analyzeProtocol: protectedProcedure
+    .input(
+      z.object({
+        fileName: z.string(),
+        fileBase64: z.string(),
+        contentType: z.string().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { fileName, fileBase64, contentType, demoMode } = input;
+      const mode = (demoMode ?? "sample") as DemoMode;
+      const fileBuffer = Buffer.from(fileBase64, "base64");
+      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const key = `protocols/temp/${randomUUID()}-${safeName}`;
+
+      await logTelemetryEvent({
+        eventType: "protocol_uploaded",
+        action: "created",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        payload: { fileName, demoMode: mode },
+        aiInvolved: true,
+      });
+
+      const uploaded = await storagePut(key, fileBuffer, contentType ?? "application/pdf");
+
+      if (!contentType || !contentType.includes("pdf")) {
+        throw new Error("Only PDF protocols are supported for extraction.");
+      }
+
+      let protocolContent = "";
+      try {
+        protocolContent = await extractPdfText(uploaded.url);
+      } catch (error) {
+        throw new Error("Failed to read protocol document. Please ensure it is a valid PDF.");
+      }
+
+      const maxLength = 50000;
+      if (protocolContent.length > maxLength) {
+        protocolContent = protocolContent.substring(0, maxLength) + "\n\n[Content truncated due to length...]";
+      }
+
+      const systemPrompt = `You are an expert clinical trial coordinator. Extract core trial details from the protocol.
+Preserve the protocol's exact wording for Phase (e.g., "Phase I/II").
+
+Return only JSON matching this schema:
+{
+  "protocolTitle": string | null,
+  "protocolNumber": string | null,
+  "sponsor": string | null,
+  "phase": string | null,
+  "investigationalProduct": string | null,
+  "indication": string | null,
+  "nctNumber": string | null,
+  "currentVersion": string | null,
+  "amendmentVersion": string | null,
+  "releaseDate": string | null,
+  "location": string | null,
+  "sampleSize": string | null,
+  "numberOfSites": string | null,
+  "studyDuration": string | null,
+  "studyDesignType": string | null,
+  "primaryObjective": string | null,
+  "primaryEndpoint": string | null
+}`;
+
+      const userPrompt = `Protocol filename: ${fileName}
+
+Protocol content:
+${protocolContent}`;
+
+      const response = await invokeLLM({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "protocol_details",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                protocolTitle: { type: ["string", "null"] },
+                protocolNumber: { type: ["string", "null"] },
+                sponsor: { type: ["string", "null"] },
+                phase: { type: ["string", "null"] },
+                investigationalProduct: { type: ["string", "null"] },
+                indication: { type: ["string", "null"] },
+                nctNumber: { type: ["string", "null"] },
+                currentVersion: { type: ["string", "null"] },
+                amendmentVersion: { type: ["string", "null"] },
+                releaseDate: { type: ["string", "null"] },
+                location: { type: ["string", "null"] },
+                sampleSize: { type: ["string", "null"] },
+                numberOfSites: { type: ["string", "null"] },
+                studyDuration: { type: ["string", "null"] },
+                studyDesignType: { type: ["string", "null"] },
+                primaryObjective: { type: ["string", "null"] },
+                primaryEndpoint: { type: ["string", "null"] },
+              },
+              required: [
+                "protocolTitle",
+                "protocolNumber",
+                "sponsor",
+                "phase",
+                "investigationalProduct",
+                "indication",
+                "nctNumber",
+                "currentVersion",
+                "amendmentVersion",
+                "releaseDate",
+                "location",
+                "sampleSize",
+                "numberOfSites",
+                "studyDuration",
+                "studyDesignType",
+                "primaryObjective",
+                "primaryEndpoint",
+              ],
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content || typeof content !== "string") {
+        throw new Error("Failed to extract protocol details.");
+      }
+
+      await logTelemetryEvent({
+        eventType: "ai_response_generated",
+        action: "generated",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        payload: { demoMode: mode },
+        aiInvolved: true,
+      });
+
+      return {
+        extracted: JSON.parse(content),
+        tempFile: uploaded,
+      };
+    }),
   /**
    * Generate task scaffold from protocol
    * This is the AI-powered "Generate Execution Plan" button
@@ -17,14 +168,33 @@ export const studySetupWizardRouter = router({
     .input(z.object({
       protocolId: z.number(),
       trialId: z.string(),
+      demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
-      const { protocolId, trialId } = input;
+      const { protocolId, trialId, demoMode } = input;
+      const mode = (demoMode ?? "sample") as DemoMode;
+
+      await logTelemetryEvent({
+        eventType: "trial_setup_started",
+        action: "started",
+        userId: String(ctx.user.id),
+        entityType: "trial",
+        entityId: trialId,
+        payload: { protocolId, demoMode: mode },
+        aiInvolved: true,
+      });
       
       // Get protocol details
       const protocol = await db.getProtocolById(protocolId);
       if (!protocol) {
         throw new Error("Protocol not found");
+      }
+      const protocolTrialId = protocol.trialId;
+      const hasPrefix = protocolTrialId.includes(":");
+      const matchesMode = protocolTrialId.startsWith(`${mode}:`);
+      const legacyAllowed = mode !== "building";
+      if ((hasPrefix && !matchesMode) || (!hasPrefix && !legacyAllowed)) {
+        throw new Error("Protocol does not belong to this demo mode");
       }
 
       // Check if scaffold already exists - if so, delete it and regenerate
@@ -212,7 +382,7 @@ Based on the protocol content above, generate a complete task scaffold for this 
       // Create task scaffold
       await db.createTaskScaffold({
         protocolId,
-        trialId,
+        trialId: protocolTrialId,
         status: "draft",
       });
 
@@ -251,6 +421,7 @@ Based on the protocol content above, generate a complete task scaffold for this 
 
       // Create phases and tasks
       const phaseMap = new Map<string, number>();
+      let createdTasks = 0;
       
       for (let i = 0; i < scaffoldData.phases.length; i++) {
         const phase = scaffoldData.phases[i];
@@ -282,6 +453,7 @@ Based on the protocol content above, generate a complete task scaffold for this 
               status: "pending",
               orderIndex: j,
             });
+            createdTasks += 1;
           }
         }
       }
@@ -303,6 +475,26 @@ Based on the protocol content above, generate a complete task scaffold for this 
         }
       }
 
+      await logTelemetryEvent({
+        eventType: "trial_setup_step_completed",
+        action: "completed",
+        entityType: "trial",
+        entityId: trialId,
+        payload: { step: "generate_scaffold", createdTasks },
+        aiInvolved: true,
+      });
+
+      if (createdTasks > 0) {
+        await logTelemetryEvent({
+          eventType: "task_created",
+          action: "created",
+          entityType: "task",
+          entityId: trialId,
+          payload: { count: createdTasks },
+          aiInvolved: true,
+        });
+      }
+
       return {
         success: true,
         scaffoldId: scaffold.id,
@@ -315,8 +507,20 @@ Based on the protocol content above, generate a complete task scaffold for this 
   getScaffold: protectedProcedure
     .input(z.object({
       protocolId: z.number(),
+      demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
     .query(async ({ input }) => {
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const protocol = await db.getProtocolById(input.protocolId);
+      if (!protocol) return null;
+      const protocolTrialId = protocol.trialId;
+      const hasPrefix = protocolTrialId.includes(":");
+      const matchesMode = protocolTrialId.startsWith(`${mode}:`);
+      const legacyAllowed = mode !== "building";
+      if ((hasPrefix && !matchesMode) || (!hasPrefix && !legacyAllowed)) {
+        return null;
+      }
+
       const scaffold = await db.getTaskScaffoldByProtocolId(input.protocolId);
       if (!scaffold) {
         return null;
@@ -337,7 +541,6 @@ Based on the protocol content above, generate a complete task scaffold for this 
         })
       );
 
-      const protocol = await db.getProtocolById(input.protocolId);
       const sections = await db.getProtocolSections(input.protocolId);
 
       return {
@@ -357,6 +560,13 @@ Based on the protocol content above, generate a complete task scaffold for this 
     }))
     .mutation(async ({ input, ctx }) => {
       await db.updateTaskScaffoldStatus(input.scaffoldId, "confirmed", ctx.user.id);
+      await logTelemetryEvent({
+        eventType: "trial_setup_completed",
+        action: "completed",
+        userId: String(ctx.user.id),
+        entityType: "task_scaffold",
+        entityId: String(input.scaffoldId),
+      });
       return { success: true };
     }),
 
@@ -373,10 +583,42 @@ Based on the protocol content above, generate a complete task scaffold for this 
     }))
     .mutation(async ({ input }) => {
       const { taskId, ...updates } = input;
+      const existingTask = await db.getTaskById(taskId);
       await db.updateTask(taskId, {
         ...updates,
         suggestedDate: updates.suggestedDate ? new Date(updates.suggestedDate) : undefined,
       });
+
+      const afterTask = existingTask
+        ? {
+            ...existingTask,
+            ...updates,
+            suggestedDate: updates.suggestedDate ? new Date(updates.suggestedDate) : existingTask.suggestedDate,
+          }
+        : undefined;
+
+      if (existingTask) {
+        await logTelemetryEvent({
+          eventType: "task_edited",
+          action: "edited",
+          entityType: "task",
+          entityId: String(taskId),
+          payload: {
+            before: existingTask,
+            after: afterTask,
+          },
+        });
+
+        if (updates.status === "completed" && existingTask.status !== "completed") {
+          await logTelemetryEvent({
+            eventType: "task_completed",
+            action: "completed",
+            entityType: "task",
+            entityId: String(taskId),
+          });
+        }
+      }
+
       return { success: true };
     }),
 
@@ -388,7 +630,19 @@ Based on the protocol content above, generate a complete task scaffold for this 
       taskId: z.number(),
     }))
     .mutation(async ({ input }) => {
+      const existingTask = await db.getTaskById(input.taskId);
       await db.deleteTask(input.taskId);
+
+      if (existingTask) {
+        await logTelemetryEvent({
+          eventType: "task_deleted",
+          action: "deleted",
+          entityType: "task",
+          entityId: String(input.taskId),
+          payload: existingTask,
+        });
+      }
+
       return { success: true };
     }),
 });

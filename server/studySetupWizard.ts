@@ -155,6 +155,14 @@ export async function getTasksByPhaseId(phaseId: number) {
   return db.select().from(tasks).where(eq(tasks.phaseId, phaseId)).orderBy(tasks.orderIndex);
 }
 
+export async function getTaskById(taskId: number) {
+  const db = await getDb();
+  if (!db) return null;
+
+  const result = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  return result[0] || null;
+}
+
 export async function updateTask(id: number, data: Partial<InsertTask>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");

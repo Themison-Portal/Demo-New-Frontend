@@ -10,10 +10,12 @@ interface TrialCardProps {
   trial: {
     id: string;
     title: string;
+    investigationalProduct?: string | null;
     sponsor: string | null;
     status: string;
     enrolledPatients: number | null;
     targetPatients: number | null;
+    teamCount?: number;
   };
 }
 
@@ -23,7 +25,7 @@ export function TrialCard({ trial }: TrialCardProps) {
   // Calculate enrollment progress
   const enrolledNum = trial.enrolledPatients || 0;
   const targetNum = trial.targetPatients || 0;
-  const progress = Math.round((enrolledNum / targetNum) * 100);
+  const progress = targetNum > 0 ? Math.round((enrolledNum / targetNum) * 100) : 0;
 
   // Status badge styling
   const getStatusBadge = (status: string) => {
@@ -42,6 +44,11 @@ export function TrialCard({ trial }: TrialCardProps) {
         return {
           label: "Paused",
           className: "bg-gray-400 text-white",
+        };
+      case "not-started":
+        return {
+          label: "Not started",
+          className: "bg-gray-200 text-gray-700",
         };
       default:
         return {
@@ -107,12 +114,14 @@ export function TrialCard({ trial }: TrialCardProps) {
       {/* Content */}
       <div className="p-4">
         {/* Trial Name */}
-        <h3 className="text-base font-semibold text-foreground mb-1 group-hover:text-primary transition-colors">
-          {trial.title}
+        <h3 className="text-base font-semibold text-foreground mb-2 group-hover:text-primary transition-colors">
+          {trial.investigationalProduct || trial.title}
         </h3>
 
         {/* Sponsor */}
-        <p className="text-xs text-muted-foreground mb-4">{trial.sponsor}</p>
+        {trial.sponsor && (
+          <p className="text-xs text-muted-foreground mb-4">{trial.sponsor}</p>
+        )}
 
         {/* Enrollment Progress */}
         <div className="space-y-2">
@@ -136,7 +145,7 @@ export function TrialCard({ trial }: TrialCardProps) {
         <div className="mt-4 pt-4 border-t border-border">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Users className="w-3.5 h-3.5" />
-            <span>2+ Team Members</span>
+            <span>{trial.teamCount ?? 0} Team Members</span>
           </div>
         </div>
       </div>

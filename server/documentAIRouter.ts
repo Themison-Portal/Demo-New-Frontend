@@ -4,6 +4,8 @@ import { getDb } from "./db";
 import { protocols, fileSearchStores, fileSearchDocuments } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { queryWithAssistant, uploadToVectorStore, createVectorStore } from "./_core/openaiAssistant";
+import { resolveTrialId, type DemoMode } from "./_core/demoMode";
+import { logTelemetryEvent } from "./_core/telemetry";
 
 export const documentAIRouter = router({
   /**
@@ -20,6 +22,7 @@ export const documentAIRouter = router({
           })
         ),
         documentIds: z.array(z.string()).optional(), // Optional: specific documents to query
+        sessionId: z.string().optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -36,6 +39,18 @@ export const documentAIRouter = router({
           message: "No user message found",
         };
       }
+
+      await logTelemetryEvent({
+        eventType: "ai_query_submitted",
+        action: "submitted",
+        sessionId: input.sessionId,
+        entityType: "query",
+        payload: {
+          query: latestUserMessage.content,
+          documentIds: input.documentIds ?? [],
+        },
+        aiInvolved: true,
+      });
 
       // If no documents specified, use basic LLM without grounding
       if (!input.documentIds || input.documentIds.length === 0) {
@@ -75,6 +90,15 @@ ${conversationHistory}`;
             .map((item: any) => item.text)
             .join('\n');
         }
+
+        await logTelemetryEvent({
+          eventType: "ai_response_generated",
+          action: "generated",
+          sessionId: input.sessionId,
+          entityType: "response",
+          aiInvolved: true,
+          aiOutput: answer,
+        });
 
         return {
           message: answer,
@@ -175,6 +199,16 @@ ${conversationHistory}`;
             });
           }
         }
+
+        await logTelemetryEvent({
+          eventType: "ai_response_generated",
+          action: "generated",
+          sessionId: input.sessionId,
+          entityType: "response",
+          aiInvolved: true,
+          aiOutput: answer,
+          aiSources: sources,
+        });
 
         return {
           message: answer,
@@ -283,6 +317,7 @@ ${conversationHistory}`;
     .input(
       z.object({
         trialId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -290,13 +325,15 @@ ${conversationHistory}`;
       if (!db) {
         throw new Error("Database not available");
       }
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
 
       try {
         // Get all protocols for this trial
         const docs = await db
           .select()
           .from(protocols)
-          .where(eq(protocols.trialId, input.trialId));
+          .where(eq(protocols.trialId, resolvedTrialId));
 
         if (docs.length === 0) {
           return {
@@ -309,7 +346,7 @@ ${conversationHistory}`;
         let store = await db
           .select()
           .from(fileSearchStores)
-          .where(eq(fileSearchStores.trialId, input.trialId))
+          .where(eq(fileSearchStores.trialId, resolvedTrialId))
           .limit(1);
 
         let storeName: string;
@@ -317,13 +354,13 @@ ${conversationHistory}`;
 
         if (store.length === 0) {
           // Create new Vector Store
-          storeName = await createVectorStore(`Trial ${input.trialId} Documents`);
+          storeName = await createVectorStore(`Trial ${resolvedTrialId} Documents`);
           
           // Save to database
           await db.insert(fileSearchStores).values({
-            trialId: input.trialId,
+            trialId: resolvedTrialId,
             storeName,
-            displayName: `Trial ${input.trialId} Documents`,
+            displayName: `Trial ${resolvedTrialId} Documents`,
           });
           
           // Fetch the created store to get its ID

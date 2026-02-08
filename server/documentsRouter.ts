@@ -1,17 +1,20 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { protocols, fileSearchStores, fileSearchDocuments, documentCategories, trials } from "../drizzle/schema";
-import { eq } from "drizzle-orm";
+import { protocols, fileSearchStores, fileSearchDocuments, documentCategories, trials, users } from "../drizzle/schema";
+import { eq, like, notLike, inArray } from "drizzle-orm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import { createVectorStore, uploadToVectorStore } from "./_core/openaiAssistant";
+import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
+import { logTelemetryEvent } from "./_core/telemetry";
 
 export const documentsRouter = router({
   list: publicProcedure
     .input(
       z.object({
         trialId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .query(async ({ input }) => {
@@ -20,10 +23,60 @@ export const documentsRouter = router({
         return [];
       }
 
-      const docs = await db
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+
+      let docs = await db
         .select()
         .from(protocols)
-        .where(eq(protocols.trialId, input.trialId));
+        .where(eq(protocols.trialId, resolvedTrialId));
+
+      // Compatibility fallback for trials created before ID normalization fixes:
+      // attempt to find protocol rows that were saved under an alternate trial ID variant.
+      if (docs.length === 0) {
+        const prefixedInputId = `${mode}:${input.trialId}`;
+        const prefixMatches = await db
+          .select()
+          .from(protocols)
+          .where(like(protocols.trialId, `${prefixedInputId}%`));
+
+        if (prefixMatches.length > 0) {
+          docs = prefixMatches;
+        } else {
+          const suffixMatch = input.trialId.match(/-([a-z0-9]{4,8})$/i);
+          if (suffixMatch) {
+            const suffixMatches = await db
+              .select()
+              .from(protocols)
+              .where(like(protocols.trialId, `${mode}:%-${suffixMatch[1]}`));
+            if (suffixMatches.length > 0) {
+              docs = suffixMatches;
+            }
+          }
+        }
+      }
+
+      const uploaderIds = Array.from(
+        new Set(
+          docs
+            .map((doc) => doc.uploadedBy)
+            .filter((id): id is number => typeof id === "number")
+        )
+      );
+      const uploaderNameById = new Map<number, string>();
+      if (uploaderIds.length > 0) {
+        const uploaderRows = await db
+          .select({
+            id: users.id,
+            name: users.name,
+            email: users.email,
+          })
+          .from(users)
+          .where(inArray(users.id, uploaderIds));
+        uploaderRows.forEach((row) => {
+          uploaderNameById.set(row.id, row.name || row.email || `User ${row.id}`);
+        });
+      }
 
       // Check File Search status for each document
       const docsWithStatus = await Promise.all(
@@ -37,6 +90,7 @@ export const documentsRouter = router({
           return {
             ...doc,
             isIndexed: fileSearchDoc.length > 0,
+            uploaderName: uploaderNameById.get(doc.uploadedBy) || `User ${doc.uploadedBy}`,
           };
         })
       );
@@ -51,6 +105,7 @@ export const documentsRouter = router({
         filename: z.string(),
         fileData: z.string(), // base64 encoded
         category: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -58,6 +113,8 @@ export const documentsRouter = router({
       if (!db) {
         throw new Error("Database not available");
       }
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
 
       // Decode base64
       const buffer = Buffer.from(input.fileData, "base64");
@@ -70,7 +127,7 @@ export const documentsRouter = router({
 
       // Generate unique file key
       const fileExtension = input.filename.split(".").pop();
-      const fileKey = `protocols/${input.trialId}/${nanoid()}.${fileExtension}`;
+      const fileKey = `protocols/${resolvedTrialId}/${nanoid()}.${fileExtension}`;
 
       // Upload to S3
       const contentType = fileExtension === "pdf" ? "application/pdf" : "application/octet-stream";
@@ -78,7 +135,7 @@ export const documentsRouter = router({
 
       // Save to database
       const result = await db.insert(protocols).values({
-        trialId: input.trialId,
+        trialId: resolvedTrialId,
         filename: input.filename,
         fileUrl: url,
         fileKey,
@@ -86,6 +143,20 @@ export const documentsRouter = router({
         category: input.category,
         uploadedBy: ctx.user.id,
         createdAt: new Date(),
+      });
+
+      await logTelemetryEvent({
+        eventType: "protocol_uploaded",
+        action: "created",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(resolvedTrialId),
+        payload: {
+          filename: input.filename,
+          category: input.category,
+          trialId: resolvedTrialId,
+          demoMode: mode,
+        },
       });
 
       // Get the inserted protocol ID
@@ -106,7 +177,7 @@ export const documentsRouter = router({
             let store = await db
               .select()
               .from(fileSearchStores)
-              .where(eq(fileSearchStores.trialId, input.trialId))
+              .where(eq(fileSearchStores.trialId, resolvedTrialId))
               .limit(1);
 
             let storeName: string;
@@ -114,12 +185,12 @@ export const documentsRouter = router({
 
             if (store.length === 0) {
               // Create new File Search Store
-              storeName = await createVectorStore(`Trial ${input.trialId} Documents`);
+              storeName = await createVectorStore(`Trial ${resolvedTrialId} Documents`);
               
               await db.insert(fileSearchStores).values({
-                trialId: input.trialId,
+                trialId: resolvedTrialId,
                 storeName,
-                displayName: `Trial ${input.trialId} Documents`,
+                displayName: `Trial ${resolvedTrialId} Documents`,
               });
               
               const createdStore = await db
@@ -198,6 +269,14 @@ export const documentsRouter = router({
 
       // Delete from database
       await db.delete(protocols).where(eq(protocols.id, input.id));
+
+      await logTelemetryEvent({
+        eventType: "protocol_deleted",
+        action: "deleted",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(input.id),
+      });
 
       // Note: We're not deleting from S3 to keep files for audit/backup purposes
       // In production, you might want to implement soft delete or S3 cleanup
@@ -364,25 +443,49 @@ export const documentsRouter = router({
       return { success: true };
     }),
 
-  getTrialsWithDocuments: publicProcedure.query(async () => {
+  getTrialsWithDocuments: publicProcedure
+    .input(
+      z.object({
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      }).optional()
+    )
+    .query(async ({ input }) => {
     const db = await getDb();
     if (!db) {
       return [];
     }
+    const mode = (input?.demoMode ?? "sample") as DemoMode;
 
     // Get distinct trial IDs from protocols table and join with trials table to get actual names
-    const trialsWithDocs = await db
+    const prefixedTrialsWithDocs = await db
       .selectDistinct({ 
         trialId: protocols.trialId,
         title: trials.title,
       })
       .from(protocols)
-      .leftJoin(trials, eq(protocols.trialId, trials.id));
+      .leftJoin(trials, eq(protocols.trialId, trials.id))
+      .where(like(protocols.trialId, `${mode}:%`));
 
     // Return trials with their actual titles from the database
-    return trialsWithDocs.map(t => ({
+    if (prefixedTrialsWithDocs.length > 0) {
+      return prefixedTrialsWithDocs.map(t => ({
+        id: stripDemoId(t.trialId),
+        name: t.title || `Trial ${stripDemoId(t.trialId).toUpperCase()}`, // Fallback to ID if title is null
+      }));
+    }
+
+    const legacyTrialsWithDocs = await db
+      .selectDistinct({ 
+        trialId: protocols.trialId,
+        title: trials.title,
+      })
+      .from(protocols)
+      .leftJoin(trials, eq(protocols.trialId, trials.id))
+      .where(notLike(protocols.trialId, "%:%"));
+
+    return legacyTrialsWithDocs.map(t => ({
       id: t.trialId,
-      name: t.title || `Trial ${t.trialId.toUpperCase()}`, // Fallback to ID if title is null
+      name: t.title || `Trial ${t.trialId.toUpperCase()}`,
     }));
   }),
 
@@ -390,6 +493,7 @@ export const documentsRouter = router({
     .input(
       z.object({
         trialIds: z.array(z.string()),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .query(async ({ input }) => {
@@ -397,6 +501,7 @@ export const documentsRouter = router({
       if (!db || input.trialIds.length === 0) {
         return {};
       }
+      const mode = (input.demoMode ?? "sample") as DemoMode;
 
       // Fetch documents for all trial IDs
       const allDocs = await db
@@ -407,7 +512,8 @@ export const documentsRouter = router({
       const docsByTrial: Record<string, any[]> = {};
       
       for (const trialId of input.trialIds) {
-        const trialDocs = allDocs.filter(doc => doc.trialId === trialId);
+        const resolvedTrialId = await resolveTrialId(db, mode, trialId, mode !== "building");
+        const trialDocs = allDocs.filter(doc => doc.trialId === resolvedTrialId);
         
         const docsWithStatus = await Promise.all(
           trialDocs.map(async (doc) => {
@@ -430,4 +536,3 @@ export const documentsRouter = router({
       return docsByTrial;
     }),
 });
-

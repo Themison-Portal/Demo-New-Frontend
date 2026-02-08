@@ -20,20 +20,22 @@ export function DashboardLayout({ children, breadcrumbs, breadcrumbIcon }: Dashb
   const { isCollapsed } = useSidebarNav();
   
   return (
-    <div className="min-h-screen bg-background">
-      {/* Fixed Top Bar - Always visible */}
-      <TopNav />
-      
-      {/* Sidebar and Content Below Top Bar */}
-      <div className="flex pt-12">
+    <div className="min-h-screen bg-white">
+      {/* Sidebar and Content */}
+      <div className="flex">
         {/* Collapsible Sidebar */}
         <Sidebar />
         
         {/* Main Content Area */}
-        <main className={`h-[calc(100vh-48px)] overflow-auto bg-[#F9FAFB] flex-1 transition-all duration-300 ${
+        <main className={`relative z-20 h-screen bg-[#F9FAFB] flex-1 overflow-hidden transition-all duration-300 rounded-tl-2xl rounded-bl-2xl mr-0 border border-[#E4E7EC] border-r-0 shadow-[-3px_0_9px_rgba(15,23,42,0.03)] ${
           isCollapsed ? "ml-[64px]" : "ml-[280px]"
         }`}>
-          {children}
+          <div className="px-0">
+            <TopNav />
+          </div>
+          <div className="h-[calc(100vh-56px)] overflow-auto pb-2">
+            {children}
+          </div>
         </main>
       </div>
     </div>

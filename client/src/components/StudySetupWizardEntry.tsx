@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, Check, ChevronRight, ChevronLeft, Plus } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
+import { useDemoState } from "@/contexts/DemoStateContext";
 
 interface StudySetupWizardEntryProps {
   trialId: string;
@@ -21,9 +22,14 @@ export function StudySetupWizardEntry({
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const { getCurrentDataMode } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
   
   // Fetch documents for this trial
-  const { data: documents, refetch: refetchDocuments } = trpc.documents.list.useQuery({ trialId });
+  const { data: documents, refetch: refetchDocuments } = trpc.documents.list.useQuery({
+    trialId,
+    demoMode: currentDataMode,
+  });
   
   // Upload mutation
   const uploadMutation = trpc.documents.upload.useMutation({
@@ -70,6 +76,7 @@ export function StudySetupWizardEntry({
         filename: file.name,
         fileData: base64,
         category: selectedCategory,
+        demoMode: currentDataMode,
       });
     };
     reader.readAsDataURL(file);

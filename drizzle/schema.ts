@@ -34,9 +34,21 @@ export const trials = mysqlTable("trials", {
   id: varchar("id", { length: 50 }).primaryKey(), // e.g., "abc-123", "def-456"
   title: varchar("title", { length: 500 }).notNull(), // e.g., "Diabetes Mellitus (SURPASS J-mono)"
   protocolNumber: varchar("protocolNumber", { length: 100 }), // e.g., "8F-JE-GPGQ(a)"
+  investigationalProduct: varchar("investigationalProduct", { length: 255 }),
+  indication: varchar("indication", { length: 255 }),
+  nctNumber: varchar("nctNumber", { length: 50 }),
+  currentVersion: varchar("currentVersion", { length: 50 }),
+  amendmentVersion: varchar("amendmentVersion", { length: 50 }),
+  releaseDate: varchar("releaseDate", { length: 50 }),
+  sampleSize: varchar("sampleSize", { length: 50 }),
+  numberOfSites: varchar("numberOfSites", { length: 50 }),
+  studyDuration: varchar("studyDuration", { length: 100 }),
+  studyDesignType: varchar("studyDesignType", { length: 255 }),
+  primaryObjective: text("primaryObjective"),
+  primaryEndpoint: text("primaryEndpoint"),
   description: text("description"), // Study description
-  phase: mysqlEnum("phase", ["Phase I", "Phase II", "Phase III", "Phase IV"]),
-  status: mysqlEnum("status", ["active", "recruiting", "on-hold", "completed", "terminated"]).default("active").notNull(),
+  phase: varchar("phase", { length: 50 }),
+  status: mysqlEnum("status", ["not-started", "active", "recruiting", "on-hold", "completed", "terminated"]).default("not-started").notNull(),
   sponsor: varchar("sponsor", { length: 255 }), // e.g., "Novo Nordisk", "Roche"
   location: varchar("location", { length: 255 }), // e.g., "Copenhagen", "Multi-site"
   startDate: timestamp("startDate"),
@@ -214,3 +226,27 @@ export const documentCategories = mysqlTable("documentCategories", {
 
 export type DocumentCategory = typeof documentCategories.$inferSelect;
 export type InsertDocumentCategory = typeof documentCategories.$inferInsert;
+
+/**
+ * Telemetry events - user actions and AI interactions
+ */
+export const telemetryEvents = mysqlTable("telemetry_events", {
+  id: varchar("id", { length: 36 }).primaryKey(),
+  eventType: varchar("eventType", { length: 100 }).notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  userId: varchar("userId", { length: 64 }),
+  sessionId: varchar("sessionId", { length: 128 }).notNull(),
+  entityType: varchar("entityType", { length: 64 }),
+  entityId: varchar("entityId", { length: 128 }),
+  action: varchar("action", { length: 64 }).notNull(),
+  payload: json("payload"),
+  durationMs: int("durationMs"),
+  aiInvolved: boolean("aiInvolved").default(false).notNull(),
+  aiOutput: text("aiOutput"),
+  aiSources: json("aiSources"),
+  userCorrection: text("userCorrection"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
+export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;

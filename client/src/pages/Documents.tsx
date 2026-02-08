@@ -1,6 +1,22 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Plus, FileText, Upload, Trash2, RefreshCw } from "lucide-react";
+import {
+  Plus,
+  FileText,
+  Upload,
+  Trash2,
+  RefreshCw,
+  Search,
+  ArrowUpDown,
+  Filter,
+  Eye,
+  Archive,
+  RotateCcw,
+  Brain,
+  FolderOpen,
+  Lock,
+  Users,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import {
   Dialog,
@@ -11,17 +27,38 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { useDemoState } from "@/contexts/DemoStateContext";
+import { logEvent } from "@/lib/telemetry";
+import { useLocation } from "wouter";
+import { EditableField } from "@/components/EditableField";
 
 export default function Documents({ trialId = '1' }: { trialId?: string } = {}) {
+  const [, navigate] = useLocation();
+  const { getCurrentDataMode } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [category, setCategory] = useState("Protocol");
   const [isUploading, setIsUploading] = useState(false);
   const [showCustomCategory, setShowCustomCategory] = useState(false);
   const [customCategory, setCustomCategory] = useState("");
+  const [activeTab, setActiveTab] = useState<"active" | "archived" | "all">("active");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<"latest" | "oldest" | "name-asc" | "name-desc">("latest");
+  const [archivedDocIds, setArchivedDocIds] = useState<number[]>([]);
+  const [docReleaseDateById, setDocReleaseDateById] = useState<Record<number, string>>({});
 
   // Query documents
-  const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery({ trialId: trialId });
+  const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery({
+    trialId: trialId,
+    demoMode: currentDataMode,
+  });
+
+  const { data: trial } = trpc.trials.getById.useQuery({
+    id: trialId,
+    demoMode: currentDataMode,
+  });
 
   // Query categories
   const { data: categories } = trpc.documents.getCategories.useQuery();
@@ -33,6 +70,12 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
       setUploadDialogOpen(false);
       setSelectedFile(null);
       refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "upload_document",
+        entityType: "document",
+        payload: { trialId, demoMode: currentDataMode },
+      });
     },
     onError: (error: any) => {
       toast.error("Failed to upload document", {
@@ -46,6 +89,12 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     onSuccess: () => {
       toast.success("Document deleted successfully");
       refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "delete_document",
+        entityType: "document",
+        payload: { trialId, demoMode: currentDataMode },
+      });
     },
     onError: (error: any) => {
       toast.error("Failed to delete document", {
@@ -59,6 +108,12 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     onSuccess: (data) => {
       toast.success(data.message || "Document processing retried");
       refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "retry_processing",
+        entityType: "document",
+        payload: { trialId, demoMode: currentDataMode },
+      });
     },
     onError: (error: any) => {
       toast.error("Failed to retry processing", {
@@ -71,6 +126,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const createCategoryMutation = trpc.documents.createCategory.useMutation({
     onSuccess: () => {
       toast.success("Category created successfully");
+      logEvent({
+        eventType: "feature_used",
+        action: "create_category",
+        entityType: "document_category",
+      });
     },
     onError: (error: any) => {
       toast.error("Failed to create category", {
@@ -84,6 +144,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     onSuccess: () => {
       toast.success("Category updated successfully");
       refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "update_category",
+        entityType: "document_category",
+      });
     },
     onError: (error: any) => {
       toast.error("Failed to update category", {
@@ -119,6 +184,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
           filename: selectedFile.name,
           fileData: base64Data,
           category,
+          demoMode: currentDataMode,
         });
         setIsUploading(false);
       };
@@ -146,21 +212,214 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     });
   };
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = `trial-doc-archive:${currentDataMode}:${trialId}`;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) {
+        setArchivedDocIds([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const normalized = parsed.filter((v) => Number.isInteger(v)) as number[];
+        setArchivedDocIds(normalized);
+      }
+    } catch {
+      setArchivedDocIds([]);
+    }
+  }, [currentDataMode, trialId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = `trial-doc-archive:${currentDataMode}:${trialId}`;
+    window.localStorage.setItem(key, JSON.stringify(archivedDocIds));
+  }, [archivedDocIds, currentDataMode, trialId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = `trial-doc-control:${currentDataMode}:${trialId}`;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) {
+        setDocReleaseDateById({});
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") {
+        setDocReleaseDateById({});
+        return;
+      }
+      const normalized = Object.entries(parsed).reduce<Record<number, string>>((acc, [k, v]) => {
+        const id = Number(k);
+        if (Number.isFinite(id) && typeof v === "string") {
+          acc[id] = v;
+        }
+        return acc;
+      }, {});
+      setDocReleaseDateById(normalized);
+    } catch {
+      setDocReleaseDateById({});
+    }
+  }, [currentDataMode, trialId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = `trial-doc-control:${currentDataMode}:${trialId}`;
+    window.localStorage.setItem(key, JSON.stringify(docReleaseDateById));
+  }, [docReleaseDateById, currentDataMode, trialId]);
+
+  const protocolDocsSorted = useMemo(() => {
+    if (!documents?.length) return [];
+    return [...documents]
+      .filter((doc: any) => String(doc.category || "").toLowerCase() === "protocol")
+      .sort(
+        (a: any, b: any) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+  }, [documents]);
+
+  const protocolVersionById = useMemo(() => {
+    const versionMap: Record<number, string> = {};
+    protocolDocsSorted.forEach((doc: any, index: number) => {
+      versionMap[doc.id] = `v${index + 1}`;
+    });
+    return versionMap;
+  }, [protocolDocsSorted]);
+
+  const currentProtocolId = protocolDocsSorted.length
+    ? protocolDocsSorted[protocolDocsSorted.length - 1].id
+    : null;
+
+  const getAmendmentLabel = (filename: string) => {
+    const match = filename.match(/(?:amendment|amd|amnd|rev(?:ision)?)[\s\-_]*([a-z0-9.]+)/i);
+    return match?.[1] ? match[1].toUpperCase() : "-";
+  };
+
+  const typeOptions = useMemo(() => {
+    const base = new Set<string>(["Protocol"]);
+    (categories || []).forEach((c) => base.add(c.name));
+    return Array.from(base);
+  }, [categories]);
+
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+
+  const filteredDocuments = useMemo(() => {
+    const rows = [...(documents || [])];
+    const matchesTab = (docId: number) => {
+      const isArchived = archivedDocIds.includes(docId);
+      if (activeTab === "all") return true;
+      if (activeTab === "archived") return isArchived;
+      return !isArchived;
+    };
+
+    const matchesType = (cat: string) => {
+      if (typeFilter === "all") return true;
+      return cat === typeFilter;
+    };
+
+    const matchesSearch = (doc: any) => {
+      if (!normalizedSearch) return true;
+      const haystack = `${doc.filename} ${doc.category} ${doc.uploaderName || ""}`.toLowerCase();
+      return haystack.includes(normalizedSearch);
+    };
+
+    const filtered = rows.filter((doc) =>
+      matchesTab(doc.id) && matchesType(doc.category) && matchesSearch(doc)
+    );
+
+    filtered.sort((a: any, b: any) => {
+      if (sortBy === "latest") {
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      }
+      if (sortBy === "oldest") {
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      }
+      if (sortBy === "name-asc") {
+        return String(a.filename).localeCompare(String(b.filename));
+      }
+      return String(b.filename).localeCompare(String(a.filename));
+    });
+
+    return filtered;
+  }, [documents, archivedDocIds, activeTab, typeFilter, normalizedSearch, sortBy]);
+
+  const latestProtocol = protocolDocsSorted.length
+    ? protocolDocsSorted[protocolDocsSorted.length - 1]
+    : null;
+
   return (
-    <div>
-      {/* Documents Table */}
+    <div className="space-y-4">
+      <div className="rounded-xl border border-gray-200 bg-white p-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="space-y-2">
+            <div className="inline-flex items-center rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+              Themison Document Hub
+            </div>
+            <h2 className="text-2xl font-semibold leading-tight text-gray-900">
+              {trial?.investigationalProduct || trial?.title || "Trial Documentation"}
+            </h2>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+              <span>
+                Protocol Number:{" "}
+                <span className="font-medium text-gray-900">
+                  {trial?.protocolNumber || "Not set"}
+                </span>
+              </span>
+              <span>
+                Documents:{" "}
+                <span className="font-medium text-gray-900">{documents?.length || 0}</span>
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+              <Brain className="h-4 w-4 mr-2" />
+              Ask Themison AI
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!latestProtocol?.fileUrl) {
+                  toast.error("No protocol available yet.");
+                  return;
+                }
+                window.open(latestProtocol.fileUrl, "_blank", "noopener,noreferrer");
+              }}
+            >
+              <FolderOpen className="h-4 w-4 mr-2" />
+              View Latest Protocol
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <div className="bg-white rounded-lg border border-gray-200">
-        {/* Header inside container */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <div className="flex items-baseline gap-3">
+        <div className="px-6 py-4 border-b border-gray-200 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-baseline gap-3">
             <h1 className="text-2xl font-semibold text-gray-900">Documents</h1>
             <p className="text-sm text-gray-500">
-              {documents?.length || 0} document{documents?.length !== 1 ? "s" : ""}
+              {filteredDocuments.length} shown • {documents?.length || 0} total
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
+            <Dialog
+              open={uploadDialogOpen}
+              onOpenChange={(open) => {
+                setUploadDialogOpen(open);
+                if (open) {
+                  logEvent({
+                    eventType: "feature_used",
+                    action: "open_upload_dialog",
+                    entityType: "document",
+                    payload: { trialId, demoMode: currentDataMode },
+                  });
+                }
+              }}
+            >
               <DialogTrigger asChild>
                 <Button>
                   <Plus className="h-4 w-4 mr-2" />
@@ -168,264 +427,445 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                 </Button>
               </DialogTrigger>
               <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Upload Document</DialogTitle>
-              <DialogDescription>
-                Upload a protocol or other trial document
-              </DialogDescription>
-            </DialogHeader>
+                <DialogHeader>
+                  <DialogTitle>Upload Document</DialogTitle>
+                  <DialogDescription>
+                    Upload a protocol or other trial document
+                  </DialogDescription>
+                </DialogHeader>
 
-            <div className="space-y-4 mt-4">
-              {/* Category Selection */}
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-2 block">
-                  Category
-                </label>
-                {!showCustomCategory ? (
-                  <select
-                    value={category}
-                    onChange={(e) => {
-                      if (e.target.value === "__add_new__") {
-                        setShowCustomCategory(true);
-                        setCustomCategory("");
-                      } else {
-                        setCategory(e.target.value);
-                      }
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  >
-                    {categories?.map((cat) => (
-                      <option key={cat.id} value={cat.name}>
-                        {cat.name}
-                      </option>
-                    ))}
-                    <option value="__add_new__">+ Add New Category</option>
-                  </select>
-                ) : (
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={customCategory}
-                      onChange={(e) => setCustomCategory(e.target.value)}
-                      placeholder="Enter category name"
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
-                      autoFocus
-                    />
+                <div className="space-y-4 mt-4">
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 mb-2 block">
+                      Category
+                    </label>
+                    {!showCustomCategory ? (
+                      <select
+                        value={category}
+                        onChange={(e) => {
+                          if (e.target.value === "__add_new__") {
+                            setShowCustomCategory(true);
+                            setCustomCategory("");
+                          } else {
+                            setCategory(e.target.value);
+                          }
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                      >
+                        {categories?.map((cat) => (
+                          <option key={cat.id} value={cat.name}>
+                            {cat.name}
+                          </option>
+                        ))}
+                        <option value="__add_new__">+ Add New Category</option>
+                      </select>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={customCategory}
+                          onChange={(e) => setCustomCategory(e.target.value)}
+                          placeholder="Enter category name"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                          autoFocus
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={async () => {
+                            if (customCategory.trim()) {
+                              await createCategoryMutation.mutateAsync({ name: customCategory.trim() });
+                              setCategory(customCategory.trim());
+                              setShowCustomCategory(false);
+                            }
+                          }}
+                          disabled={!customCategory.trim() || createCategoryMutation.isPending}
+                        >
+                          Add
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setShowCustomCategory(false);
+                            setCustomCategory("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium text-gray-700 mb-2 block">
+                      File
+                    </label>
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
+                      <input
+                        type="file"
+                        accept=".pdf,.doc,.docx"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                        id="file-upload"
+                      />
+                      <label
+                        htmlFor="file-upload"
+                        className="cursor-pointer flex flex-col items-center"
+                      >
+                        <Upload className="h-8 w-8 text-gray-400 mb-2" />
+                        {selectedFile ? (
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">
+                              {selectedFile.name}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              {formatFileSize(selectedFile.size)}
+                            </p>
+                          </div>
+                        ) : (
+                          <div>
+                            <p className="text-sm text-gray-600">
+                              Click to upload or drag and drop
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">
+                              PDF, DOC, DOCX up to 50MB
+                            </p>
+                          </div>
+                        )}
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 mt-6">
                     <Button
                       variant="outline"
-                      onClick={async () => {
-                        if (customCategory.trim()) {
-                          await createCategoryMutation.mutateAsync({ name: customCategory.trim() });
-                          setCategory(customCategory.trim());
-                          setShowCustomCategory(false);
-                        }
-                      }}
-                      disabled={!customCategory.trim() || createCategoryMutation.isPending}
-                    >
-                      Add
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setShowCustomCategory(false);
-                        setCustomCategory("");
-                      }}
+                      onClick={() => setUploadDialogOpen(false)}
+                      disabled={isUploading}
                     >
                       Cancel
                     </Button>
+                    <Button onClick={handleUpload} disabled={isUploading || !selectedFile}>
+                      {isUploading ? "Uploading..." : "Upload"}
+                    </Button>
                   </div>
-                )}
-              </div>
-
-              {/* File Upload */}
-              <div>
-                <label className="text-sm font-medium text-gray-700 mb-2 block">
-                  File
-                </label>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
-                  <input
-                    type="file"
-                    accept=".pdf,.doc,.docx"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                    id="file-upload"
-                  />
-                  <label
-                    htmlFor="file-upload"
-                    className="cursor-pointer flex flex-col items-center"
-                  >
-                    <Upload className="h-8 w-8 text-gray-400 mb-2" />
-                    {selectedFile ? (
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {selectedFile.name}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {formatFileSize(selectedFile.size)}
-                        </p>
-                      </div>
-                    ) : (
-                      <div>
-                        <p className="text-sm text-gray-600">
-                          Click to upload or drag and drop
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          PDF, DOC, DOCX up to 50MB
-                        </p>
-                      </div>
-                    )}
-                  </label>
                 </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex justify-end gap-3 mt-6">
-                <Button
-                  variant="outline"
-                  onClick={() => setUploadDialogOpen(false)}
-                  disabled={isUploading}
-                >
-                  Cancel
-                </Button>
-                <Button onClick={handleUpload} disabled={isUploading || !selectedFile}>
-                  {isUploading ? "Uploading..." : "Upload"}
-                </Button>
-              </div>
-            </div>
               </DialogContent>
             </Dialog>
           </div>
         </div>
 
-        {/* Table Header */}
-        <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-gray-200 bg-gray-50">
-          <div className="col-span-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
-            File Name
-          </div>
-          <div className="col-span-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-            Category
-          </div>
-          <div className="col-span-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-            Size
-          </div>
-          <div className="col-span-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-            Status
-          </div>
-          <div className="col-span-2 text-xs font-medium text-gray-500 uppercase tracking-wider">
-            Uploaded
-          </div>
-          <div className="col-span-1 text-xs font-medium text-gray-500 uppercase tracking-wider text-right">
-            Actions
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex items-center gap-5">
+              <button
+                className={`text-sm pb-2 border-b-2 transition-colors ${
+                  activeTab === "active"
+                    ? "border-gray-900 text-gray-900 font-medium"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+                onClick={() => setActiveTab("active")}
+              >
+                Active
+              </button>
+              <button
+                className={`text-sm pb-2 border-b-2 transition-colors ${
+                  activeTab === "archived"
+                    ? "border-gray-900 text-gray-900 font-medium"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+                onClick={() => setActiveTab("archived")}
+              >
+                Archived
+              </button>
+              <button
+                className={`text-sm pb-2 border-b-2 transition-colors ${
+                  activeTab === "all"
+                    ? "border-gray-900 text-gray-900 font-medium"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+                onClick={() => setActiveTab("all")}
+              >
+                All Documents
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[240px]">
+                <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search documents..."
+                  className="w-full h-9 rounded-md border border-gray-200 pl-9 pr-3 text-sm"
+                />
+              </div>
+              <div className="relative">
+                <ArrowUpDown className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="h-9 rounded-md border border-gray-200 pl-9 pr-8 text-sm bg-white"
+                >
+                  <option value="latest">Latest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="name-asc">Name A-Z</option>
+                  <option value="name-desc">Name Z-A</option>
+                </select>
+              </div>
+              <div className="relative">
+                <Filter className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <select
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value)}
+                  className="h-9 rounded-md border border-gray-200 pl-9 pr-8 text-sm bg-white"
+                >
+                  <option value="all">All Types</option>
+                  {typeOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Table Body */}
-        <div>
-          {isLoading ? (
-            <div className="px-6 py-12 text-center text-gray-500">
-              Loading documents...
-            </div>
-          ) : documents && documents.length > 0 ? (
-            documents.map((doc: any) => (
-              <div
-                key={doc.id}
-                className="grid grid-cols-12 gap-4 px-6 py-4 border-b border-gray-100 hover:bg-gray-50 transition-colors"
-              >
-                {/* File Name */}
-                <div className="col-span-3 flex items-center gap-3">
-                  <FileText className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                  <span className="text-sm text-gray-900 font-medium truncate">
-                    {doc.filename}
-                  </span>
-                </div>
+        <div className="w-full">
+          <table className="w-full table-auto">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  File Name
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Uploader
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Category
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Document Control
+                </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Status
+                </th>
+                <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Uploaded
+                </th>
+                <th className="whitespace-nowrap px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                    Loading documents...
+                  </td>
+                </tr>
+              ) : filteredDocuments.length > 0 ? (
+                filteredDocuments.map((doc: any) => {
+                  const isProtocol = String(doc.category || "").toLowerCase() === "protocol";
+                  const versionLabel = isProtocol ? protocolVersionById[doc.id] || "v1" : "v1";
+                  const isCurrentProtocol = isProtocol && currentProtocolId === doc.id;
+                  const amendmentLabel = isProtocol ? getAmendmentLabel(doc.filename) : "-";
+                  const isArchived = archivedDocIds.includes(doc.id);
+                  const uploaderLabel = doc.uploaderName || (doc.uploadedBy ? `User ${doc.uploadedBy}` : "Unknown");
+                  const releaseValue = docReleaseDateById[doc.id] || (isProtocol ? (trial?.releaseDate || "") : "");
 
-                {/* Category */}
-                <div className="col-span-2 flex items-center">
-                  <select
-                    value={doc.category}
-                    onChange={(e) => {
-                      updateCategoryMutation.mutate({
-                        id: doc.id,
-                        category: e.target.value,
-                      });
-                    }}
-                    className="px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded border-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                    disabled={updateCategoryMutation.isPending}
-                  >
-                    {categories?.map((cat) => (
-                      <option key={cat.id} value={cat.name}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  return (
+                    <tr key={doc.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-4 align-middle">
+                        <div className="min-w-0 flex items-center gap-3">
+                          <FileText className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          <span className="text-sm text-gray-900 font-medium truncate">{doc.filename}</span>
+                        </div>
+                      </td>
 
-                {/* Size */}
-                <div className="col-span-2 flex items-center">
-                  <span className="text-sm text-gray-600">
-                    {formatFileSize(doc.fileSize)}
-                  </span>
-                </div>
+                      <td className="px-4 py-4 align-middle">
+                        <span className="text-sm text-gray-600 truncate block">{uploaderLabel}</span>
+                      </td>
 
-                {/* Status */}
-                <div className="col-span-2 flex items-center gap-2">
-                  {doc.isIndexed ? (
-                    <span className="px-2 py-1 bg-green-50 text-green-700 text-xs rounded">
-                      Indexed
-                    </span>
-                  ) : (
-                    <>
-                      <span className="px-2 py-1 bg-yellow-50 text-yellow-700 text-xs rounded">
-                        Processing
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => retryMutation.mutate({ id: doc.id })}
-                        disabled={retryMutation.isPending}
-                        className="h-6 w-6 p-0 text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
-                        title="Retry processing"
-                      >
-                        <RefreshCw className="h-3 w-3" />
-                      </Button>
-                    </>
-                  )}
-                </div>
+                      <td className="px-4 py-4 align-middle">
+                        <select
+                          value={doc.category}
+                          onChange={(e) => {
+                            updateCategoryMutation.mutate({
+                              id: doc.id,
+                              category: e.target.value,
+                            });
+                          }}
+                          className="w-full min-w-0 max-w-[130px] px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded-md border border-blue-100 focus:ring-2 focus:ring-blue-500 cursor-pointer truncate overflow-hidden text-ellipsis whitespace-nowrap"
+                          disabled={updateCategoryMutation.isPending}
+                        >
+                          {categories?.map((cat) => (
+                            <option key={cat.id} value={cat.name}>
+                              {cat.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
 
-                {/* Uploaded Date */}
-                <div className="col-span-2 flex items-center">
-                  <span className="text-sm text-gray-600">
-                    {formatDate(doc.createdAt)}
-                  </span>
-                </div>
+                      <td className="px-4 py-4 align-middle">
+                        <div className="space-y-1 text-xs min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-gray-500">Version:</span>
+                            <span className="font-semibold text-gray-900">{versionLabel}</span>
+                            {isCurrentProtocol && (
+                              <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-semibold">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-gray-500 truncate">
+                            <span>Amend:</span> <span className="text-gray-700">{amendmentLabel}</span>
+                          </div>
+                          <div className="text-gray-500 truncate">
+                            <span>Release:</span>{" "}
+                            <EditableField
+                              value={releaseValue}
+                              onSave={async (newValue) => {
+                                setDocReleaseDateById((prev) => ({
+                                  ...prev,
+                                  [doc.id]: newValue,
+                                }));
+                              }}
+                              emptyText="Add release date"
+                              className="inline-flex"
+                              displayClassName="text-gray-700"
+                            />
+                          </div>
+                        </div>
+                      </td>
 
-                {/* Actions */}
-                <div className="col-span-1 flex items-center justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      if (confirm(`Delete "${doc.filename}"?`)) {
-                        deleteMutation.mutate({ id: doc.id });
-                      }
-                    }}
-                    disabled={deleteMutation.isPending}
-                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="px-6 py-12 text-center">
-              <FileText className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-500 text-sm">No documents uploaded yet</p>
-              <p className="text-gray-400 text-xs mt-1">
-                Upload your first protocol to get started
-              </p>
-            </div>
-          )}
+                      <td className="px-4 py-4 align-middle">
+                        <div className="flex items-center gap-2">
+                          {doc.isIndexed ? (
+                            <span className="px-2 py-1 bg-green-50 text-green-700 text-xs rounded">
+                              Indexed
+                            </span>
+                          ) : (
+                            <>
+                              <span className="px-2 py-1 bg-yellow-50 text-yellow-700 text-xs rounded">
+                                Processing
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => retryMutation.mutate({ id: doc.id })}
+                                disabled={retryMutation.isPending}
+                                className="h-6 w-6 p-0 text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
+                                title="Retry processing"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4 align-middle whitespace-nowrap">
+                        <span className="text-sm text-gray-600">{formatDate(doc.createdAt)}</span>
+                      </td>
+
+                      <td className="px-4 py-4 align-middle">
+                        <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => window.open(doc.fileUrl, "_blank", "noopener,noreferrer")}
+                            className="h-8 w-8 p-0 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                            title="Open document"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setArchivedDocIds((prev) => {
+                                if (prev.includes(doc.id)) {
+                                  return prev.filter((id) => id !== doc.id);
+                                }
+                                return [...prev, doc.id];
+                              });
+                            }}
+                            className="h-8 w-8 p-0 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                            title={isArchived ? "Restore document" : "Archive document"}
+                          >
+                            {isArchived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              if (confirm(`Delete "${doc.filename}"?`)) {
+                                deleteMutation.mutate({ id: doc.id });
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center">
+                    <FileText className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                    <p className="text-gray-500 text-sm">No documents in this view yet</p>
+                    <p className="text-gray-400 text-xs mt-1">
+                      Upload documents or adjust filters to continue
+                    </p>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-semibold text-gray-900">Generated Outputs</h2>
+          <span className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-medium">
+            Coming soon
+          </span>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded-lg border border-gray-200 p-4 bg-slate-50">
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <Lock className="h-4 w-4 text-gray-500" />
+              Personal Outputs
+            </h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Draft source documents created by you. Private by default until shared.
+            </p>
+            <Button
+              variant="outline"
+              className="mt-4"
+              onClick={() => navigate(`/trial/${trialId}/assistant`)}
+            >
+              <Brain className="h-4 w-4 mr-2" />
+              Ask Themison AI
+            </Button>
+          </div>
+          <div className="rounded-lg border border-gray-200 p-4 bg-slate-50">
+            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+              <Users className="h-4 w-4 text-blue-600" />
+              Team Outputs
+            </h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Shared approved artifacts for the site team and audit-ready workflows.
+            </p>
+            <p className="text-xs text-gray-500 mt-4">
+              Soon: approval flow, version locks, and organization sync integrations.
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -114,7 +114,7 @@ export default function Overview() {
   const blockedTasksCount = state.tasks.filter(t => t.status === "waiting_on_monitor" && !t.completed).length;
 
   return (
-    <div className="p-8">
+    <div className="px-8 pb-8 pt-4">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>

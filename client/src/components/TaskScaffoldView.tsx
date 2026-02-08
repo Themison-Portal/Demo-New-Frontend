@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Check, Plus, Calendar, User, Link as LinkIcon, Edit2, Trash2, GripVertical, AlertCircle, List, BarChart3, Workflow } from "lucide-react";
 import { toast } from "sonner";
+import { logEvent } from "@/lib/telemetry";
 import {
   DndContext,
   closestCenter,
@@ -198,6 +199,12 @@ export function TaskScaffoldView({
         const newIndex = items.findIndex((item) => item.id === over.id);
         const newOrder = arrayMove(items, oldIndex, newIndex);
         toast("Section reordered");
+        logEvent({
+          eventType: "feature_used",
+          action: "reorder_section",
+          entityType: "protocol_section",
+          payload: { from: oldIndex, to: newIndex },
+        });
         return newOrder;
       });
     }
@@ -219,6 +226,12 @@ export function TaskScaffoldView({
             if (phase.id === activePhaseId) {
               const oldIndex = phase.tasks.findIndex((t) => t.id === activeTaskId);
               const newIndex = phase.tasks.findIndex((t) => t.id === overTaskId);
+              logEvent({
+                eventType: "feature_used",
+                action: "reorder_task",
+                entityType: "task",
+                payload: { phaseId: activePhaseId, from: oldIndex, to: newIndex },
+              });
               return {
                 ...phase,
                 tasks: arrayMove(phase.tasks, oldIndex, newIndex),
@@ -241,6 +254,16 @@ export function TaskScaffoldView({
       purple: "bg-purple-500",
     };
     return colorMap[color] || "bg-gray-500";
+  };
+
+  const handleViewChange = (next: "list" | "timeline" | "canvas") => {
+    setActiveView(next);
+    logEvent({
+      eventType: "feature_used",
+      action: "change_view",
+      entityType: "task_scaffold",
+      payload: { view: next },
+    });
   };
 
   return (
@@ -284,11 +307,32 @@ export function TaskScaffoldView({
               <p className="text-sm text-gray-500">Review and edit tasks. Assignments are suggested based on team roles.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={onAddTask}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  logEvent({
+                    eventType: "task_created",
+                    action: "start_create",
+                    entityType: "task",
+                  });
+                  onAddTask();
+                }}
+              >
                 <Plus className="h-4 w-4 mr-1" />
                 Add Tasks
               </Button>
-              <Button size="sm" onClick={onConfirm}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  logEvent({
+                    eventType: "trial_setup_completed",
+                    action: "confirm",
+                    entityType: "task_scaffold",
+                  });
+                  onConfirm();
+                }}
+              >
                 <Check className="h-4 w-4 mr-1" />
                 Confirm & Launch
               </Button>
@@ -298,7 +342,7 @@ export function TaskScaffoldView({
           {/* View Tabs */}
           <div className="flex items-center gap-1 border-b border-gray-200">
             <button
-              onClick={() => setActiveView("list")}
+              onClick={() => handleViewChange("list")}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeView === "list"
                   ? "border-blue-600 text-blue-600"
@@ -309,7 +353,7 @@ export function TaskScaffoldView({
               List
             </button>
             <button
-              onClick={() => setActiveView("timeline")}
+              onClick={() => handleViewChange("timeline")}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeView === "timeline"
                   ? "border-blue-600 text-blue-600"
@@ -320,7 +364,7 @@ export function TaskScaffoldView({
               Timeline
             </button>
             <button
-              onClick={() => setActiveView("canvas")}
+              onClick={() => handleViewChange("canvas")}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 activeView === "canvas"
                   ? "border-blue-600 text-blue-600"
@@ -362,8 +406,24 @@ export function TaskScaffoldView({
                             key={task.id}
                             task={task}
                             phaseId={phase.id}
-                            onEdit={() => onEditTask(task.id)}
-                            onDelete={() => onDeleteTask(task.id)}
+                            onEdit={() => {
+                              logEvent({
+                                eventType: "task_edited",
+                                action: "start_edit",
+                                entityType: "task",
+                                entityId: String(task.id),
+                              });
+                              onEditTask(task.id);
+                            }}
+                            onDelete={() => {
+                              logEvent({
+                                eventType: "task_deleted",
+                                action: "start_delete",
+                                entityType: "task",
+                                entityId: String(task.id),
+                              });
+                              onDeleteTask(task.id);
+                            }}
                           />
                         ))}
                       </div>

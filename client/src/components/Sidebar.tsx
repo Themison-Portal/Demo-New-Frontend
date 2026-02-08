@@ -4,14 +4,14 @@
  * Features: Three-state navigation (main menu, trial list, trial detail) with smooth transitions
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useDemoState } from "@/contexts/DemoStateContext";
-import { useSidebarNav } from "@/contexts/SidebarNavContext";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { 
   Home, 
-  FileText, 
+  FileText,
+  Brain,
   LayoutGrid, 
   Building, 
   Puzzle, 
@@ -57,6 +57,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { logEvent } from "@/lib/telemetry";
+import { useSidebarNav } from "@/contexts/SidebarNavContext";
 
 interface NavItem {
   label: string;
@@ -82,8 +84,33 @@ export function Sidebar() {
       : null;
   const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+  const utils = trpc.useUtils();
+  const resetToEmptyMutation = trpc.demo.resetToEmpty.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.documents.list.invalidate();
+    },
+  });
+  const loadSampleMutation = trpc.demo.loadSampleData.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.documents.list.invalidate();
+    },
+  });
+  const loadFullMutation = trpc.demo.loadFullDataset.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.documents.list.invalidate();
+    },
+  });
+  const fullResetMutation = trpc.demo.fullReset.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.documents.list.invalidate();
+    },
+  });
   // Get trials from database
-  const { data: dbTrials = [] } = trpc.trials.list.useQuery();
+  const { data: dbTrials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
   
   // Map database trials to sidebar format
   const trials = dbTrials.map((trial, index) => ({
@@ -102,39 +129,74 @@ export function Sidebar() {
     const colors = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#EF4444', '#06B6D4', '#EC4899', '#6366F1'];
     return colors[index % colors.length];
   }
-  const { isCollapsed } = useSidebarNav();
+  const { isCollapsed, setIsCollapsed } = useSidebarNav();
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
-    type: 'reset' | 'sample' | 'full' | null;
+    type: 'reset' | 'sample' | 'full' | 'building' | null;
   }>({ open: false, type: null });
+
+  useEffect(() => {
+    toast.dismiss("demo-reset");
+  }, [currentDataMode]);
 
   const handleSearchClick = () => {
     toast.info("Search feature coming soon");
+    logEvent({
+      eventType: "feature_used",
+      action: "clicked",
+      entityType: "search",
+      payload: { location: "sidebar" },
+    });
   };
 
 
 
-  const handleLoadSampleData = () => {
-    setConfirmDialog({ open: false, type: null });
-    loadSampleData();
-    navigate("/trial-workspace");
-    toast.success("Sample data loaded (8 trials)");
-  };
-
-  const handleLoadFullDataset = () => {
-    setConfirmDialog({ open: false, type: null });
-    loadFullDataset();
-    navigate("/trial-workspace");
-    toast.success("Full dataset loaded (25+ trials)");
-  };
-
-  const handleConfirmAction = () => {
-    if (confirmDialog.type === 'reset') {
-      handleResetDemo();
-    } else if (confirmDialog.type === 'sample') {
-      handleLoadSampleData();
-    } else if (confirmDialog.type === 'full') {
-      handleLoadFullDataset();
+  const handleConfirmAction = async () => {
+    const needsLoading = confirmDialog.type !== 'building';
+    try {
+      if (needsLoading) {
+        toast.loading("Updating demo data...", { id: "demo-reset" });
+      }
+      if (confirmDialog.type === 'reset') {
+        await resetToEmptyMutation.mutateAsync();
+        resetDemo();
+        toast.success("Data reset to empty state");
+        logEvent({
+          eventType: "feature_used",
+          action: "reset_to_empty",
+          entityType: "demo",
+          payload: { mode: currentDataMode },
+        });
+      } else if (confirmDialog.type === 'sample') {
+        await loadSampleMutation.mutateAsync();
+        loadSampleData();
+        toast.success("Sample data loaded");
+        logEvent({
+          eventType: "feature_used",
+          action: "load_sample_data",
+          entityType: "demo",
+          payload: { mode: currentDataMode },
+        });
+      } else if (confirmDialog.type === 'full') {
+        await loadFullMutation.mutateAsync();
+        loadFullDataset();
+        toast.success("Full dataset loaded");
+        logEvent({
+          eventType: "feature_used",
+          action: "load_full_dataset",
+          entityType: "demo",
+          payload: { mode: currentDataMode },
+        });
+      }
+      setConfirmDialog({ open: false, type: null });
+      navigate("/trial-workspace");
+    } catch (error) {
+      console.error(error);
+      toast.error("Demo reset failed. Please try again.");
+    } finally {
+      if (needsLoading) {
+        toast.dismiss("demo-reset");
+      }
     }
   };
 
@@ -143,17 +205,17 @@ export function Sidebar() {
       case 'reset':
         return {
           title: 'Reset to Empty',
-          description: 'Are you sure you want to reset all data? This will delete all trials, documents, tasks, and activity. This action cannot be undone.'
+          description: 'This will delete all trials, documents, tasks, and activity in building mode. This action cannot be undone.'
         };
       case 'sample':
         return {
           title: 'Load Sample Data',
-          description: 'Are you sure you want to load sample data? This will replace all current data with 8 preset trials.'
+          description: 'Switch to the Sample dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'
         };
       case 'full':
         return {
           title: 'Load Full Dataset',
-          description: 'Are you sure you want to load the full dataset? This will replace all current data with 25+ preset trials and extensive mock data.'
+          description: 'Switch to the Full dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'
         };
       default:
         return { title: '', description: '' };
@@ -183,7 +245,7 @@ export function Sidebar() {
     {
       title: "WORKSPACE",
       items: [
-        { label: "Document AI Assistant", icon: FileText, href: "/documents" },
+        { label: "Themison AI", icon: Brain, href: "/documents" },
         { label: "Task Manager", icon: LayoutGrid, href: "/tasks" },
         { label: "Collaboration Hub", icon: MessageChatSquare, href: "/collaboration" },
         { label: "Analytics", icon: AnalyticsIcon, href: "/analytics" },
@@ -210,11 +272,8 @@ export function Sidebar() {
     <>
       {/* Navigation Sections */}
       <nav className="flex-1 overflow-y-auto px-3 pt-6 pb-2">
-        {mainMenuSections.map((section, sectionIdx) => (
-          <div key={section.title}>
-            {sectionIdx > 0 && (
-              <div className="my-4 border-t border-sidebar-border" />
-            )}
+        {mainMenuSections.map((section, index) => (
+          <div key={section.title} className={index === 0 ? "" : "mt-6"}>
             {!isCollapsed && (
               <h2 className="px-3 mb-2 text-xs font-semibold tracking-wider text-muted-foreground">
                 {section.title}
@@ -233,7 +292,7 @@ export function Sidebar() {
                       className={`
                         flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium
                         transition-all duration-150 ease-out cursor-pointer
-                        text-sidebar-foreground hover:bg-[#E6E7EB]
+                        text-sidebar-foreground hover:bg-gray-100
                         ${isCollapsed ? "justify-center" : "justify-between"}
                       `}
                       title={isCollapsed ? item.label : undefined}
@@ -252,13 +311,22 @@ export function Sidebar() {
                 return (
                   <Link key={item.href} href={item.href}>
                     <div
+                      onClick={() => {
+                        logEvent({
+                          eventType: "feature_used",
+                          action: "navigate",
+                          entityType: "nav_item",
+                          entityId: item.href,
+                          payload: { label: item.label },
+                        });
+                      }}
                       className={`
                         flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium
                         transition-all duration-150 ease-out cursor-pointer
                         ${
                           isActive
-                            ? "bg-gray-100 text-primary"
-                            : "text-sidebar-foreground hover:bg-[#E6E7EB]"
+                            ? "bg-[#ECEEF1] text-primary"
+                            : "text-sidebar-foreground hover:bg-gray-100"
                         }
                         ${isCollapsed ? "justify-center" : ""}
                       `}
@@ -284,7 +352,7 @@ export function Sidebar() {
     { id: 3, title: "Site visit planning", time: "2 days ago" },
   ];
 
-  // Render chat history panel (Document AI Assistant only)
+  // Render chat history panel (Themison AI only)
   const renderChatHistoryPanel = () => {
     if (!isDocumentAssistant || !trialIdFromQuery) return null;
     
@@ -375,9 +443,71 @@ export function Sidebar() {
   };
 
   return (
-    <aside className={`fixed left-0 top-11 h-[calc(100vh-44px)] bg-sidebar border-r border-sidebar-border flex flex-col transition-all duration-300 ${
+    <aside className={`fixed left-0 top-0 h-screen bg-white flex flex-col transition-all duration-300 z-10 ${
       isCollapsed ? "w-[64px]" : "w-[280px]"
     }`}>
+      {/* Organization Header */}
+      <div className={`h-11 px-3 mt-2 flex items-center ${isCollapsed ? "justify-center" : "justify-between"}`}>
+        {!isCollapsed && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="flex items-center gap-2 h-8 text-sm font-medium px-2">
+                <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
+                  T
+                </div>
+                <span className="text-sm">Themison Research</span>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              <DropdownMenuLabel>Switch Organization</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem>
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
+                    T
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm font-medium">Themison Research</span>
+                    <span className="text-xs text-muted-foreground">Current Organization</span>
+                  </div>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Other Organizations</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-blue-500 flex items-center justify-center text-white text-xs font-semibold">
+                    A
+                  </div>
+                  <span className="text-sm">Acme Pharma</span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded bg-green-500 flex items-center justify-center text-white text-xs font-semibold">
+                    G
+                  </div>
+                  <span className="text-sm">GlobalMed Inc</span>
+                </div>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 rounded-md p-2 text-sidebar-foreground hover:bg-gray-100"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+        >
+          {isCollapsed ? (
+            <PanelLeftClose className="h-4 w-4 text-sidebar-foreground" />
+          ) : (
+            <PanelLeft className="h-4 w-4 text-sidebar-foreground" />
+          )}
+        </Button>
+      </div>
 
 
       {/* Dynamic Content Based on Route */}
@@ -395,20 +525,15 @@ export function Sidebar() {
       </div>
 
       {/* Logo Footer - Fixed at bottom */}
-      <div className={`border-t border-sidebar-border p-4 flex-shrink-0 flex items-center ${
-        isCollapsed ? "justify-center" : "justify-start"
-      }`}>
-        {!isCollapsed && (
+      {!isCollapsed && (
+        <div className="p-4 flex-shrink-0 flex items-center justify-start">
           <img 
             src="/images/themison-logo.svg" 
             alt="Themison" 
             className="h-3 w-auto"
           />
-        )}
-        {isCollapsed && (
-          <div className="text-primary font-bold text-lg">T</div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Confirmation Dialog */}
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog({ open, type: null })}>

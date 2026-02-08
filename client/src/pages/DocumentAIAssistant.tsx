@@ -16,6 +16,7 @@ import {
   Calendar,
   CheckSquare,
   Bot,
+  Brain,
   Paperclip,
   Sparkles,
   Plus,
@@ -42,7 +43,9 @@ import {
   FlaskConical
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useDemoState } from "@/contexts/DemoStateContext";
 import { useLocation } from "wouter";
+import { getSessionId, logEvent } from "@/lib/telemetry";
 
 interface DocumentAIAssistantProps {
   trialId?: string;
@@ -58,6 +61,8 @@ interface ChatMessage {
 
 export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProps) {
   const [, navigate] = useLocation();
+  const { getCurrentDataMode } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
   const [message, setMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -71,6 +76,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const [taskPaneOpen, setTaskPaneOpen] = useState(false);
   const [taskPaneExpanded, setTaskPaneExpanded] = useState(false);
   const [taskPaneDocument, setTaskPaneDocument] = useState<{ name: string; url: string; section?: string; page?: number } | null>(null);
+  const [taskPaneOpenedAt, setTaskPaneOpenedAt] = useState<number | null>(null);
   // If trialId is provided, we're in trial-specific mode; otherwise, search all trials
   const searchMode = trialId ? 'single' : 'all';
   const selectedTrialId = trialId || 'all';
@@ -89,7 +95,20 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const modalTrialIds = trialId ? [trialId] : selectedTrials;
 
   const renderSourceModal = () => (
-    <Dialog open={sourceModalOpen} onOpenChange={setSourceModalOpen}>
+    <Dialog
+      open={sourceModalOpen}
+      onOpenChange={(open) => {
+        setSourceModalOpen(open);
+        if (open) {
+          logEvent({
+            eventType: "feature_used",
+            action: "open_sources",
+            entityType: "document_sources_modal",
+            payload: { trialId, demoMode: currentDataMode },
+          });
+        }
+      }}
+    >
       <DialogContent
         showCloseButton={false}
         className="!w-[1200px] !max-w-[90vw] h-[680px] p-0 overflow-hidden flex flex-col"
@@ -279,11 +298,13 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const chatMutation = trpc.documentAI.chat.useMutation();
   
   // Query all trials with documents
-  const { data: trialsWithDocs } = trpc.documents.getTrialsWithDocuments.useQuery();
+  const { data: trialsWithDocs } = trpc.documents.getTrialsWithDocuments.useQuery({
+    demoMode: currentDataMode,
+  });
   
   // Query documents for all selected trials using a single query
   const { data: sourceDocumentsByTrial = {} } = trpc.documents.listMultipleTrials.useQuery(
-    { trialIds: trialId ? [trialId] : selectedTrials },
+    { trialIds: trialId ? [trialId] : selectedTrials, demoMode: currentDataMode },
     { 
       enabled: trialId ? true : selectedTrials.length > 0,
       refetchInterval: 2000, // Refetch every 2 seconds to keep status fresh
@@ -293,7 +314,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
   // Trial info for scoped view
   const { data: scopedTrial } = trpc.trials.getById.useQuery(
-    { id: selectedTrialId },
+    { id: selectedTrialId, demoMode: currentDataMode },
     { enabled: !!trialId && trialId !== 'all' }
   );
 
@@ -338,6 +359,35 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     setChatHistory(prev => [...prev, newUserMessage]);
     setIsTransitioning(false);
     setIsLoading(true);
+    const sessionId = getSessionId();
+
+    logEvent({
+      eventType: "ai_query_submitted",
+      action: "submitted",
+      entityType: "query",
+      payload: {
+        query: userMessage,
+        trialId,
+        demoMode: currentDataMode,
+        isAllDocumentsMode,
+        selectedDocuments,
+      },
+      aiInvolved: true,
+    });
+
+    if (!isAllDocumentsMode && selectedDocuments.length > 0) {
+      logEvent({
+        eventType: "protocol_searched",
+        action: "searched",
+        entityType: "protocol",
+        payload: {
+          query: userMessage,
+          documentIds: selectedDocuments,
+          trialId,
+          demoMode: currentDataMode,
+        },
+      });
+    }
 
     try {
       // Send entire conversation history to maintain context
@@ -349,7 +399,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         })),
         // If in all documents mode, don't send documentIds (backend will search all)
         // If in filtered mode, send specific documentIds
-        ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {})
+        ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {}),
+        sessionId,
       });
 
       const sources = (response as any).sources as Array<any> | undefined;
@@ -361,6 +412,19 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         thoughtsSummary: response.thinking,
         sources,
       }]);
+
+      logEvent({
+        eventType: "ai_response_generated",
+        action: "generated",
+        entityType: "response",
+        payload: {
+          trialId,
+          demoMode: currentDataMode,
+        },
+        aiInvolved: true,
+        aiOutput: response.message,
+        aiSources: sources,
+      });
     } catch (error) {
       console.error('Error in chat:', error);
       setChatHistory(prev => [...prev, {
@@ -394,6 +458,21 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   };
 
   const handleOpenTaskDocument = (source: { filename: string; section?: string; page?: number; fileUrl?: string }) => {
+    if (taskPaneOpenedAt && taskPaneDocument) {
+      logEvent({
+        eventType: "protocol_section_viewed",
+        action: "closed",
+        entityType: "protocol",
+        entityId: taskPaneDocument.name,
+        durationMs: Date.now() - taskPaneOpenedAt,
+        payload: {
+          section: taskPaneDocument.section,
+          page: taskPaneDocument.page,
+          trialId,
+          demoMode: currentDataMode,
+        },
+      });
+    }
     const baseUrl = source.fileUrl || 'https://pdfobject.com/pdf/sample.pdf';
     const urlWithPage = source.page ? `${baseUrl}#page=${source.page}` : baseUrl;
     setTaskPaneDocument({
@@ -404,6 +483,20 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     });
     setTaskPaneExpanded(false);
     setTaskPaneOpen(true);
+    setTaskPaneOpenedAt(Date.now());
+
+    logEvent({
+      eventType: "protocol_section_viewed",
+      action: "viewed",
+      entityType: "protocol",
+      entityId: source.filename,
+      payload: {
+        section: source.section,
+        page: source.page,
+        trialId,
+        demoMode: currentDataMode,
+      },
+    });
   };
 
   const handleClosePdfViewer = () => {
@@ -438,8 +531,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                 : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"
             }`}
           >
-            <Bot className="w-4 h-4" />
-            <span>AI Assistant</span>
+            <Brain className="w-4 h-4" />
+            <span>Themison AI</span>
           </button>
           <button
             onClick={() => setActiveTab("response-archive")}
@@ -525,20 +618,56 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       />
                       <div className="flex items-center mt-3 justify-between">
                         <div className="flex items-center gap-2">
-                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5">
+                          <button
+                            className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5"
+                            onClick={() =>
+                              logEvent({
+                                eventType: "feature_used",
+                                action: "attach",
+                                entityType: "chat_input",
+                              })
+                            }
+                          >
                             <Paperclip className="w-4 h-4" />
                           </button>
-                          <button className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors">
+                          <button
+                            className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors"
+                            onClick={() =>
+                              logEvent({
+                                eventType: "feature_used",
+                                action: "add_context",
+                                entityType: "chat_input",
+                              })
+                            }
+                          >
                             <Plus className="w-3.5 h-3.5" />
                             Add context
                           </button>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors">
+                          <button
+                            className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors"
+                            onClick={() =>
+                              logEvent({
+                                eventType: "feature_used",
+                                action: "auto_mode",
+                                entityType: "chat_input",
+                              })
+                            }
+                          >
                             <Sparkles className="w-3.5 h-3.5" />
                             Auto
                           </button>
-                          <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5">
+                          <button
+                            className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5"
+                            onClick={() =>
+                              logEvent({
+                                eventType: "feature_used",
+                                action: "voice_input",
+                                entityType: "chat_input",
+                              })
+                            }
+                          >
                             <Mic className="w-4 h-4" />
                           </button>
                           <button
@@ -554,7 +683,16 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="relative group">
-                        <button className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-full hover:bg-gray-200 transition-colors">
+                        <button
+                          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-full hover:bg-gray-200 transition-colors"
+                          onClick={() =>
+                            logEvent({
+                              eventType: "feature_used",
+                              action: "create_output",
+                              entityType: "chat_toolbar",
+                            })
+                          }
+                        >
                           <Sparkles className="w-4 h-4" />
                           Create
                         </button>
@@ -565,7 +703,14 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       <div className="relative group">
                         <button
                           className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 px-3 py-1.5 rounded-full hover:bg-gray-200 transition-colors"
-                          onClick={() => setSourceModalOpen(true)}
+                          onClick={() => {
+                            logEvent({
+                              eventType: "feature_used",
+                              action: "open_sources",
+                              entityType: "chat_toolbar",
+                            });
+                            setSourceModalOpen(true);
+                          }}
                         >
                           <Plus className="w-4 h-4" />
                           Source
@@ -583,7 +728,15 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       {suggestedPrompts.map((prompt, index) => (
                         <button
                           key={index}
-                          onClick={() => handlePromptClick(prompt.text)}
+                          onClick={() => {
+                            logEvent({
+                              eventType: "feature_used",
+                              action: "use_suggested_prompt",
+                              entityType: "chat_prompt",
+                              payload: { prompt: prompt.text },
+                            });
+                            handlePromptClick(prompt.text);
+                          }}
                           className="bg-white rounded-lg p-4 text-left hover:scale-[1.02] transition-all group"
                           style={{borderWidth: '1.5px', borderColor: '#f2f2f2', borderStyle: 'solid'}}
                         >
@@ -611,7 +764,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                           {msg.role === "user" ? (
                             <User className="w-4 h-4 text-blue-600" />
                           ) : (
-                            <Bot className="w-5 h-5 text-gray-600" />
+                            <Brain className="w-5 h-5 text-gray-600" />
                           )}
                         </div>
                         <span className="text-sm font-medium text-gray-900">
@@ -626,12 +779,12 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                               <summary className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-700 cursor-pointer hover:bg-gray-50 transition-colors">
                                 <div className="flex items-center gap-2">
                                   <Sparkles className="w-4 h-4 text-blue-500 flex-shrink-0" />
-                                  <span className="font-medium">Thoughts</span>
+                                  <span className="font-medium">Reasoning Summary</span>
                                 </div>
                                 <ChevronDown className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" />
                               </summary>
                               <div className="rounded-b-lg border border-t-0 border-gray-200 px-4 py-3 text-sm text-gray-600 bg-white/60 whitespace-pre-wrap">
-                                {msg.thoughtsSummary || msg.thinking || "Thought summaries will appear here."}
+                                {msg.thoughtsSummary || msg.thinking || "Reasoning summaries will appear here."}
                               </div>
                             </details>
                             <div className="mt-4 border-t border-gray-200" />
@@ -840,6 +993,16 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                 <button
                                   className="p-1.5 rounded hover:bg-emerald-100 hover:text-emerald-600"
                                   aria-label="Good answer"
+                                  onClick={() => {
+                                    logEvent({
+                                      eventType: "ai_response_accepted",
+                                      action: "accepted",
+                                      entityType: "response",
+                                      entityId: String(index),
+                                      aiInvolved: true,
+                                      aiOutput: msg.content,
+                                    });
+                                  }}
                                 >
                                   <Check className="w-4 h-4" />
                                 </button>
@@ -851,6 +1014,16 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                 <button
                                   className="p-1.5 rounded hover:bg-rose-100 hover:text-rose-600"
                                   aria-label="Bad response"
+                                  onClick={() => {
+                                    logEvent({
+                                      eventType: "ai_response_rejected",
+                                      action: "rejected",
+                                      entityType: "response",
+                                      entityId: String(index),
+                                      aiInvolved: true,
+                                      aiOutput: msg.content,
+                                    });
+                                  }}
                                 >
                                   <X className="w-4 h-4" />
                                 </button>
@@ -935,7 +1108,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                   {isLoading && (
                     <div className="flex gap-4 items-start max-w-3xl">
                       <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-gray-100">
-                        <Bot className="w-5 h-5 text-gray-600" />
+                        <Brain className="w-5 h-5 text-gray-600" />
                       </div>
                       <div className="flex-1 space-y-3">
                         <div className="flex items-center h-8">
@@ -981,7 +1154,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                     <span className="font-medium text-gray-900 truncate">{selectedDocuments.length} selected document(s) from {activeTrials.length} trial(s)</span>
                   )}
                 </div>
-                {!isAllDocumentsMode && (
+                  {!isAllDocumentsMode && (
                   <button
                     onClick={() => {
                       setIsAllDocumentsMode(true);
@@ -989,6 +1162,12 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       setSelectedTrials([]);
                       setActiveTrials([]);
                       toast.success('Now searching all documents');
+                      logEvent({
+                        eventType: "feature_used",
+                        action: "clear_filter",
+                        entityType: "document_filter",
+                        payload: { trialId, demoMode: currentDataMode },
+                      });
                     }}
                     className="text-xs text-blue-600 hover:text-blue-700 hover:underline flex-shrink-0 whitespace-nowrap"
                   >
@@ -1059,7 +1238,17 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                 <div className="flex items-center gap-4">
                   <button
                     type="button"
-                    onClick={() => setTaskPaneExpanded(prev => !prev)}
+                    onClick={() => {
+                      setTaskPaneExpanded(prev => {
+                        const next = !prev;
+                        logEvent({
+                          eventType: "feature_used",
+                          action: next ? "expand_pane" : "collapse_pane",
+                          entityType: "task_pane",
+                        });
+                        return next;
+                      });
+                    }}
                     className="text-gray-400 hover:text-gray-600"
                     aria-label={taskPaneExpanded ? "Exit fullscreen" : "Expand pane"}
                   >
@@ -1073,6 +1262,21 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                   <button
                     type="button"
                     onClick={() => {
+                      if (taskPaneOpenedAt && taskPaneDocument) {
+                        logEvent({
+                          eventType: "protocol_section_viewed",
+                          action: "closed",
+                          entityType: "protocol",
+                          entityId: taskPaneDocument.name,
+                          durationMs: Date.now() - taskPaneOpenedAt,
+                          payload: {
+                            section: taskPaneDocument.section,
+                            page: taskPaneDocument.page,
+                            trialId,
+                            demoMode: currentDataMode,
+                          },
+                        });
+                      }
                       setTaskPaneExpanded(false);
                       setTaskPaneOpen(false);
                     }}

@@ -1,48 +1,77 @@
 /**
  * TrialDetail Component
- * Design: Clinical Modernism - Clean trial detail view with tabbed navigation
- * Note: This page renders without the standard DashboardLayout (no sidebar)
+ * Clinical trial detail page with tabbed workspace sections.
  */
 
-import { useEffect, useState } from "react";
-import { ArrowLeft, LayoutGrid, Calendar, FileText, Users as UsersIcon, UserCheck, Sparkles, Eye, UserPlus, Upload, UserPlus2, Activity, ClipboardList, ChevronDown, User, FolderOpen, Wand2, Bookmark, Bell, Search, Filter, Link2, Plus, Pencil, Share2, ExternalLink, ArrowRight } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft,
+  LayoutGrid,
+  Calendar,
+  Users as UsersIcon,
+  UserCheck,
+  Sparkles,
+  UserPlus2,
+  ChevronDown,
+  FolderOpen,
+  Wand2,
+  Bookmark,
+  Bell,
+  Search,
+  Filter,
+  Plus,
+  Pencil,
+  Share2,
+  ArrowRight,
+  Check,
+} from "lucide-react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { TopNav } from "@/components/TopNav";
 import { StudySetupWizardEntry } from "@/components/StudySetupWizardEntry";
 import Documents from "@/pages/Documents";
 import { TaskScaffoldView } from "@/components/TaskScaffoldView";
 import { trpc } from "@/lib/trpc";
 import { EditableField } from "@/components/EditableField";
+import { useDemoState } from "@/contexts/DemoStateContext";
+import { logEvent } from "@/lib/telemetry";
+import { AddMemberPanel } from "@/components/AddMemberPanel";
 
 export default function TrialDetail() {
   const [, navigate] = useLocation();
   const [, params] = useRoute("/trial/:id");
   const [activeTab, setActiveTab] = useState("overview");
   const [isGeneratingScaffold, setIsGeneratingScaffold] = useState(false);
-  const [scaffoldGenerated, setScaffoldGenerated] = useState(false);
+  const [manageTeamOpen, setManageTeamOpen] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [assignedMemberIds, setAssignedMemberIds] = useState<string[]>([]);
+  const [sponsorLogoFailed, setSponsorLogoFailed] = useState(false);
 
-  // Get trial ID as string and normalize to lowercase for consistency
-  const trialId = (params?.id || '').toLowerCase();
+  const { getCurrentDataMode, state } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
+
+  const trialId = (params?.id || "").toLowerCase();
   const isValidTrialId = trialId.length > 0;
 
-  // Fetch protocols for this trial (only if valid ID)
-  const { data: protocols } = trpc.documents.list.useQuery(
-    { trialId },
+  const { data: protocols = [] } = trpc.documents.list.useQuery(
+    { trialId, demoMode: currentDataMode },
     { enabled: isValidTrialId }
   );
 
-  // Check if a scaffold already exists for this trial
   const protocolId = protocols?.[0]?.id;
   const { data: existingScaffold } = trpc.studySetupWizard.getScaffold.useQuery(
-    { protocolId: protocolId || 0 }, // Use 0 as fallback to satisfy type requirement
-    { enabled: !!protocolId && protocolId > 0 } // Only run query if protocolId is valid
+    { protocolId: protocolId || 0, demoMode: currentDataMode },
+    { enabled: !!protocolId && protocolId > 0 }
   );
 
-  // Redirect if invalid trial ID
+  const { data: trial } = trpc.trials.getById.useQuery(
+    { id: trialId, demoMode: currentDataMode },
+    { enabled: isValidTrialId }
+  );
+
   useEffect(() => {
     if (!isValidTrialId) {
       toast.error("Invalid trial ID");
@@ -50,38 +79,61 @@ export default function TrialDetail() {
     }
   }, [isValidTrialId, navigate]);
 
-  // Prevent body scroll on this page
   useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, []);
+    if (typeof window === "undefined" || !trialId) return;
+    const storageKey = `trial-team:${currentDataMode}:${trialId}`;
+    const stored = window.localStorage.getItem(storageKey);
+    if (!stored) {
+      setAssignedMemberIds([]);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(stored);
+      setAssignedMemberIds(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setAssignedMemberIds([]);
+    }
+  }, [trialId, currentDataMode]);
 
-  // Fetch trial data from database
-  const { data: trial, isLoading: isLoadingTrial } = trpc.trials.getById.useQuery(
-    { id: trialId },
-    { enabled: isValidTrialId }
-  );
-
-  // Trial update mutation
   const utils = trpc.useUtils();
   const updateTrial = trpc.trials.update.useMutation({
-    onSuccess: () => {
-      utils.trials.getById.invalidate({ id: trialId });
-      utils.trials.list.invalidate(); // Invalidate list to update sidebar navigation
-      toast.success("Trial updated successfully");
+    onSuccess: async () => {
+      await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      toast.success("Trial updated");
     },
     onError: (error) => {
       toast.error(`Failed to update trial: ${error.message}`);
     },
   });
 
-  const teamMembers = [
-    { name: "Principal Investigator", role: "PI", initials: "PI" },
-    { name: "Coordinator CRC", role: "CRC", initials: "CC" },
-    { name: "Nurse CH", role: "Nurse", initials: "NC" },
-  ];
+  const trialTeamMembers = useMemo(
+    () =>
+      (state.teamMembers || [])
+        .filter((member) => assignedMemberIds.includes(member.id))
+        .map((member) => ({
+          id: member.id,
+          name: member.name,
+          role: member.clinicalRole || member.role,
+          initials: member.initials,
+        })),
+    [state.teamMembers, assignedMemberIds]
+  );
+
+  const persistAssignedMembers = (nextIds: string[]) => {
+    setAssignedMemberIds(nextIds);
+    if (typeof window !== "undefined") {
+      const storageKey = `trial-team:${currentDataMode}:${trialId}`;
+      window.localStorage.setItem(storageKey, JSON.stringify(nextIds));
+    }
+  };
+
+  const toggleAssignedMember = (memberId: string) => {
+    const nextIds = assignedMemberIds.includes(memberId)
+      ? assignedMemberIds.filter((id) => id !== memberId)
+      : [...assignedMemberIds, memberId];
+    persistAssignedMembers(nextIds);
+  };
 
   const tabs = [
     { id: "overview", label: "Overview", icon: LayoutGrid },
@@ -101,8 +153,6 @@ export default function TrialDetail() {
       name: "Medidata Rave",
       url: "https://rave.medidata.com",
       notes: "Primary data capture system for this trial.",
-      owner: "Kaleb Sanders",
-      updatedAt: "Updated 2d ago",
     },
     {
       id: "ctms",
@@ -110,8 +160,6 @@ export default function TrialDetail() {
       name: "SiteVault CTMS",
       url: "https://sitevault.com",
       notes: "Subject tracking + visit milestones.",
-      owner: "Coordinator CRC",
-      updatedAt: "Updated 5d ago",
     },
     {
       id: "etmf",
@@ -119,8 +167,6 @@ export default function TrialDetail() {
       name: "Veeva Vault",
       url: "https://veeva.com/vault",
       notes: "Essential documents + regulatory binder.",
-      owner: "Nurse CH",
-      updatedAt: "Updated 1w ago",
     },
     {
       id: "irt",
@@ -128,8 +174,6 @@ export default function TrialDetail() {
       name: "4G Clinical",
       url: "https://4gclinical.com",
       notes: "Randomization + drug supply.",
-      owner: "PI",
-      updatedAt: "Updated 2w ago",
     },
   ];
 
@@ -142,16 +186,55 @@ export default function TrialDetail() {
     }
   };
 
+  const getSponsorLogoDomain = (sponsor?: string | null) => {
+    if (!sponsor) return null;
+    const normalized = sponsor.toLowerCase();
+    const knownDomains: Array<{ match: string; domain: string }> = [
+      { match: "novartis", domain: "novartis.com" },
+      { match: "roche", domain: "roche.com" },
+      { match: "pfizer", domain: "pfizer.com" },
+      { match: "astrazeneca", domain: "astrazeneca.com" },
+      { match: "johnson", domain: "jnj.com" },
+      { match: "takeda", domain: "takeda.com" },
+      { match: "biogen", domain: "biogen.com" },
+      { match: "sanofi", domain: "sanofi.com" },
+      { match: "merck", domain: "merck.com" },
+      { match: "eli lilly", domain: "lilly.com" },
+      { match: "bayer", domain: "bayer.com" },
+      { match: "amgen", domain: "amgen.com" },
+      { match: "bristol", domain: "bms.com" },
+      { match: "gsk", domain: "gsk.com" },
+      { match: "moderna", domain: "modernatx.com" },
+      { match: "beigene", domain: "beigene.com" },
+    ];
+
+    const exact = knownDomains.find((entry) => normalized.includes(entry.match));
+    if (exact) return exact.domain;
+
+    const token = normalized
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .split(/\s+/)
+      .find((part) => part.length > 2);
+    if (!token) return null;
+    return `${token}.com`;
+  };
+
   const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation({
     onSuccess: () => {
       setIsGeneratingScaffold(false);
-      setScaffoldGenerated(true);
+      logEvent({
+        eventType: "trial_setup_step_completed",
+        action: "generated",
+        entityType: "task_scaffold",
+        payload: { trialId, demoMode: currentDataMode },
+        aiInvolved: true,
+      });
     },
     onError: (error) => {
       setIsGeneratingScaffold(false);
       console.error("Failed to generate scaffold:", error);
       toast.error("Failed to generate execution plan", {
-        description: "Please ensure a protocol has been uploaded and try again.",
+        description: "Please upload a protocol in Document Hub and try again.",
       });
     },
   });
@@ -164,34 +247,206 @@ export default function TrialDetail() {
       return;
     }
 
+    if (!trial) return;
+
     setIsGeneratingScaffold(true);
-    // Use the first protocol
-    if (trial) {
-      generateScaffold.mutate({ protocolId: protocols[0].id, trialId: trial.id });
+    logEvent({
+      eventType: "trial_setup_started",
+      action: "start_generate",
+      entityType: "trial",
+      entityId: trialId,
+      payload: { demoMode: currentDataMode },
+      aiInvolved: true,
+    });
+
+    generateScaffold.mutate({
+      protocolId: protocols[0].id,
+      trialId: trial.id,
+      demoMode: currentDataMode,
+    });
+  };
+
+  const enrolledPatients = trial?.enrolledPatients || 0;
+  const targetPatients = trial?.targetPatients || 0;
+  const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
+  const scaffoldTasks =
+    (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
+  const pendingTasks = scaffoldTasks.filter((task: any) => task?.status !== "completed").length;
+  const completedTasks = scaffoldTasks.filter((task: any) => task?.status === "completed").length;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const dueTodayTasks = scaffoldTasks.filter((task: any) => {
+    if (!task?.suggestedDate || task?.status === "completed") return false;
+    return new Date(task.suggestedDate).toISOString().slice(0, 10) === todayIso;
+  }).length;
+  const totalTasks = pendingTasks + completedTasks;
+  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const scheduledVisits = (existingScaffold?.phases || []).filter((phase: any) =>
+    String(phase?.name || "").toLowerCase().includes("visit")
+  ).length;
+
+  const sponsorDomain = getSponsorLogoDomain(trial?.sponsor);
+  const sponsorLogoUrl = sponsorDomain ? `https://logo.clearbit.com/${sponsorDomain}` : null;
+  const sponsorInitials = (trial?.sponsor || "SP")
+    .split(/[\s,&.-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || "")
+    .join("") || "SP";
+
+  useEffect(() => {
+    setSponsorLogoFailed(false);
+  }, [sponsorLogoUrl]);
+
+  const hasText = (value?: string | null) => Boolean(value && value.trim().length > 0);
+  const hasProtocolInHub = protocols.some((doc: any) => {
+    const category = String(doc?.category || "").toLowerCase();
+    const filename = String(doc?.filename || "").toLowerCase();
+    return category.includes("protocol") || filename.includes("protocol");
+  });
+  const trialProfileReady = [
+    trial?.protocolNumber,
+    trial?.sponsor,
+    trial?.phase,
+    trial?.investigationalProduct,
+    trial?.indication,
+  ].filter(hasText).length >= 4;
+  const timelineReady = Boolean(trial?.startDate) && Boolean(trial?.endDate);
+  const launchChecklist = [
+    ...(!hasProtocolInHub
+      ? [
+          {
+            id: "protocol-sync",
+            title: "Attach protocol to Document Hub",
+            subtitle: "Themison AI needs the protocol file to generate traceable execution guidance.",
+            done: false,
+          },
+        ]
+      : []),
+    {
+      id: "protocol-profile",
+      title: "Confirm AI-extracted trial profile",
+      subtitle: "Protocol number, sponsor, phase, indication, and product.",
+      done: trialProfileReady,
+    },
+    {
+      id: "setup-wizard",
+      title: "Generate execution plan in Study Setup Wizard",
+      subtitle: "Convert protocol requirements into operational tasks.",
+      done: scaffoldTasks.length > 0,
+    },
+    {
+      id: "team",
+      title: "Assign trial team members",
+      subtitle: "Add PI/CRC and required site roles.",
+      done: trialTeamMembers.length > 0,
+    },
+    {
+      id: "timeline",
+      title: "Set start and end dates",
+      subtitle: "Operational timeline anchors planning and accountability.",
+      done: timelineReady,
+    },
+    {
+      id: "activate-trial",
+      title: "Activate trial when launch is ready",
+      subtitle: "Switch status from Not started to Active when onboarding is complete.",
+      done: (trial?.status || "not-started") !== "not-started",
+    },
+  ];
+  const firstIncompleteChecklistItem = launchChecklist.find((item) => !item.done);
+  const nextOperationalTasks = scaffoldTasks
+    .filter((task: any) => task?.status !== "completed")
+    .slice(0, 5);
+
+  const aiRecommendation = firstIncompleteChecklistItem
+    ? firstIncompleteChecklistItem.id === "protocol-sync"
+      ? "Protocol file is missing from Document Hub. Upload it so Themison AI can generate traceable guidance."
+      : firstIncompleteChecklistItem.id === "setup-wizard"
+      ? "Run Study Setup Wizard to generate the first AI-backed execution plan."
+      : firstIncompleteChecklistItem.id === "team"
+      ? "Assign core team members so work can be routed to the right owners."
+      : firstIncompleteChecklistItem.id === "timeline"
+      ? "Set start/end dates to unlock time-based planning and alerts."
+      : firstIncompleteChecklistItem.id === "activate-trial"
+      ? "All onboarding is ready. Set status to Active when the trial is ready to start."
+      : "Review extracted trial profile to ensure execution starts from verified data."
+    : nextOperationalTasks.length > 0
+    ? "Execution plan is live. Assign owners to the next tasks and monitor progress."
+    : "Launch readiness is complete. Generate or refresh your execution plan as needed.";
+  const recommendedActionLabel = firstIncompleteChecklistItem
+    ? firstIncompleteChecklistItem.id === "protocol-sync"
+      ? "Open Document Hub"
+      : firstIncompleteChecklistItem.id === "setup-wizard"
+      ? "Open Study Setup Wizard"
+      : firstIncompleteChecklistItem.id === "team"
+      ? "Assign Team Members"
+      : firstIncompleteChecklistItem.id === "timeline"
+      ? "Set Timeline"
+      : firstIncompleteChecklistItem.id === "activate-trial"
+      ? "Set Trial Status"
+      : "Review Profile in Themison AI"
+    : nextOperationalTasks.length > 0
+    ? "Open Study Setup Wizard"
+    : "Open Themison AI";
+  const launchReadyWithoutActivation = launchChecklist
+    .filter((item) => item.id !== "activate-trial")
+    .every((item) => item.done);
+
+  const handleAiRecommendedAction = () => {
+    if (!firstIncompleteChecklistItem) {
+      if (nextOperationalTasks.length > 0) {
+        setActiveTab("study-setup-wizard");
+      } else {
+        navigate(`/trial/${trialId}/assistant`);
+      }
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "protocol-sync") {
+      setActiveTab("document-hub");
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "setup-wizard") {
+      setActiveTab("study-setup-wizard");
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "team") {
+      setManageTeamOpen(true);
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "timeline" || firstIncompleteChecklistItem.id === "activate-trial") {
+      setActiveTab("overview");
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "protocol-profile") {
+      navigate(`/trial/${trialId}/assistant`);
     }
   };
 
   let mainContent: React.ReactNode = null;
+
   if (activeTab === "document-hub") {
     mainContent = (
-      <div className="px-8">
+      <div className="px-6 pb-6">
         <Documents trialId={trialId} />
       </div>
     );
   } else if (activeTab === "study-setup-wizard") {
     mainContent = existingScaffold ? (
-      <div className="px-8 h-full">
+      <div className="px-6 pb-6">
         <TaskScaffoldView
           phases={existingScaffold.phases || []}
           sections={existingScaffold.sections || []}
-          onConfirm={() => console.log("Confirm")}
-          onAddTask={() => console.log("Add task")}
-          onEditTask={(id) => console.log("Edit task", id)}
-          onDeleteTask={(id) => console.log("Delete task", id)}
+          onConfirm={() => undefined}
+          onAddTask={() => undefined}
+          onEditTask={() => undefined}
+          onDeleteTask={() => undefined}
         />
       </div>
     ) : (
-      <div className="px-8">
+      <div className="px-6 pb-6">
         <StudySetupWizardEntry
           trialId={trialId}
           onGenerate={handleGenerateScaffold}
@@ -201,40 +456,34 @@ export default function TrialDetail() {
     );
   } else if (activeTab === "bookmarks") {
     mainContent = (
-      <div className="px-8 h-full">
-        <div className="bg-white rounded-xl border border-gray-200 p-6 h-full flex flex-col">
-          <div className="flex items-start justify-between gap-6">
-            <div className="space-y-1">
-              <h2 className="text-lg font-semibold text-gray-900">Trial Systems</h2>
-              <p className="text-sm text-gray-500 max-w-2xl">
-                Quick access to all external tools used for this trial.
-              </p>
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Trial Systems</h2>
+              <p className="text-sm text-gray-500 mt-1">Quick access to external systems used in this trial.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button className="text-sm" size="sm">
+              <Button className="text-sm h-9">
                 <Plus className="h-4 w-4 mr-2" />
                 Add Link
               </Button>
-              <Button variant="outline" className="text-sm" size="sm">
+              <Button variant="outline" className="text-sm h-9">
                 <Pencil className="h-4 w-4 mr-2" />
                 Edit
               </Button>
-              <Button variant="outline" className="text-sm" size="sm">
+              <Button variant="outline" className="text-sm h-9">
                 <Share2 className="h-4 w-4 mr-2" />
                 Share
               </Button>
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-gray-500 border-b border-gray-200 pb-3">
-            {["All", "EDC", "CTMS", "eTMF / eISF", "Sponsor Portal", "Files / Drive", "Safety", "Other"].map((tab) => (
+          <div className="mt-4 flex flex-wrap items-center gap-4 border-b border-gray-200 pb-3 text-sm">
+            {["All", "EDC", "CTMS", "eTMF / eISF", "Sponsor Portal", "Safety", "Other"].map((tab) => (
               <button
                 key={tab}
-                className={`pb-1 ${
-                  tab === "All"
-                    ? "text-blue-600 border-b-2 border-blue-600"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
+                className={tab === "All" ? "text-blue-600 border-b-2 border-blue-600 pb-1" : "text-gray-500 hover:text-gray-700 pb-1"}
               >
                 {tab}
               </button>
@@ -244,53 +493,38 @@ export default function TrialDetail() {
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <div className="relative min-w-[260px] flex-1">
               <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <Input
-                placeholder="Search systems..."
-                className="pl-9 h-10 bg-white border-gray-200"
-              />
+              <Input placeholder="Search systems..." className="pl-9 h-10" />
             </div>
-            <Button variant="outline" size="sm" className="text-sm">
-              All categories
+            <Button variant="outline" size="sm" className="h-9 text-sm">
+              Categories
               <ChevronDown className="h-4 w-4 ml-2" />
             </Button>
-            <Button variant="outline" size="sm" className="text-sm">
-              Most used
-              <ChevronDown className="h-4 w-4 ml-2" />
-            </Button>
-            <Button variant="outline" size="sm" className="text-sm">
+            <Button variant="outline" size="sm" className="h-9 text-sm">
               <Filter className="h-4 w-4 mr-2" />
               Filter
             </Button>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto pr-1">
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {mockBookmarks.map((bookmark) => (
-              <div
-                key={bookmark.id}
-                className="rounded-lg border border-gray-200 bg-white overflow-hidden hover:border-gray-300 hover:shadow-sm transition-all"
-              >
-                <div className="p-5 space-y-4">
+              <div key={bookmark.id} className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <div className="p-4 space-y-3">
                   <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-md border border-gray-200 bg-white shadow-sm flex items-center justify-center overflow-hidden">
-                      <img
-                        src={getFaviconUrl(bookmark.url)}
-                        alt={`${bookmark.name} logo`}
-                        className="h-6 w-6"
-                        loading="lazy"
-                      />
+                    <div className="h-10 w-10 rounded-md border border-gray-200 bg-white flex items-center justify-center overflow-hidden">
+                      <img src={getFaviconUrl(bookmark.url)} alt={`${bookmark.name} logo`} className="h-5 w-5" loading="lazy" />
                     </div>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                    <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
                       {bookmark.type}
                     </span>
                   </div>
-                  <div className="space-y-1">
+                  <div>
                     <div className="text-sm font-semibold text-gray-900">{bookmark.name}</div>
-                    <p className="text-sm text-gray-500">{bookmark.notes}</p>
+                    <p className="text-sm text-gray-500 mt-1">{bookmark.notes}</p>
                   </div>
                 </div>
-                <button className="group w-full flex items-center justify-between px-5 py-3 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
-                  <span>{bookmark.name}</span>
-                  <ArrowRight className="h-4 w-4 text-gray-400 group-hover:text-blue-600" />
+                <button className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                  <span>Open</span>
+                  <ArrowRight className="h-4 w-4 text-gray-400" />
                 </button>
               </div>
             ))}
@@ -298,156 +532,241 @@ export default function TrialDetail() {
         </div>
       </div>
     );
-  } else {
+  } else if (activeTab === "team") {
     mainContent = (
-      <div className="flex gap-4">
-        {/* Left Column - Main Content */}
-        <div className="flex-1 space-y-4">
-          {/* Trial Information Card */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <EditableField
-              value={trial?.title || "Untitled Trial"}
-              onSave={async (newValue) => {
-                await updateTrial.mutateAsync({ id: trialId, title: newValue });
-              }}
-              className="text-xl font-semibold text-gray-900 mb-2"
-            />
-            <div className="flex items-center gap-1 text-sm text-gray-500 mb-6">
-              <span>Protocol number:</span>
-              <EditableField
-                value={trial?.protocolNumber || "N/A"}
-                onSave={async (newValue) => {
-                  await updateTrial.mutateAsync({ id: trialId, protocolNumber: newValue });
-                }}
-                displayClassName="text-sm text-gray-500"
-              />
-            </div>
-            <div className="space-y-5">
-              <div>
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-                  Description
-                </h3>
-                <EditableField
-                  value={trial?.description || "No description available"}
-                  onSave={async (newValue) => {
-                    await updateTrial.mutateAsync({ id: trialId, description: newValue });
-                  }}
-                  type="textarea"
-                  className="text-sm text-gray-700 leading-relaxed"
-                />
-              </div>
-              <div>
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
-                  Principal Investigator
-                </h3>
-                <button className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900">
-                  <Avatar className="h-6 w-6">
-                    <AvatarFallback className="text-xs" style={{ backgroundColor: '#e6e7eb' }}>
-                      <User className="h-3.5 w-3.5 text-gray-600" />
-                    </AvatarFallback>
-                  </Avatar>
-                  <span>Principal Investigator</span>
-                </button>
-              </div>
-            </div>
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
+            <Button variant="outline" size="sm" onClick={() => setManageTeamOpen(true)}>
+              Manage Team
+            </Button>
           </div>
-
-          {/* Quick Actions */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">
-              Quick Actions
-            </h2>
-            <div className="flex flex-wrap gap-3">
-              <Button 
-                variant="outline" 
-                className="flex items-center gap-2 text-sm"
-                onClick={() => navigate(`/trial/${trialId}/assistant`)}
-              >
-                <Sparkles className="h-4 w-4" />
-                AI Assistant
-              </Button>
-              <Button variant="outline" className="flex items-center gap-2 text-sm">
-                <Eye className="h-4 w-4" />
-                View Protocol
-              </Button>
-              <Button variant="outline" className="flex items-center gap-2 text-sm">
-                <UsersIcon className="h-4 w-4" />
-                Manage Team
-              </Button>
-              <Button variant="outline" className="flex items-center gap-2 text-sm">
-                <Upload className="h-4 w-4" />
-                Upload Document
-              </Button>
-              <Button variant="outline" className="flex items-center gap-2 text-sm">
-                <UserPlus2 className="h-4 w-4" />
-                Sign a New Patient
-              </Button>
-            </div>
-          </div>
-
-          {/* Team Members */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-sm font-semibold text-gray-900 mb-3">
-              Team Members ({teamMembers.length})
-            </h2>
-            <div className="space-y-1.5">
-              {teamMembers.map((member, index) => (
-                <div key={index} className="flex items-center gap-3">
+          {trialTeamMembers.length === 0 ? (
+            <p className="text-sm text-gray-500">No members assigned yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {trialTeamMembers.map((member) => (
+                <div key={member.id} className="rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
                   <Avatar className="h-8 w-8">
-                    <AvatarFallback className="text-sm" style={{ backgroundColor: '#e6e7eb' }}>
-                      <User className="h-5 w-5 text-gray-600" />
-                    </AvatarFallback>
+                    <AvatarFallback className="text-xs bg-blue-50 text-blue-700">{member.initials || "TM"}</AvatarFallback>
                   </Avatar>
                   <div>
                     <p className="text-sm font-medium text-gray-900">{member.name}</p>
-                    <p className="text-xs text-gray-400">{member.role}</p>
+                    <p className="text-xs text-gray-500">{member.role}</p>
                   </div>
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      </div>
+    );
+  } else if (activeTab === "patients") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Patients</h2>
+          <p className="text-sm text-gray-500 mt-1">Enrollment tracking for this trial.</p>
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Enrolled Patients</p>
+              <p className="text-3xl font-semibold text-gray-900 mt-2">{enrolledPatients}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Target Patients</p>
+              <p className="text-3xl font-semibold text-gray-900 mt-2">{targetPatients}</p>
+            </div>
           </div>
         </div>
+      </div>
+    );
+  } else if (activeTab === "notifications") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Notifications</h2>
+          <p className="text-sm text-gray-500 mt-1">Trial-level alerts and reminders will appear here.</p>
+        </div>
+      </div>
+    );
+  } else if (activeTab === "visit-template") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Visit Template</h2>
+          <p className="text-sm text-gray-500 mt-1">Visit template tools will be available here.</p>
+        </div>
+      </div>
+    );
+  } else {
+    mainContent = (
+      <div className="px-6 pb-6 space-y-5">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700/70">
+              Investigational Product / Drug Name
+            </p>
+            <EditableField
+              value={trial?.investigationalProduct || ""}
+              onSave={async (newValue) => {
+                await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, investigationalProduct: newValue });
+              }}
+              emptyText="Add investigational product"
+              className="mt-2 text-3xl font-semibold text-gray-900"
+            />
 
-        {/* Right Column - Properties Sidebar */}
-        <div className="w-80">
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-6">
-              Properties
-            </h2>
-            <div className="space-y-5">
-              {/* Status */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Status</span>
-                <img src="/status-active.svg" alt="Active" className="h-5" />
+            <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Sponsor:</span>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <EditableField
+                    value={trial?.sponsor || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sponsor: newValue });
+                    }}
+                    emptyText="Add sponsor"
+                    className="text-sm font-medium text-gray-900 min-w-0"
+                  />
+                  {sponsorLogoUrl && !sponsorLogoFailed ? (
+                    <img
+                      src={sponsorLogoUrl}
+                      alt={`${trial?.sponsor || "Sponsor"} logo`}
+                      className="h-7 w-7 rounded-sm border border-gray-200 bg-white object-contain p-0.5"
+                      onError={() => setSponsorLogoFailed(true)}
+                    />
+                  ) : (
+                    <div className="h-7 min-w-7 rounded-sm border border-gray-200 bg-blue-50 text-blue-700 text-[10px] font-semibold flex items-center justify-center px-1">
+                      {sponsorInitials}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Phase */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Phase</span>
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Phase:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.phase || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, phase: newValue });
+                    }}
+                    emptyText="Add phase"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Protocol Number:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.protocolNumber || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, protocolNumber: newValue });
+                    }}
+                    emptyText="Add protocol number"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">NCT Number:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.nctNumber || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, nctNumber: newValue });
+                    }}
+                    emptyText="Add NCT number"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Current Version:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.currentVersion || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, currentVersion: newValue });
+                    }}
+                    emptyText="Add current version"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Location:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.location || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, location: newValue });
+                    }}
+                    emptyText="Add location"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-1">
+              <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Protocol Title:</span>
+              <div className="mt-1">
                 <EditableField
-                  value={trial?.phase || "Not set"}
+                  value={trial?.title || ""}
                   onSave={async (newValue) => {
-                    const phase = newValue as "Phase I" | "Phase II" | "Phase III" | "Phase IV";
-                    await updateTrial.mutateAsync({ id: trialId, phase });
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, title: newValue });
+                  }}
+                  emptyText="Add protocol title"
+                  className="text-sm text-gray-900"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-gray-900">Operational Status</h2>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2">
+              <div className="text-[11px] uppercase tracking-wide font-semibold text-blue-700">Themison AI Recommendation</div>
+              <p className="text-sm text-blue-800 mt-1">{aiRecommendation}</p>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">Status:</span>
+                <EditableField
+                  value={trial?.status || "not-started"}
+                  onSave={async (newValue) => {
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, status: newValue as any });
                   }}
                   type="select"
                   options={[
-                    { value: "Phase I", label: "Phase I" },
-                    { value: "Phase II", label: "Phase II" },
-                    { value: "Phase III", label: "Phase III" },
-                    { value: "Phase IV", label: "Phase IV" },
+                    { value: "not-started", label: "Not started" },
+                    { value: "active", label: "Active" },
+                    { value: "recruiting", label: "Recruiting" },
+                    { value: "on-hold", label: "On hold" },
+                    { value: "completed", label: "Completed" },
+                    { value: "terminated", label: "Terminated" },
                   ]}
-                  className="text-sm font-medium text-gray-900"
+                  emptyText="Not started"
+                  className="text-sm text-gray-900"
                 />
               </div>
 
-              {/* Start Date */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Start</span>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">Start Date:</span>
                 <EditableField
-                  value={trial?.startDate ? new Date(trial.startDate).toISOString().split('T')[0] : ""}
+                  value={trial?.startDate ? new Date(trial.startDate).toISOString().split("T")[0] : ""}
                   onSave={async (newValue) => {
-                    await updateTrial.mutateAsync({ id: trialId, startDate: newValue });
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, startDate: newValue });
                   }}
                   type="date"
                   emptyText="Set date"
@@ -455,128 +774,403 @@ export default function TrialDetail() {
                 />
               </div>
 
-              {/* End Date */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">End</span>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">End Date:</span>
                 <EditableField
-                  value={trial?.endDate ? new Date(trial.endDate).toISOString().split('T')[0] : ""}
+                  value={trial?.endDate ? new Date(trial.endDate).toISOString().split("T")[0] : ""}
                   onSave={async (newValue) => {
-                    await updateTrial.mutateAsync({ id: trialId, endDate: newValue });
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, endDate: newValue });
                   }}
                   type="date"
                   emptyText="Set date"
                   className="text-sm text-gray-900"
                 />
               </div>
+            </div>
 
-              {/* Sponsor */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Sponsor</span>
-                <EditableField
-                  value={trial?.sponsor || ""}
-                  onSave={async (newValue) => {
-                    await updateTrial.mutateAsync({ id: trialId, sponsor: newValue });
-                  }}
-                  emptyText="Add sponsor"
-                  className="text-sm text-gray-900"
-                />
+            <div className="mt-4 border-t border-gray-200 pt-4 space-y-2">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Enrollment:</span>
+                <span className="font-medium text-gray-900">{enrolledPatients} / {targetPatients || 0}</span>
               </div>
-
-              {/* Location */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Location</span>
-                <EditableField
-                  value={trial?.location || ""}
-                  onSave={async (newValue) => {
-                    await updateTrial.mutateAsync({ id: trialId, location: newValue });
-                  }}
-                  emptyText="Add location"
-                  className="text-sm text-gray-900"
-                />
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Pending Tasks:</span>
+                <span className="font-medium text-gray-900">{pendingTasks} ({dueTodayTasks} due today)</span>
               </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Scheduled Visits:</span>
+                <span className="font-medium text-gray-900">{scheduledVisits}</span>
+              </div>
+            </div>
 
-              {/* Divider */}
-              <div className="border-t border-gray-200 my-4"></div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <Button variant="outline" size="sm" className="h-9" onClick={() => setManageTeamOpen(true)}>
+                Manage Team
+              </Button>
+              <Button variant="outline" size="sm" className="h-9" onClick={() => setActiveTab("document-hub")}>
+                View Protocol
+              </Button>
+            </div>
+          </div>
+        </div>
 
-              {/* Patients */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="h-4 w-4 text-gray-400" />
-                  <span className="text-sm text-gray-600">Patients</span>
+        <div className="bg-white rounded-xl border border-gray-200 p-3">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" className="h-9 text-sm" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+              <Sparkles className="h-4 w-4 mr-2" />
+              Themison AI
+            </Button>
+            {(trial?.status || "not-started") === "not-started" && launchReadyWithoutActivation ? (
+              <Button
+                variant="outline"
+                className="h-9 text-sm"
+                onClick={async () => {
+                  await updateTrial.mutateAsync({
+                    id: trialId,
+                    demoMode: currentDataMode,
+                    status: "active",
+                  });
+                }}
+              >
+                Activate Trial
+              </Button>
+            ) : null}
+            <Button variant="outline" className="h-9 text-sm">
+              <UserPlus2 className="h-4 w-4 mr-2" />
+              Sign a New Patient
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
+            <p className="mt-2 text-3xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-gray-500">Target: {targetPatients || 0}</p>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>
+            <p className="mt-2 text-3xl font-semibold text-gray-900">{enrollmentPercent}%</p>
+            <p className="mt-1 text-xs text-gray-500">Current recruitment progress</p>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Pending Tasks</p>
+            <p className="mt-2 text-3xl font-semibold text-gray-900">{pendingTasks.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-gray-500">Due today: {dueTodayTasks}</p>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Task Completion</p>
+            <p className="mt-2 text-3xl font-semibold text-gray-900">{completionRate}%</p>
+            <p className="mt-1 text-xs text-gray-500">{completedTasks.toLocaleString()} completed tasks</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-sm font-semibold text-gray-900">Study Design & Objectives</h2>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Indication / Therapeutic Area:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.indication || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, indication: newValue });
+                    }}
+                    emptyText="Add indication"
+                    className="text-sm text-gray-900"
+                  />
                 </div>
-                <span className="text-sm font-medium text-gray-900">{trial?.enrolledPatients || 0} / {trial?.targetPatients || 0}</span>
               </div>
 
-              {/* Tasks */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ClipboardList className="h-4 w-4 text-gray-400" />
-                  <span className="text-sm text-gray-600">Tasks</span>
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Sample Size:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.sampleSize || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sampleSize: newValue });
+                    }}
+                    emptyText="Add sample size"
+                    className="text-sm text-gray-900"
+                  />
                 </div>
-                <span className="text-sm font-medium text-gray-900">0 pending</span>
               </div>
 
-              {/* Visits */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-gray-400" />
-                  <span className="text-sm text-gray-600">Visits</span>
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Number of Sites:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.numberOfSites || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, numberOfSites: newValue });
+                    }}
+                    emptyText="Add number of sites"
+                    className="text-sm text-gray-900"
+                  />
                 </div>
-                <span className="text-sm font-medium text-gray-900">0 scheduled</span>
               </div>
+
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Duration:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.studyDuration || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDuration: newValue });
+                    }}
+                    emptyText="Add study duration"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Design Type:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.studyDesignType || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDesignType: newValue });
+                    }}
+                    emptyText="Add study design type"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Objective:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.primaryObjective || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryObjective: newValue });
+                    }}
+                    emptyText="Add primary objective"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Endpoint:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.primaryEndpoint || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryEndpoint: newValue });
+                    }}
+                    emptyText="Add primary endpoint"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">
+                  {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
+                </h2>
+                {nextOperationalTasks.length > 0 ? (
+                  <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
+                    View plan
+                  </button>
+                ) : null}
+              </div>
+
+              {nextOperationalTasks.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {nextOperationalTasks.map((task: any, index: number) => (
+                    <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                      <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {launchChecklist.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
+                      <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
+                        {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                        <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {firstIncompleteChecklistItem ? (
+                    <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      {recommendedActionLabel}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" className="w-full mt-2" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      Open Themison AI
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
+                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setManageTeamOpen(true)}>
+                  Manage Team
+                </button>
+              </div>
+              {trialTeamMembers.length === 0 ? (
+                <p className="text-sm text-gray-500 mt-3">No team members assigned.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {trialTeamMembers.map((member) => (
+                    <div key={member.id} className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-xs bg-blue-50 text-blue-700">{member.initials || "TM"}</AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                        <p className="text-xs text-gray-500">{member.role}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
     );
   }
-
   return (
-    <div className="h-screen bg-[#F9FAFB] overflow-hidden">
-      {/* Top Navigation */}
-      <TopNav />
+    <div className="h-full bg-[#F9FAFB]">
+      <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
+        <div className="bg-white rounded-lg border border-gray-200 px-5 py-2 flex items-center gap-6">
+          <button
+            onClick={() => {
+              logEvent({
+                eventType: "feature_used",
+                action: "back_to_trials",
+                entityType: "navigation",
+                payload: { from: "trial_detail" },
+              });
+              navigate("/trial-workspace");
+            }}
+            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors pr-5 border-r border-gray-200"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>All Trials</span>
+          </button>
 
-      <div className="h-full overflow-y-auto">
-        {/* Tabs Navigation Bar - White Floating Panel */}
-        <div className="bg-[#F9FAFB] px-8 pt-3 pb-1 sticky top-0 z-40">
-          <div className="bg-white rounded-lg border border-gray-200 px-6 py-2 flex items-center gap-6">
-            {/* Back Button */}
-            <button
-              onClick={() => navigate("/trial-workspace")}
-              className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors pr-6 border-r border-gray-200"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              <span>All Trials</span>
-            </button>
-
-            {/* Tabs */}
-            <div className="flex items-center gap-1">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`flex items-center gap-2 px-3 py-1 text-xs transition-colors rounded ${
-                      activeTab === tab.id
-                        ? "text-blue-600 bg-[#F3F4F6]"
-                        : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    <span>{tab.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    logEvent({
+                      eventType: "feature_used",
+                      action: "switch_tab",
+                      entityType: "trial_tab",
+                      entityId: tab.id,
+                      payload: { trialId },
+                    });
+                  }}
+                  className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
+                    activeTab === tab.id ? "text-blue-700 bg-blue-50" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-
-        {/* Main Content */}
-        <div className={`${activeTab === "document-hub" || activeTab === "study-setup-wizard" ? "" : "px-8"} pt-4 pb-6`}>
-          {mainContent}
-        </div>
       </div>
+
+      <div className="pt-4">{mainContent}</div>
+
+      <Dialog open={manageTeamOpen} onOpenChange={setManageTeamOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Manage Team</DialogTitle>
+          </DialogHeader>
+
+          <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-4">
+            <div className="text-sm text-blue-700">
+              <div>Can’t find someone?</div>
+              <div>Create a new member here to update your Organization list.</div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setAddMemberOpen(true)}>
+              Create New Member
+            </Button>
+          </div>
+
+          <div className="space-y-3 max-h-[50vh] overflow-auto pr-1">
+            {(state.teamMembers || []).map((member, index) => {
+              const isSelected = assignedMemberIds.includes(member.id);
+              const isSuggested = index < 3;
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  onClick={() => toggleAssignedMember(member.id)}
+                  className={`w-full rounded-lg border px-4 py-3 text-left transition-colors flex items-center justify-between ${
+                    isSelected ? "border-blue-200 bg-blue-50" : "border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-5 w-5 rounded border border-gray-300 flex items-center justify-center bg-white">
+                      {isSelected ? <Check className="h-3.5 w-3.5 text-blue-600" /> : null}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{member.name}</div>
+                      <div className="text-xs text-gray-500">{member.clinicalRole || member.role}</div>
+                    </div>
+                  </div>
+                  {isSuggested ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                      Suggested
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AddMemberPanel
+        open={addMemberOpen}
+        onClose={() => setAddMemberOpen(false)}
+        editingMemberId={null}
+        initialValues={{
+          name: "",
+          email: "",
+          clinicalRole: "Principal Investigator",
+          appRole: "Admin",
+          team: "",
+          site: "",
+        }}
+        onMemberSaved={(memberId) => {
+          persistAssignedMembers(assignedMemberIds.includes(memberId) ? assignedMemberIds : [...assignedMemberIds, memberId]);
+        }}
+      />
     </div>
   );
 }

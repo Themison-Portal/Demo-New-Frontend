@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Wand2, Sparkles, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
+import { useDemoState } from "@/contexts/DemoStateContext";
 
 /**
  * Study Setup Wizard - Entry Point Screen
@@ -11,13 +12,18 @@ import { useLocation } from "wouter";
 export default function StudySetupWizard() {
   const [, setLocation] = useLocation();
   const [isGenerating, setIsGenerating] = useState(false);
+  const { getCurrentDataMode } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
 
   // For demo purposes, we'll use hardcoded values
   // In production, these would come from route params or context
   const trialId = '1';
   
   // Get the list of protocols for this trial
-  const { data: protocols, isLoading: protocolsLoading } = trpc.documents.list.useQuery({ trialId });
+  const { data: protocols, isLoading: protocolsLoading } = trpc.documents.list.useQuery({
+    trialId,
+    demoMode: currentDataMode,
+  });
   
   // Use the most recently uploaded protocol
   const latestProtocol = protocols?.[0]; // protocols are ordered by createdAt DESC
@@ -43,7 +49,7 @@ export default function StudySetupWizard() {
       return;
     }
     setIsGenerating(true);
-    generateScaffold.mutate({ protocolId, trialId });
+    generateScaffold.mutate({ protocolId, trialId, demoMode: currentDataMode });
   };
 
   return (

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
@@ -22,6 +23,7 @@ import Organization from "./pages/Organization";
 import Integrations from "./pages/Integrations";
 import Notifications from "./pages/Notifications";
 import Settings from "./pages/Settings";
+import { logEvent } from "./lib/telemetry";
 
 // Icon mapping for each route - matches sidebar navigation icons exactly
 const iconMap: Record<string, any> = {
@@ -82,6 +84,26 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
 
 function Router() {
   const [location] = useLocation();
+  const lastLocationRef = useRef<string | null>(null);
+  const lastTimestampRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    const now = Date.now();
+    const previousLocation = lastLocationRef.current;
+    const durationMs = previousLocation ? now - lastTimestampRef.current : undefined;
+
+    logEvent({
+      eventType: "page_viewed",
+      action: "viewed",
+      entityType: "page",
+      entityId: location,
+      durationMs,
+      payload: previousLocation ? { from: previousLocation } : undefined,
+    });
+
+    lastLocationRef.current = location;
+    lastTimestampRef.current = now;
+  }, [location]);
   
   // Handle dynamic breadcrumbs for trial detail pages
   let breadcrumbs = breadcrumbsMap[location] || [];
@@ -95,7 +117,7 @@ function Router() {
         { label: "Workspace", href: "/" },
         { label: "Trial Workspace", href: "/trial-workspace" },
         { label: trialId ? `Trial ${trialId}` : "Trial" },
-        { label: "Document AI Assistant" },
+        { label: "Themison AI" },
       ];
       breadcrumbIcon = FileText;
     } else {

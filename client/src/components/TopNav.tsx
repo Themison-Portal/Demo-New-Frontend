@@ -3,7 +3,7 @@
  * Design: Clinical Modernism - Clean horizontal bar with contextual navigation
  */
 
-import { Bell, ChevronDown, ChevronRight, Home, FileText, File, PanelLeft, PanelLeftClose, FlaskConical, LayoutGrid, Users, Building2, Puzzle, Settings as SettingsIcon, User } from "lucide-react";
+import { Bell, ChevronDown, ChevronRight, Home, FileText, File, FlaskConical, LayoutGrid, Users, Building2, Puzzle, Settings as SettingsIcon, User, Brain } from "lucide-react";
 import { AnalyticsIcon } from "@/components/icons/AnalyticsIcon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -83,8 +83,11 @@ export function TopNav() {
   }, [currentDataMode]);
 
   const handleConfirmAction = async () => {
+    const needsLoading = confirmDialog.type !== 'building';
     try {
-      toast.loading("Updating demo data...", { id: "demo-reset" });
+      if (needsLoading) {
+        toast.loading("Updating demo data...", { id: "demo-reset" });
+      }
       if (confirmDialog.type === 'reset') {
         await resetToEmptyMutation.mutateAsync();
         resetDemo();
@@ -105,12 +108,14 @@ export function TopNav() {
         setBuildingMode();
         toast.success("Building mode enabled");
       }
-      toast.dismiss("demo-reset");
       setConfirmDialog({ open: false, type: null });
     } catch (error) {
       console.error(error);
-      toast.dismiss("demo-reset");
       toast.error("Demo reset failed. Please try again.");
+    } finally {
+      if (needsLoading) {
+        toast.dismiss("demo-reset");
+      }
     }
   };
 
@@ -130,13 +135,13 @@ export function TopNav() {
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) {
       const trialId = location.split('/')[2]?.toLowerCase();
       const trial = trials.find(t => t.id === trialId);
-      const trialName = trial ? trial.title : 'Trial';
+      const trialName = trial ? (trial.investigationalProduct || trial.title) : 'Trial';
       return {
         section: 'Workspace',
         sectionHref: '/',
         page: trialName,
         pageHref: `/trial/${trialId}`,
-        subpage: 'Document AI Assistant',
+        subpage: 'Themison AI',
       };
     }
     if (location.startsWith('/trial/')) {
@@ -144,7 +149,7 @@ export function TopNav() {
       const trialId = location.split('/')[2]?.toLowerCase();
       // Find the trial name from the trials list (database uses 'title' not 'name')
       const trial = trials.find(t => t.id === trialId);
-      const trialName = trial ? trial.title : 'Trial Details';
+      const trialName = trial ? (trial.investigationalProduct || trial.title) : 'Trial Details';
       return {
         section: 'Trial Workspace',
         sectionHref: '/trial-workspace',
@@ -159,16 +164,16 @@ export function TopNav() {
       const params = new URLSearchParams(window.location.search);
       const trialId = params.get('trialId');
       if (!trialId) {
-        return { section: 'Workspace', sectionHref: '/', page: 'Document AI Assistant', pageHref: '/documents' };
+        return { section: 'Workspace', sectionHref: '/', page: 'Themison AI', pageHref: '/documents' };
       }
       const trial = trials.find(t => t.id === trialId.toLowerCase());
-      const trialLabel = trial ? trial.title : `Trial ${trialId}`;
+      const trialLabel = trial ? (trial.investigationalProduct || trial.title) : `Trial ${trialId}`;
       return {
         section: 'Workspace',
         sectionHref: '/',
         page: trialLabel,
         pageHref: `/trial/${trialId.toLowerCase()}`,
-        subpage: 'Document AI Assistant',
+        subpage: 'Themison AI',
       };
     }
     if (location.startsWith('/tasks')) return { section: 'Workspace', sectionHref: '/', page: 'Task Manager', pageHref: '/tasks' };
@@ -184,11 +189,11 @@ export function TopNav() {
   // Get breadcrumb icon based on current location
   const getBreadcrumbIcon = () => {
     if (location === '/') return Home;
-    if (location.startsWith('/trial/') && location.endsWith('/assistant')) return FileText;
+    if (location.startsWith('/trial/') && location.endsWith('/assistant')) return Brain;
     if (location.startsWith('/trial/')) return FlaskConical;
     if (location.startsWith('/workspace')) return FlaskConical;
     if (location.startsWith('/trial-workspace')) return FlaskConical;
-    if (location.startsWith('/documents')) return FileText;
+    if (location.startsWith('/documents')) return Brain;
     if (location.startsWith('/tasks')) return LayoutGrid;
     if (location.startsWith('/collaboration')) return Users;
     if (location.startsWith('/analytics')) return AnalyticsIcon;
@@ -199,77 +204,14 @@ export function TopNav() {
     return Home;
   };
 
-  const context = getCurrentContext();
   const breadcrumb = getBreadcrumb();
+  const sidebarOffset = isCollapsed ? 64 : 280;
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 h-11 bg-white border-b border-border flex items-center justify-between pl-3 pr-6 gap-4 z-50">
-        {/* Left: Organization */}
-        <div className="flex items-center gap-3">
-          {/* Organization Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="flex items-center gap-2 h-8 px-3">
-                <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
-                  T
-                </div>
-                <span className="font-medium text-xs">Themison Research</span>
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64">
-              <DropdownMenuLabel>Switch Organization</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
-                    T
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-medium">Themison Research</span>
-                    <span className="text-xs text-muted-foreground">Current Organization</span>
-                  </div>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Other Organizations</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-blue-500 flex items-center justify-center text-white text-xs font-semibold">
-                    A
-                  </div>
-                  <span className="text-sm">Acme Pharma</span>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-green-500 flex items-center justify-center text-white text-xs font-semibold">
-                    G
-                  </div>
-                  <span className="text-sm">GlobalMed Inc</span>
-                </div>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          
-          {/* Collapse Button */}
-          <Button 
-            variant="ghost" 
-            size="icon"
-            className="h-auto w-auto px-2 py-2 flex items-center self-center ml-5"
-            onClick={() => setIsCollapsed(!isCollapsed)}
-          >
-            {isCollapsed ? <PanelLeftClose className="h-3.5 w-3.5 text-muted-foreground" /> : <PanelLeft className="h-3.5 w-3.5 text-muted-foreground" />}
-          </Button>
-        </div>
-
-        {/* Vertical separator at sidebar edge - fixed at expanded sidebar width */}
-        <div className="absolute top-2 bottom-2 left-[279px] w-px bg-border" />
-
-        {/* Breadcrumb - Fixed position, always aligned with page content */}
-        <div className="absolute left-[312px] flex items-center gap-2 text-xs">
+      <header className="h-11 mt-2 bg-transparent border-none flex items-center justify-between pr-4 gap-4 w-full">
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-2 text-xs pl-8">
           <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
             {(() => {
               const IconComponent = getBreadcrumbIcon();
