@@ -3,7 +3,7 @@
  * Clinical trial detail page with tabbed workspace sections.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   LayoutGrid,
@@ -17,6 +17,9 @@ import {
   Wand2,
   Bookmark,
   Bell,
+  Settings,
+  AlertTriangle,
+  Trash2,
   Search,
   Filter,
   Plus,
@@ -39,6 +42,7 @@ import { EditableField } from "@/components/EditableField";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { logEvent } from "@/lib/telemetry";
 import { AddMemberPanel } from "@/components/AddMemberPanel";
+import { useMapStore } from "@/stores/mapStore";
 
 export default function TrialDetail() {
   const [, navigate] = useLocation();
@@ -49,6 +53,7 @@ export default function TrialDetail() {
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [assignedMemberIds, setAssignedMemberIds] = useState<string[]>([]);
   const [sponsorLogoFailed, setSponsorLogoFailed] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
   const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
@@ -66,10 +71,44 @@ export default function TrialDetail() {
     { protocolId: protocolId || 0, demoMode: currentDataMode },
     { enabled: !!protocolId && protocolId > 0 }
   );
+  const {
+    data: executionMapSummary,
+    refetch: refetchExecutionMapSummary,
+  } = trpc.map.getByTrial.useQuery(
+    { trialId, includeArchived: false },
+    { enabled: isValidTrialId }
+  );
+
+  const map = useMapStore((store) => store.map);
+  const mapPhases = useMapStore((store) => store.phases);
+  const mapTasks = useMapStore((store) => store.tasks);
+  const mapDependencies = useMapStore((store) => store.dependencies);
+  const mapSections = useMapStore((store) => store.protocolMapSections);
+  const loadExecutionMap = useMapStore((store) => store.loadMap);
+  const launchExecutionMap = useMapStore((store) => store.launchMap);
+  const addExecutionTask = useMapStore((store) => store.addTask);
+  const updateExecutionTask = useMapStore((store) => store.updateTask);
+  const removeExecutionTask = useMapStore((store) => store.removeTask);
+  const reorderExecutionTasks = useMapStore((store) => store.reorderTasks);
+
+  const bootstrapGuardRef = useRef<string | null>(null);
 
   const { data: trial } = trpc.trials.getById.useQuery(
     { id: trialId, demoMode: currentDataMode },
     { enabled: isValidTrialId }
+  );
+  const { data: trialContext } = trpc.trials.getContext.useQuery(
+    {
+      id: trialId,
+      demoMode: currentDataMode,
+      include: ["documents", "telemetry", "execution", "suggestions", "insights"],
+      pageContext: activeTab,
+      emitTelemetry: activeTab === "overview" || activeTab === "document-hub",
+    },
+    {
+      enabled: isValidTrialId && (activeTab === "overview" || activeTab === "document-hub"),
+      staleTime: 30000,
+    }
   );
 
   useEffect(() => {
@@ -95,6 +134,15 @@ export default function TrialDetail() {
     }
   }, [trialId, currentDataMode]);
 
+  useEffect(() => {
+    const mapId = executionMapSummary?.id;
+    if (!mapId) return;
+    void loadExecutionMap(mapId).catch((error) => {
+      console.error("Failed to load execution map:", error);
+      toast.error("Failed to load execution map");
+    });
+  }, [executionMapSummary?.id, loadExecutionMap]);
+
   const utils = trpc.useUtils();
   const updateTrial = trpc.trials.update.useMutation({
     onSuccess: async () => {
@@ -104,6 +152,21 @@ export default function TrialDetail() {
     },
     onError: (error) => {
       toast.error(`Failed to update trial: ${error.message}`);
+    },
+  });
+  const deleteTrialMutation = trpc.trials.delete.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.documents.list.invalidate({ trialId, demoMode: currentDataMode });
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(`trial-team:${currentDataMode}:${trialId}`);
+      }
+      toast.success("Trial deleted");
+      navigate("/trial-workspace");
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete trial: ${error.message}`);
     },
   });
 
@@ -138,12 +201,13 @@ export default function TrialDetail() {
   const tabs = [
     { id: "overview", label: "Overview", icon: LayoutGrid },
     { id: "document-hub", label: "Document Hub", icon: FolderOpen },
-    { id: "study-setup-wizard", label: "Study Setup Wizard", icon: Wand2 },
+    { id: "study-setup-wizard", label: "Study Setup Agent", icon: Wand2 },
     { id: "visit-template", label: "Visit Template", icon: Calendar },
     { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
     { id: "team", label: "Team", icon: UsersIcon },
     { id: "patients", label: "Patients", icon: UserCheck },
     { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "settings", label: "Settings", icon: Settings },
   ];
 
   const mockBookmarks = [
@@ -219,27 +283,10 @@ export default function TrialDetail() {
     return `${token}.com`;
   };
 
-  const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation({
-    onSuccess: () => {
-      setIsGeneratingScaffold(false);
-      logEvent({
-        eventType: "trial_setup_step_completed",
-        action: "generated",
-        entityType: "task_scaffold",
-        payload: { trialId, demoMode: currentDataMode },
-        aiInvolved: true,
-      });
-    },
-    onError: (error) => {
-      setIsGeneratingScaffold(false);
-      console.error("Failed to generate scaffold:", error);
-      toast.error("Failed to generate execution plan", {
-        description: "Please upload a protocol in Document Hub and try again.",
-      });
-    },
-  });
+  const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation();
+  const importLegacyScaffold = trpc.map.importLegacyScaffold.useMutation();
 
-  const handleGenerateScaffold = () => {
+  const handleGenerateScaffold = async () => {
     if (!protocols || protocols.length === 0) {
       toast.error("No protocol found", {
         description: "Please upload a protocol in the Document Hub first.",
@@ -259,28 +306,100 @@ export default function TrialDetail() {
       aiInvolved: true,
     });
 
-    generateScaffold.mutate({
-      protocolId: protocols[0].id,
-      trialId: trial.id,
-      demoMode: currentDataMode,
-    });
+    try {
+      await generateScaffold.mutateAsync({
+        protocolId: protocols[0].id,
+        trialId: trial.id,
+        demoMode: currentDataMode,
+      });
+      const imported = await importLegacyScaffold.mutateAsync({
+        trialId: trial.id,
+        protocolId: protocols[0].id,
+        clearExisting: true,
+      });
+      await refetchExecutionMapSummary();
+      if (imported?.mapId) {
+        await loadExecutionMap(imported.mapId);
+      }
+      logEvent({
+        eventType: "trial_setup_step_completed",
+        action: "generated",
+        entityType: "task_scaffold",
+        payload: { trialId, demoMode: currentDataMode, mapId: imported?.mapId ?? null },
+        aiInvolved: true,
+      });
+      toast.success("Execution map generated");
+    } catch (error: any) {
+      console.error("Failed to generate scaffold:", error);
+      toast.error("Failed to generate execution plan", {
+        description: error?.message || "Please upload a protocol in Document Hub and try again.",
+      });
+    } finally {
+      setIsGeneratingScaffold(false);
+    }
   };
+
+  useEffect(() => {
+    if (activeTab !== "study-setup-wizard") return;
+    if (executionMapSummary?.id) return;
+    if (!trialId || !protocolId || !existingScaffold?.scaffold?.id) return;
+
+    const guardKey = `${trialId}:${protocolId}:${existingScaffold.scaffold.id}`;
+    if (bootstrapGuardRef.current === guardKey || importLegacyScaffold.isPending) return;
+    bootstrapGuardRef.current = guardKey;
+
+    void importLegacyScaffold
+      .mutateAsync({
+        trialId,
+        protocolId,
+        clearExisting: true,
+      })
+      .then(async (result) => {
+        await refetchExecutionMapSummary();
+        if (result?.mapId) {
+          await loadExecutionMap(result.mapId);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to bootstrap execution map:", error);
+      });
+  }, [
+    activeTab,
+    trialId,
+    protocolId,
+    existingScaffold?.scaffold?.id,
+    executionMapSummary?.id,
+    importLegacyScaffold.isPending,
+    refetchExecutionMapSummary,
+    loadExecutionMap,
+  ]);
 
   const enrolledPatients = trial?.enrolledPatients || 0;
   const targetPatients = trial?.targetPatients || 0;
   const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
   const scaffoldTasks =
-    (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
-  const pendingTasks = scaffoldTasks.filter((task: any) => task?.status !== "completed").length;
-  const completedTasks = scaffoldTasks.filter((task: any) => task?.status === "completed").length;
+    mapTasks.length > 0
+      ? mapTasks
+      : (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
+  const pendingTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    return !["completed", "done", "cancelled", "skipped"].includes(status);
+  }).length;
+  const completedTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    return status === "completed" || status === "done";
+  }).length;
   const todayIso = new Date().toISOString().slice(0, 10);
   const dueTodayTasks = scaffoldTasks.filter((task: any) => {
-    if (!task?.suggestedDate || task?.status === "completed") return false;
-    return new Date(task.suggestedDate).toISOString().slice(0, 10) === todayIso;
+    const status = String(task?.status || "");
+    if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
+    const candidateDate = task?.dueDate || task?.suggestedDate;
+    if (!candidateDate) return false;
+    return new Date(candidateDate).toISOString().slice(0, 10) === todayIso;
   }).length;
   const totalTasks = pendingTasks + completedTasks;
   const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const scheduledVisits = (existingScaffold?.phases || []).filter((phase: any) =>
+  const scheduledVisits = (mapPhases.length > 0 ? mapPhases : existingScaffold?.phases || []).filter((phase: any) =>
     String(phase?.name || "").toLowerCase().includes("visit")
   ).length;
 
@@ -292,10 +411,27 @@ export default function TrialDetail() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() || "")
     .join("") || "SP";
+  const contextSuggestions = (trialContext?.suggestions || []) as Array<{
+    id: string;
+    title: string;
+    description: string;
+    actionLabel: string;
+    actionTarget: "overview" | "document-hub" | "study-setup-wizard" | "assistant";
+    category: string;
+    priority: "high" | "medium" | "low";
+    confidence: number;
+  }>;
+  const primarySuggestion = contextSuggestions[0];
 
   useEffect(() => {
     setSponsorLogoFailed(false);
   }, [sponsorLogoUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") {
+      setDeleteConfirmText("");
+    }
+  }, [activeTab]);
 
   const hasText = (value?: string | null) => Boolean(value && value.trim().length > 0);
   const hasProtocolInHub = protocols.some((doc: any) => {
@@ -330,7 +466,7 @@ export default function TrialDetail() {
     },
     {
       id: "setup-wizard",
-      title: "Generate execution plan in Study Setup Wizard",
+      title: "Generate execution plan in Study Setup Agent",
       subtitle: "Convert protocol requirements into operational tasks.",
       done: scaffoldTasks.length > 0,
     },
@@ -358,11 +494,13 @@ export default function TrialDetail() {
     .filter((task: any) => task?.status !== "completed")
     .slice(0, 5);
 
-  const aiRecommendation = firstIncompleteChecklistItem
+  const aiRecommendation = primarySuggestion
+    ? primarySuggestion.description
+    : firstIncompleteChecklistItem
     ? firstIncompleteChecklistItem.id === "protocol-sync"
       ? "Protocol file is missing from Document Hub. Upload it so Themison AI can generate traceable guidance."
       : firstIncompleteChecklistItem.id === "setup-wizard"
-      ? "Run Study Setup Wizard to generate the first AI-backed execution plan."
+      ? "Run Study Setup Agent to generate the first AI-backed execution plan."
       : firstIncompleteChecklistItem.id === "team"
       ? "Assign core team members so work can be routed to the right owners."
       : firstIncompleteChecklistItem.id === "timeline"
@@ -373,11 +511,13 @@ export default function TrialDetail() {
     : nextOperationalTasks.length > 0
     ? "Execution plan is live. Assign owners to the next tasks and monitor progress."
     : "Launch readiness is complete. Generate or refresh your execution plan as needed.";
-  const recommendedActionLabel = firstIncompleteChecklistItem
+  const recommendedActionLabel = primarySuggestion
+    ? primarySuggestion.actionLabel
+    : firstIncompleteChecklistItem
     ? firstIncompleteChecklistItem.id === "protocol-sync"
       ? "Open Document Hub"
       : firstIncompleteChecklistItem.id === "setup-wizard"
-      ? "Open Study Setup Wizard"
+      ? "Open Study Setup Agent"
       : firstIncompleteChecklistItem.id === "team"
       ? "Assign Team Members"
       : firstIncompleteChecklistItem.id === "timeline"
@@ -386,13 +526,46 @@ export default function TrialDetail() {
       ? "Set Trial Status"
       : "Review Profile in Themison AI"
     : nextOperationalTasks.length > 0
-    ? "Open Study Setup Wizard"
+    ? "Open Study Setup Agent"
     : "Open Themison AI";
   const launchReadyWithoutActivation = launchChecklist
     .filter((item) => item.id !== "activate-trial")
     .every((item) => item.done);
 
   const handleAiRecommendedAction = () => {
+    if (primarySuggestion) {
+      logEvent({
+        eventType: "ai_suggestion_applied",
+        action: "clicked",
+        entityType: "trial",
+        entityId: trialId,
+        payload: {
+          suggestionId: primarySuggestion.id,
+          target: primarySuggestion.actionTarget,
+          demoMode: currentDataMode,
+        },
+        aiInvolved: true,
+      });
+
+      if (primarySuggestion.actionTarget === "document-hub") {
+        setActiveTab("document-hub");
+        return;
+      }
+      if (primarySuggestion.actionTarget === "study-setup-wizard") {
+        setActiveTab("study-setup-wizard");
+        return;
+      }
+      if (primarySuggestion.actionTarget === "assistant") {
+        navigate(`/trial/${trialId}/assistant`);
+        return;
+      }
+      setActiveTab("overview");
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+
     if (!firstIncompleteChecklistItem) {
       if (nextOperationalTasks.length > 0) {
         setActiveTab("study-setup-wizard");
@@ -425,7 +598,164 @@ export default function TrialDetail() {
     }
   };
 
+  const formatDate = (value?: string | Date | null) => {
+    if (!value) return "Not available";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return String(value);
+    return parsed.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  };
+
+  const handleDeleteTrialFromSettings = async () => {
+    const displayName = trial?.investigationalProduct || trial?.title || trialId;
+    const confirmed = window.confirm(
+      `Delete "${displayName}"?\n\nThis will remove the trial and related sandbox data.`
+    );
+    if (!confirmed) return;
+    await deleteTrialMutation.mutateAsync({
+      id: trialId,
+      demoMode: currentDataMode,
+    });
+  };
+
+  const setupPhases = useMemo(() => {
+    if (mapPhases.length === 0) return [];
+    const taskById = new Map(mapTasks.map((task) => [task.id, task]));
+    const depsByTask = new Map<string, any[]>();
+    for (const dep of mapDependencies) {
+      const current = depsByTask.get(dep.targetTaskId) ?? [];
+      current.push({
+        ...dep,
+        sourceTaskName: taskById.get(dep.sourceTaskId)?.name || null,
+      });
+      depsByTask.set(dep.targetTaskId, current);
+    }
+
+    return [...mapPhases]
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((phase) => {
+        const phaseTasks = mapTasks
+          .filter((task) => task.phaseId === phase.id)
+          .sort((a, b) => a.orderInPhase - b.orderInPhase)
+          .map((task) => {
+            const firstRef = task.protocolRefs?.[0] as Record<string, any> | undefined;
+            const protocolPageRaw = firstRef?.page;
+            const protocolPage =
+              typeof protocolPageRaw === "number"
+                ? protocolPageRaw
+                : protocolPageRaw
+                ? Number(protocolPageRaw)
+                : null;
+            return {
+              id: task.id,
+              name: task.name,
+              suggestedDate: task.suggestedDate ? new Date(task.suggestedDate) : task.dueDate ? new Date(task.dueDate) : null,
+              suggestedAssigneeId: task.assignedUserId ?? null,
+              dependencies: depsByTask.get(task.id) ?? [],
+              status: task.status,
+              category: task.category,
+              assignedRole: task.assignedRole ?? null,
+              estimatedDuration: task.estimatedDuration ?? null,
+              priority: task.priority,
+              aiConfidence: task.aiConfidence ?? null,
+              conditionalNote: task.conditionalNote ?? null,
+              protocolReference: {
+                section: typeof firstRef?.section === "string" ? firstRef.section : null,
+                page: Number.isFinite(protocolPage as number) ? (protocolPage as number) : null,
+                extractedText:
+                  typeof firstRef?.extractedText === "string" ? firstRef.extractedText : null,
+              },
+            };
+          });
+        return {
+          id: phase.id,
+          name: phase.name,
+          color: phase.color,
+          tasks: phaseTasks,
+        };
+      });
+  }, [mapPhases, mapTasks, mapDependencies]);
+
+  const setupSections = useMemo(() => {
+    if (mapSections.length === 0) return [];
+    return [...mapSections]
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((section) => ({
+        id: section.id,
+        name: section.name,
+        dateReference: section.dateReference
+          ? new Date(section.dateReference).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          : null,
+        pageReference: section.pageStart ? `P.${section.pageStart}` : null,
+        pageStart: section.pageStart ?? null,
+        linkedTaskIds: section.linkedTaskIds ?? [],
+        linkedPhaseIds: section.linkedPhaseIds ?? [],
+      }));
+  }, [mapSections]);
+
+  const handleAddSetupTask = async () => {
+    if (!map?.id || setupPhases.length === 0) {
+      toast.error("No execution map loaded");
+      return;
+    }
+    const name = window.prompt("Task name");
+    if (!name || !name.trim()) return;
+    try {
+      await addExecutionTask(setupPhases[0].id, {
+        name: name.trim(),
+        createdBy: "user",
+        isCustom: true,
+        status: map.status === "active" ? "todo" : "suggested",
+        category: "custom",
+        priority: "medium",
+        protocolRefs: [],
+      });
+      toast.success("Task added");
+    } catch (error: any) {
+      toast.error(`Failed to add task: ${error?.message || "Unknown error"}`);
+    }
+  };
+
+  const handleEditSetupTask = async (taskId: string) => {
+    const task = mapTasks.find((row) => row.id === taskId);
+    if (!task) return;
+    const name = window.prompt("Edit task name", task.name);
+    if (!name || !name.trim() || name.trim() === task.name) return;
+    try {
+      await updateExecutionTask(taskId, { name: name.trim() });
+      toast.success("Task updated");
+    } catch (error: any) {
+      toast.error(`Failed to update task: ${error?.message || "Unknown error"}`);
+    }
+  };
+
+  const handleDeleteSetupTask = async (taskId: string) => {
+    const task = mapTasks.find((row) => row.id === taskId);
+    if (!task) return;
+    if (!window.confirm(`Delete task "${task.name}"?`)) return;
+    try {
+      await removeExecutionTask(taskId);
+      toast.success("Task deleted");
+    } catch (error: any) {
+      toast.error(`Failed to delete task: ${error?.message || "Unknown error"}`);
+    }
+  };
+
+  const handleLaunchExecutionMap = async () => {
+    try {
+      await launchExecutionMap();
+      await refetchExecutionMapSummary();
+      toast.success("Execution map launched");
+    } catch (error: any) {
+      toast.error(`Failed to launch map: ${error?.message || "Review suggested tasks first."}`);
+    }
+  };
+
   let mainContent: React.ReactNode = null;
+  const hasRenderableSetupMap = !!map?.id && setupPhases.length > 0 && mapTasks.length > 0;
 
   if (activeTab === "document-hub") {
     mainContent = (
@@ -434,23 +764,59 @@ export default function TrialDetail() {
       </div>
     );
   } else if (activeTab === "study-setup-wizard") {
-    mainContent = existingScaffold ? (
+    const isSyncingExecutionMap = importLegacyScaffold.isPending && !map?.id;
+    mainContent = hasRenderableSetupMap ? (
       <div className="px-6 pb-6">
         <TaskScaffoldView
-          phases={existingScaffold.phases || []}
-          sections={existingScaffold.sections || []}
-          onConfirm={() => undefined}
-          onAddTask={() => undefined}
-          onEditTask={() => undefined}
-          onDeleteTask={() => undefined}
+          phases={setupPhases}
+          sections={setupSections}
+          onConfirm={handleLaunchExecutionMap}
+          onAddTask={handleAddSetupTask}
+          onEditTask={handleEditSetupTask}
+          onDeleteTask={handleDeleteSetupTask}
+          onOpenProtocolPage={(page, sectionName) => {
+            const protocolDoc =
+              protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
+              protocols[0];
+            const url = protocolDoc?.fileUrl as string | undefined;
+            if (!url) {
+              toast.error("No protocol PDF available to open");
+              return;
+            }
+            const target = page && Number.isFinite(page) ? `${url}#page=${page}` : url;
+            window.open(target, "_blank", "noopener,noreferrer");
+            logEvent({
+              eventType: "document_section_accessed",
+              action: "open_source_from_protocol_map",
+              entityType: "protocol_section",
+              payload: {
+                sectionName,
+                page: page ?? null,
+                trialId,
+              },
+              aiInvolved: true,
+            });
+          }}
+          onReorderTasks={(phaseId, orderedTaskIds) => {
+            void reorderExecutionTasks(phaseId, orderedTaskIds).catch((error) => {
+              toast.error(`Failed to reorder tasks: ${error?.message || "Unknown error"}`);
+            });
+          }}
         />
       </div>
     ) : (
-      <div className="px-6 pb-6">
+      <div className="px-6 pb-6 space-y-3">
+        {isSyncingExecutionMap && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+            Syncing generated scaffold into the execution map...
+          </div>
+        )}
         <StudySetupWizardEntry
           trialId={trialId}
-          onGenerate={handleGenerateScaffold}
-          isGenerating={isGeneratingScaffold}
+          onGenerate={() => {
+            void handleGenerateScaffold();
+          }}
+          isGenerating={isGeneratingScaffold || isSyncingExecutionMap}
         />
       </div>
     );
@@ -587,6 +953,86 @@ export default function TrialDetail() {
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="text-base font-semibold text-gray-900">Notifications</h2>
           <p className="text-sm text-gray-500 mt-1">Trial-level alerts and reminders will appear here.</p>
+        </div>
+      </div>
+    );
+  } else if (activeTab === "settings") {
+    mainContent = (
+      <div className="px-6 pb-6 space-y-5">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Trial Settings</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage stable configuration and safety-critical actions for this trial.
+          </p>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Trial ID</p>
+              <p className="mt-1 font-medium text-gray-900">{trialId}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Data Mode</p>
+              <p className="mt-1 font-medium text-gray-900">{currentDataMode}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Created</p>
+              <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.createdAt)}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last Updated</p>
+              <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.updatedAt)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Workspace Controls</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Team assignment is managed in the Team tab. Document controls are managed in Document Hub.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("team")}>
+              Manage Team
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("document-hub")}>
+              Open Document Hub
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("overview")}>
+              Open Overview
+            </Button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-red-200 p-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
+            <div>
+              <h2 className="text-base font-semibold text-red-700">Danger Zone</h2>
+              <p className="text-sm text-red-600 mt-1">
+                Deleting a trial removes all associated sandbox data: documents, setup plan, and AI context snapshots.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 max-w-sm space-y-2">
+            <label className="text-sm font-medium text-gray-700">Type `DELETE` to enable</label>
+            <Input
+              value={deleteConfirmText}
+              onChange={(event) => setDeleteConfirmText(event.target.value)}
+              placeholder="Type DELETE"
+            />
+          </div>
+
+          <div className="mt-4">
+            <Button
+              onClick={handleDeleteTrialFromSettings}
+              disabled={deleteConfirmText !== "DELETE" || deleteTrialMutation.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {deleteTrialMutation.isPending ? "Deleting..." : "Delete Trial"}
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -735,7 +1181,27 @@ export default function TrialDetail() {
             </div>
 
             <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2">
-              <div className="text-[11px] uppercase tracking-wide font-semibold text-blue-700">Themison AI Recommendation</div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-wide font-semibold text-blue-700">
+                  Themison AI Recommendation
+                </div>
+                {primarySuggestion ? (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      primarySuggestion.priority === "high"
+                        ? "bg-red-100 text-red-700"
+                        : primarySuggestion.priority === "medium"
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-blue-100 text-blue-700"
+                    }`}
+                  >
+                    {primarySuggestion.priority}
+                  </span>
+                ) : null}
+              </div>
+              {primarySuggestion ? (
+                <p className="text-sm font-medium text-blue-900 mt-1">{primarySuggestion.title}</p>
+              ) : null}
               <p className="text-sm text-blue-800 mt-1">{aiRecommendation}</p>
             </div>
 
@@ -975,53 +1441,88 @@ export default function TrialDetail() {
           <div className="space-y-5">
             <div className="bg-white rounded-xl border border-gray-200 p-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-gray-900">
-                  {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
-                </h2>
-                {nextOperationalTasks.length > 0 ? (
-                  <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
-                    View plan
-                  </button>
+                <h2 className="text-sm font-semibold text-gray-900">Themison AI Signals</h2>
+                <span className="text-xs text-gray-500">{contextSuggestions.length} signals</span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {contextSuggestions.length > 0 ? (
+                  contextSuggestions.slice(0, 3).map((signal) => (
+                    <div key={signal.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium text-gray-900">{signal.title}</div>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                            signal.priority === "high"
+                              ? "bg-red-100 text-red-700"
+                              : signal.priority === "medium"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-blue-100 text-blue-700"
+                          }`}
+                        >
+                          {signal.priority}
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">{signal.description}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                    No active signals for this page right now.
+                  </div>
+                )}
+                {primarySuggestion ? (
+                  <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    {recommendedActionLabel}
+                  </Button>
                 ) : null}
               </div>
 
-              {nextOperationalTasks.length > 0 ? (
-                <div className="mt-3 space-y-2">
-                  {nextOperationalTasks.map((task: any, index: number) => (
-                    <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                      <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
-                      </div>
-                    </div>
-                  ))}
+              <div className="mt-5 border-t border-gray-200 pt-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-gray-900">
+                    {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
+                  </h3>
+                  {nextOperationalTasks.length > 0 ? (
+                    <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
+                      View plan
+                    </button>
+                  ) : null}
                 </div>
-              ) : (
-                <div className="mt-3 space-y-2">
-                  {launchChecklist.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
-                      <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
-                        {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+
+                {nextOperationalTasks.length > 0 ? (
+                  <div className="mt-3 space-y-2">
+                    {nextOperationalTasks.map((task: any, index: number) => (
+                      <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
+                        </div>
                       </div>
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">{item.title}</div>
-                        <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-2">
+                    {launchChecklist.map((item) => (
+                      <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
+                        <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
+                          {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                          <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                  {firstIncompleteChecklistItem ? (
-                    <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      {recommendedActionLabel}
-                    </Button>
-                  ) : (
-                    <Button variant="outline" size="sm" className="w-full mt-2" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      Open Themison AI
-                    </Button>
-                  )}
-                </div>
-              )}
+                    ))}
+                    {!primarySuggestion && firstIncompleteChecklistItem ? (
+                      <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                        <Sparkles className="h-4 w-4 mr-2" />
+                        {recommendedActionLabel}
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="bg-white rounded-xl border border-gray-200 p-6">

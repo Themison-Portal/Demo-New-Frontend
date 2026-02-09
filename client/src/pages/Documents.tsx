@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Plus,
@@ -46,19 +46,31 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"latest" | "oldest" | "name-asc" | "name-desc">("latest");
-  const [archivedDocIds, setArchivedDocIds] = useState<number[]>([]);
-  const [docReleaseDateById, setDocReleaseDateById] = useState<Record<number, string>>({});
 
   // Query documents
   const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery({
     trialId: trialId,
     demoMode: currentDataMode,
+    pageContext: "document-hub",
   });
 
   const { data: trial } = trpc.trials.getById.useQuery({
     id: trialId,
     demoMode: currentDataMode,
   });
+  const { data: trialContext } = trpc.trials.getContext.useQuery(
+    {
+      id: trialId,
+      demoMode: currentDataMode,
+      include: ["documents", "telemetry", "suggestions", "insights"],
+      pageContext: "document-hub",
+      emitTelemetry: true,
+    },
+    {
+      enabled: Boolean(trialId),
+      staleTime: 30000,
+    }
+  );
 
   // Query categories
   const { data: categories } = trpc.documents.getCategories.useQuery();
@@ -157,6 +169,40 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     },
   });
 
+  const updateControlMutation = trpc.documents.updateControl.useMutation({
+    onSuccess: () => {
+      refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "update_document_control",
+        entityType: "document",
+        payload: { trialId, demoMode: currentDataMode },
+      });
+    },
+    onError: (error: any) => {
+      toast.error("Failed to update document control", {
+        description: error.message,
+      });
+    },
+  });
+
+  const archiveMutation = trpc.documents.setArchived.useMutation({
+    onSuccess: () => {
+      refetch();
+      logEvent({
+        eventType: "feature_used",
+        action: "set_document_archive_state",
+        entityType: "document",
+        payload: { trialId, demoMode: currentDataMode },
+      });
+    },
+    onError: (error: any) => {
+      toast.error("Failed to update archive state", {
+        description: error.message,
+      });
+    },
+  });
+
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
@@ -184,6 +230,14 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
           filename: selectedFile.name,
           fileData: base64Data,
           category,
+          documentVersion:
+            category.toLowerCase() === "protocol" ? trial?.currentVersion || undefined : undefined,
+          amendmentVersion:
+            category.toLowerCase() === "protocol" ? trial?.amendmentVersion || undefined : undefined,
+          releaseDate:
+            category.toLowerCase() === "protocol" ? trial?.releaseDate || undefined : undefined,
+          markAsCurrent: category.toLowerCase() === "protocol",
+          sourceType: "manual",
           demoMode: currentDataMode,
         });
         setIsUploading(false);
@@ -212,64 +266,6 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     });
   };
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const key = `trial-doc-archive:${currentDataMode}:${trialId}`;
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        setArchivedDocIds([]);
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const normalized = parsed.filter((v) => Number.isInteger(v)) as number[];
-        setArchivedDocIds(normalized);
-      }
-    } catch {
-      setArchivedDocIds([]);
-    }
-  }, [currentDataMode, trialId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const key = `trial-doc-archive:${currentDataMode}:${trialId}`;
-    window.localStorage.setItem(key, JSON.stringify(archivedDocIds));
-  }, [archivedDocIds, currentDataMode, trialId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const key = `trial-doc-control:${currentDataMode}:${trialId}`;
-    try {
-      const raw = window.localStorage.getItem(key);
-      if (!raw) {
-        setDocReleaseDateById({});
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") {
-        setDocReleaseDateById({});
-        return;
-      }
-      const normalized = Object.entries(parsed).reduce<Record<number, string>>((acc, [k, v]) => {
-        const id = Number(k);
-        if (Number.isFinite(id) && typeof v === "string") {
-          acc[id] = v;
-        }
-        return acc;
-      }, {});
-      setDocReleaseDateById(normalized);
-    } catch {
-      setDocReleaseDateById({});
-    }
-  }, [currentDataMode, trialId]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const key = `trial-doc-control:${currentDataMode}:${trialId}`;
-    window.localStorage.setItem(key, JSON.stringify(docReleaseDateById));
-  }, [docReleaseDateById, currentDataMode, trialId]);
-
   const protocolDocsSorted = useMemo(() => {
     if (!documents?.length) return [];
     return [...documents]
@@ -291,6 +287,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const currentProtocolId = protocolDocsSorted.length
     ? protocolDocsSorted[protocolDocsSorted.length - 1].id
     : null;
+  const hasPersistedCurrentProtocol = protocolDocsSorted.some((doc: any) => Boolean(doc.isCurrent));
 
   const getAmendmentLabel = (filename: string) => {
     const match = filename.match(/(?:amendment|amd|amnd|rev(?:ision)?)[\s\-_]*([a-z0-9.]+)/i);
@@ -307,8 +304,8 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
 
   const filteredDocuments = useMemo(() => {
     const rows = [...(documents || [])];
-    const matchesTab = (docId: number) => {
-      const isArchived = archivedDocIds.includes(docId);
+    const matchesTab = (doc: any) => {
+      const isArchived = Boolean(doc.archivedAt);
       if (activeTab === "all") return true;
       if (activeTab === "archived") return isArchived;
       return !isArchived;
@@ -326,7 +323,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     };
 
     const filtered = rows.filter((doc) =>
-      matchesTab(doc.id) && matchesType(doc.category) && matchesSearch(doc)
+      matchesTab(doc) && matchesType(doc.category) && matchesSearch(doc)
     );
 
     filtered.sort((a: any, b: any) => {
@@ -343,11 +340,21 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     });
 
     return filtered;
-  }, [documents, archivedDocIds, activeTab, typeFilter, normalizedSearch, sortBy]);
+  }, [documents, activeTab, typeFilter, normalizedSearch, sortBy]);
 
   const latestProtocol = protocolDocsSorted.length
     ? protocolDocsSorted[protocolDocsSorted.length - 1]
     : null;
+  const contextDocuments = trialContext?.documents;
+  const contextTelemetry = trialContext?.telemetry;
+  const contextSignals = (trialContext?.suggestions || []).slice(0, 3);
+  const totalDocumentCount = contextDocuments?.total ?? documents?.length ?? 0;
+  const indexedDocumentCount =
+    contextDocuments?.indexed ??
+    (documents ? documents.filter((doc: any) => !!doc.isIndexed).length : 0);
+  const activeDocumentCount =
+    contextDocuments?.active ??
+    (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);
 
   return (
     <div className="space-y-4">
@@ -369,7 +376,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
               </span>
               <span>
                 Documents:{" "}
-                <span className="font-medium text-gray-900">{documents?.length || 0}</span>
+                <span className="font-medium text-gray-900">{totalDocumentCount}</span>
               </span>
             </div>
           </div>
@@ -394,6 +401,70 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
           </div>
         </div>
       </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">AI Readiness</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">
+            {activeDocumentCount > 0 ? Math.round((indexedDocumentCount / activeDocumentCount) * 100) : 0}%
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            {indexedDocumentCount} indexed of {activeDocumentCount} active documents
+          </p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Current Protocol</p>
+          <p className="mt-2 text-sm font-semibold text-gray-900">
+            {contextDocuments?.currentProtocol?.documentVersion || trial?.currentVersion || "Not set"}
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Release: {contextDocuments?.currentProtocol?.releaseDate || trial?.releaseDate || "Not set"}
+          </p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Activity Signals</p>
+          <p className="mt-2 text-2xl font-semibold text-gray-900">{contextTelemetry?.eventsLast7Days ?? 0}</p>
+          <p className="mt-1 text-xs text-gray-500">Events in the last 7 days</p>
+        </div>
+      </div>
+
+      {contextSignals.length > 0 ? (
+        <div className="rounded-lg border border-blue-100 bg-blue-50/40 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Themison AI Signals</p>
+          <div className="mt-2 grid gap-2">
+            {contextSignals.map((signal: any) => (
+              <div key={signal.id} className="flex items-start justify-between gap-4 rounded-md bg-white/80 border border-blue-100 px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{signal.title}</p>
+                  <p className="text-xs text-gray-600 mt-0.5">{signal.description}</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    logEvent({
+                      eventType: "ai_signal_clicked",
+                      action: "clicked",
+                      entityType: "trial",
+                      entityId: trialId,
+                      payload: { signalId: signal.id, target: signal.actionTarget, demoMode: currentDataMode },
+                      aiInvolved: true,
+                    });
+                    if (signal.actionTarget === "assistant") {
+                      navigate(`/trial/${trialId}/assistant`);
+                      return;
+                    }
+                    navigate(`/trial/${trialId}`);
+                  }}
+                >
+                  {signal.actionLabel}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="bg-white rounded-lg border border-gray-200">
         <div className="px-6 py-4 border-b border-gray-200 space-y-4">
@@ -561,7 +632,16 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                     ? "border-gray-900 text-gray-900 font-medium"
                     : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}
-                onClick={() => setActiveTab("active")}
+                onClick={() => {
+                  setActiveTab("active");
+                  logEvent({
+                    eventType: "document_tab_changed",
+                    action: "active",
+                    entityType: "trial",
+                    entityId: trialId,
+                    payload: { demoMode: currentDataMode },
+                  });
+                }}
               >
                 Active
               </button>
@@ -571,7 +651,16 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                     ? "border-gray-900 text-gray-900 font-medium"
                     : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}
-                onClick={() => setActiveTab("archived")}
+                onClick={() => {
+                  setActiveTab("archived");
+                  logEvent({
+                    eventType: "document_tab_changed",
+                    action: "archived",
+                    entityType: "trial",
+                    entityId: trialId,
+                    payload: { demoMode: currentDataMode },
+                  });
+                }}
               >
                 Archived
               </button>
@@ -581,7 +670,16 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                     ? "border-gray-900 text-gray-900 font-medium"
                     : "border-transparent text-gray-500 hover:text-gray-700"
                 }`}
-                onClick={() => setActiveTab("all")}
+                onClick={() => {
+                  setActiveTab("all");
+                  logEvent({
+                    eventType: "document_tab_changed",
+                    action: "all",
+                    entityType: "trial",
+                    entityId: trialId,
+                    payload: { demoMode: currentDataMode },
+                  });
+                }}
               >
                 All Documents
               </button>
@@ -601,7 +699,17 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                 <ArrowUpDown className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
                   value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as any)}
+                  onChange={(e) => {
+                    const nextSort = e.target.value as "latest" | "oldest" | "name-asc" | "name-desc";
+                    setSortBy(nextSort);
+                    logEvent({
+                      eventType: "document_sort_changed",
+                      action: "changed",
+                      entityType: "trial",
+                      entityId: trialId,
+                      payload: { sortBy: nextSort, demoMode: currentDataMode },
+                    });
+                  }}
                   className="h-9 rounded-md border border-gray-200 pl-9 pr-8 text-sm bg-white"
                 >
                   <option value="latest">Latest</option>
@@ -614,7 +722,17 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                 <Filter className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <select
                   value={typeFilter}
-                  onChange={(e) => setTypeFilter(e.target.value)}
+                  onChange={(e) => {
+                    const nextFilter = e.target.value;
+                    setTypeFilter(nextFilter);
+                    logEvent({
+                      eventType: "document_type_filter_changed",
+                      action: "changed",
+                      entityType: "trial",
+                      entityId: trialId,
+                      payload: { typeFilter: nextFilter, demoMode: currentDataMode },
+                    });
+                  }}
                   className="h-9 rounded-md border border-gray-200 pl-9 pr-8 text-sm bg-white"
                 >
                   <option value="all">All Types</option>
@@ -666,12 +784,14 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
               ) : filteredDocuments.length > 0 ? (
                 filteredDocuments.map((doc: any) => {
                   const isProtocol = String(doc.category || "").toLowerCase() === "protocol";
-                  const versionLabel = isProtocol ? protocolVersionById[doc.id] || "v1" : "v1";
-                  const isCurrentProtocol = isProtocol && currentProtocolId === doc.id;
-                  const amendmentLabel = isProtocol ? getAmendmentLabel(doc.filename) : "-";
-                  const isArchived = archivedDocIds.includes(doc.id);
+                  const versionLabel = doc.documentVersion || (isProtocol ? protocolVersionById[doc.id] || "v1" : "v1");
+                  const isCurrentProtocol =
+                    isProtocol &&
+                    (Boolean(doc.isCurrent) || (!hasPersistedCurrentProtocol && currentProtocolId === doc.id));
+                  const amendmentLabel = doc.amendmentVersion || (isProtocol ? getAmendmentLabel(doc.filename) : "-");
+                  const isArchived = Boolean(doc.archivedAt);
                   const uploaderLabel = doc.uploaderName || (doc.uploadedBy ? `User ${doc.uploadedBy}` : "Unknown");
-                  const releaseValue = docReleaseDateById[doc.id] || (isProtocol ? (trial?.releaseDate || "") : "");
+                  const releaseValue = doc.releaseDate || (isProtocol ? (trial?.releaseDate || "") : "");
 
                   return (
                     <tr key={doc.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
@@ -725,10 +845,10 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                             <EditableField
                               value={releaseValue}
                               onSave={async (newValue) => {
-                                setDocReleaseDateById((prev) => ({
-                                  ...prev,
-                                  [doc.id]: newValue,
-                                }));
+                                await updateControlMutation.mutateAsync({
+                                  id: doc.id,
+                                  releaseDate: newValue,
+                                });
                               }}
                               emptyText="Add release date"
                               className="inline-flex"
@@ -773,7 +893,16 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => window.open(doc.fileUrl, "_blank", "noopener,noreferrer")}
+                            onClick={() => {
+                              logEvent({
+                                eventType: "document_viewed",
+                                action: "opened",
+                                entityType: "protocol",
+                                entityId: String(doc.id),
+                                payload: { trialId, filename: doc.filename, demoMode: currentDataMode },
+                              });
+                              window.open(doc.fileUrl, "_blank", "noopener,noreferrer");
+                            }}
                             className="h-8 w-8 p-0 text-gray-600 hover:text-gray-700 hover:bg-gray-100"
                             title="Open document"
                           >
@@ -783,11 +912,9 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                             variant="ghost"
                             size="sm"
                             onClick={() => {
-                              setArchivedDocIds((prev) => {
-                                if (prev.includes(doc.id)) {
-                                  return prev.filter((id) => id !== doc.id);
-                                }
-                                return [...prev, doc.id];
+                              archiveMutation.mutate({
+                                id: doc.id,
+                                archived: !isArchived,
                               });
                             }}
                             className="h-8 w-8 p-0 text-gray-600 hover:text-gray-700 hover:bg-gray-100"

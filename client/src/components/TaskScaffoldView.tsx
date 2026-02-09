@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Check, Plus, Calendar, User, Link as LinkIcon, Edit2, Trash2, GripVertical, AlertCircle, List, BarChart3, Workflow } from "lucide-react";
 import { toast } from "sonner";
@@ -22,26 +22,40 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 
 interface Task {
-  id: number;
+  id: string;
   name: string;
   suggestedDate: Date | null;
   suggestedAssigneeId: number | null;
-  dependencies: any[];
+  dependencies: Array<{ sourceTaskId?: string; targetTaskId?: string; sourceTaskName?: string | null }>;
   status: string;
+  category?: string | null;
+  assignedRole?: string | null;
+  estimatedDuration?: number | null;
+  priority?: "critical" | "high" | "medium" | "low" | null;
+  aiConfidence?: number | null;
+  conditionalNote?: string | null;
+  protocolReference?: {
+    section?: string | null;
+    page?: number | null;
+    extractedText?: string | null;
+  };
 }
 
 interface Phase {
-  id: number;
+  id: string;
   name: string;
   color: string;
   tasks: Task[];
 }
 
 interface ProtocolSection {
-  id: number;
+  id: string;
   name: string;
   dateReference: string | null;
   pageReference: string | null;
+  pageStart?: number | null;
+  linkedTaskIds?: string[];
+  linkedPhaseIds?: string[];
   children?: ProtocolSection[];
 }
 
@@ -50,12 +64,30 @@ interface TaskScaffoldViewProps {
   sections: ProtocolSection[];
   onConfirm: () => void;
   onAddTask: () => void;
-  onEditTask: (taskId: number) => void;
-  onDeleteTask: (taskId: number) => void;
+  onEditTask: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
+  onReorderTasks?: (phaseId: string, orderedTaskIds: string[]) => void;
+  onOpenProtocolPage?: (page: number | null | undefined, sectionName: string) => void;
 }
 
 // Sortable Section Component
-function SortableSection({ section, isSelected, onToggle, onEdit }: { section: ProtocolSection; isSelected: boolean; onToggle: () => void; onEdit: () => void }) {
+function SortableSection({
+  section,
+  isSelected,
+  linkedTaskCount,
+  linkedPhaseCount,
+  onToggle,
+  onEdit,
+  onOpenSource,
+}: {
+  section: ProtocolSection;
+  isSelected: boolean;
+  linkedTaskCount: number;
+  linkedPhaseCount: number;
+  onToggle: () => void;
+  onEdit: () => void;
+  onOpenSource?: () => void;
+}) {
   const {
     attributes,
     listeners,
@@ -73,7 +105,18 @@ function SortableSection({ section, isSelected, onToggle, onEdit }: { section: P
 
   return (
     <div ref={setNodeRef} style={style}>
-      <div className={`group flex items-center gap-2 py-2 rounded px-2 -mx-2 transition-colors ${isDragging ? 'bg-blue-100' : 'hover:bg-gray-50'}`}>
+      <div
+        className={`group flex items-center gap-2 py-2 rounded px-2 -mx-2 transition-colors border ${
+          isDragging
+            ? "bg-blue-100 border-blue-200"
+            : isSelected
+            ? "bg-blue-50 border-blue-100"
+            : "border-transparent hover:bg-gray-50"
+        }`}
+        title={`${linkedTaskCount} task${linkedTaskCount === 1 ? "" : "s"} across ${linkedPhaseCount} phase${
+          linkedPhaseCount === 1 ? "" : "s"
+        }`}
+      >
         <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
           <GripVertical className="h-4 w-4 text-gray-300" />
         </div>
@@ -85,14 +128,28 @@ function SortableSection({ section, isSelected, onToggle, onEdit }: { section: P
         />
         <div className="flex-1 flex items-center justify-between">
           <span className="text-sm text-gray-700">{section.name}</span>
-          {section.dateReference && (
-            <span className="text-xs text-gray-400">{section.dateReference}</span>
-          )}
-          {section.pageReference && (
-            <span className="text-xs text-gray-400">{section.pageReference}</span>
-          )}
+          <div className="flex items-center gap-2">
+            {linkedTaskCount > 0 ? (
+              <span className="text-[10px] font-medium bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full">
+                {linkedTaskCount} task{linkedTaskCount === 1 ? "" : "s"}
+              </span>
+            ) : null}
+            {section.dateReference && (
+              <span className="text-xs text-gray-400">{section.dateReference}</span>
+            )}
+            {section.pageReference && (
+              <span className="text-xs text-gray-400">{section.pageReference}</span>
+            )}
+          </div>
         </div>
-        <LinkIcon className="h-3.5 w-3.5 text-gray-400" />
+        <button
+          type="button"
+          onClick={onOpenSource}
+          className="p-1 rounded hover:bg-gray-100 transition-colors"
+          aria-label={`Open protocol source for ${section.name}`}
+        >
+          <LinkIcon className="h-3.5 w-3.5 text-gray-400" />
+        </button>
         <button
           onClick={onEdit}
           className="p-1 hover:bg-gray-200 rounded transition-colors opacity-0 group-hover:opacity-100"
@@ -106,7 +163,23 @@ function SortableSection({ section, isSelected, onToggle, onEdit }: { section: P
 }
 
 // Sortable Task Component
-function SortableTask({ task, phaseId, onEdit, onDelete }: { task: Task; phaseId: number; onEdit: () => void; onDelete: () => void }) {
+function SortableTask({
+  task,
+  phaseId,
+  onEdit,
+  onDelete,
+  onOpenSource,
+  highlightSource,
+  dependencyLabel,
+}: {
+  task: Task;
+  phaseId: string;
+  onEdit: () => void;
+  onDelete: () => void;
+  onOpenSource?: () => void;
+  highlightSource: boolean;
+  dependencyLabel?: string | null;
+}) {
   const {
     attributes,
     listeners,
@@ -114,7 +187,7 @@ function SortableTask({ task, phaseId, onEdit, onDelete }: { task: Task; phaseId
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: `${phaseId}-${task.id}` });
+  } = useSortable({ id: `${phaseId}::${task.id}` });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -123,18 +196,79 @@ function SortableTask({ task, phaseId, onEdit, onDelete }: { task: Task; phaseId
   };
 
   return (
-    <div ref={setNodeRef} style={style} className={`group flex items-center gap-3 py-3 px-4 bg-white rounded-lg border border-gray-200 transition-all ${isDragging ? 'shadow-lg' : 'hover:shadow-sm'}`}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group flex items-center gap-3 py-3 px-4 bg-white rounded-lg border transition-all ${
+        isDragging ? "shadow-lg border-blue-200" : highlightSource ? "border-blue-200 bg-blue-50/40" : "border-gray-200 hover:shadow-sm"
+      }`}
+    >
       <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
         <GripVertical className="h-4 w-4 text-gray-300" />
       </div>
       <div className="flex-1">
         <div className="text-sm text-gray-900">{task.name}</div>
-        {task.suggestedDate && (
-          <div className="flex items-center gap-1 mt-1 text-xs text-gray-500">
-            <Calendar className="h-3 w-3" />
-            {task.suggestedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-          </div>
-        )}
+        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-gray-500">
+          {task.assignedRole && (
+            <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+              <User className="h-3 w-3 mr-1" />
+              {task.assignedRole.replace(/_/g, " ").toUpperCase()}
+            </span>
+          )}
+          {typeof task.estimatedDuration === "number" && (
+            <span className="inline-flex items-center gap-1">
+              ⏱ {task.estimatedDuration} min
+            </span>
+          )}
+          {task.priority && (
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                task.priority === "critical"
+                  ? "bg-red-100 text-red-700"
+                  : task.priority === "high"
+                  ? "bg-orange-100 text-orange-700"
+                  : task.priority === "medium"
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {task.priority}
+            </span>
+          )}
+          {task.protocolReference?.section || task.protocolReference?.page ? (
+            <button
+              type="button"
+              onClick={onOpenSource}
+              className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+            >
+              <LinkIcon className="h-3 w-3" />
+              {task.protocolReference?.section || "Protocol"}
+              {task.protocolReference?.page ? ` · p.${task.protocolReference.page}` : ""}
+            </button>
+          ) : null}
+          {typeof task.aiConfidence === "number" ? (
+            <span className="inline-flex items-center gap-1">
+              ⚡ {task.aiConfidence.toFixed(2)}
+            </span>
+          ) : null}
+          {task.suggestedDate && (
+            <span className="inline-flex items-center gap-1">
+              <Calendar className="h-3 w-3" />
+              {task.suggestedDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            </span>
+          )}
+          {dependencyLabel ? <span>Depends on: {dependencyLabel}</span> : null}
+          {task.conditionalNote ? (
+            <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[11px] font-medium text-yellow-700">
+              ⚠ {task.conditionalNote}
+            </span>
+          ) : null}
+          {typeof task.aiConfidence === "number" && task.aiConfidence < 0.85 ? (
+            <span className="inline-flex items-center rounded-full bg-yellow-100 px-2 py-0.5 text-[11px] font-medium text-yellow-700">
+              ⚠ Needs review
+            </span>
+          ) : null}
+        </div>
       </div>
       <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
@@ -167,11 +301,27 @@ export function TaskScaffoldView({
   onAddTask,
   onEditTask,
   onDeleteTask,
+  onReorderTasks,
+  onOpenProtocolPage,
 }: TaskScaffoldViewProps) {
   const [activeView, setActiveView] = useState<"list" | "timeline" | "canvas">("list");
-  const [selectedSections, setSelectedSections] = useState<Set<number>>(new Set());
+  const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
   const [reorderedSections, setReorderedSections] = useState<ProtocolSection[]>(() => sections);
   const [reorderedPhases, setReorderedPhases] = useState<Phase[]>(() => phases);
+
+  useEffect(() => {
+    setReorderedSections(sections);
+  }, [sections]);
+
+  useEffect(() => {
+    setReorderedPhases(phases);
+  }, [phases]);
+
+  const normalize = (value: string | null | undefined) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -180,7 +330,7 @@ export function TaskScaffoldView({
     })
   );
 
-  const toggleSection = (sectionId: number) => {
+  const toggleSection = (sectionId: string) => {
     const newSelected = new Set(selectedSections);
     if (newSelected.has(sectionId)) {
       newSelected.delete(sectionId);
@@ -189,6 +339,87 @@ export function TaskScaffoldView({
     }
     setSelectedSections(newSelected);
   };
+
+  const sectionById = useMemo(() => new Map(reorderedSections.map((section) => [section.id, section])), [reorderedSections]);
+
+  const selectedSectionList = useMemo(
+    () => Array.from(selectedSections).map((id) => sectionById.get(id)).filter(Boolean) as ProtocolSection[],
+    [selectedSections, sectionById]
+  );
+
+  const selectedTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const section of selectedSectionList) {
+      for (const taskId of section.linkedTaskIds ?? []) ids.add(taskId);
+    }
+    return ids;
+  }, [selectedSectionList]);
+
+  const fallbackTaskMatchesSection = (task: Task, section: ProtocolSection) => {
+    const sectionName = normalize(section.name);
+    const taskSection = normalize(task.protocolReference?.section);
+    const taskName = normalize(task.name);
+    return (
+      (taskSection && (taskSection.includes(sectionName) || sectionName.includes(taskSection))) ||
+      taskName.includes(sectionName) ||
+      sectionName.includes(taskName)
+    );
+  };
+
+  const filteredPhases = useMemo(() => {
+    if (selectedSectionList.length === 0) return reorderedPhases;
+    return reorderedPhases.map((phase) => ({
+      ...phase,
+      tasks: phase.tasks.filter((task) => {
+        if (selectedTaskIds.size > 0) return selectedTaskIds.has(task.id);
+        return selectedSectionList.some((section) => fallbackTaskMatchesSection(task, section));
+      }),
+    }));
+  }, [reorderedPhases, selectedTaskIds, selectedSectionList]);
+
+  const visiblePhases = useMemo(
+    () => filteredPhases.filter((phase) => phase.tasks.length > 0),
+    [filteredPhases]
+  );
+
+  const totalTaskCount = useMemo(
+    () => reorderedPhases.reduce((sum, phase) => sum + phase.tasks.length, 0),
+    [reorderedPhases]
+  );
+  const visibleTaskCount = useMemo(
+    () => filteredPhases.reduce((sum, phase) => sum + phase.tasks.length, 0),
+    [filteredPhases]
+  );
+
+  const sectionTaskCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const section of reorderedSections) {
+      const explicit = section.linkedTaskIds?.length;
+      const count =
+        typeof explicit === "number" && explicit > 0
+          ? explicit
+          : reorderedPhases.reduce((sum, phase) => {
+              return (
+                sum +
+                phase.tasks.filter((task) => fallbackTaskMatchesSection(task, section)).length
+              );
+            }, 0);
+      counts.set(section.id, count);
+    }
+    return counts;
+  }, [reorderedSections, reorderedPhases, fallbackTaskMatchesSection]);
+
+  const timelineRows = useMemo(() => {
+    const rows = visiblePhases.flatMap((phase) =>
+      phase.tasks.map((task) => ({
+        task,
+        phaseName: phase.name,
+        ts: task.suggestedDate ? new Date(task.suggestedDate).getTime() : Number.MAX_SAFE_INTEGER,
+      }))
+    );
+    rows.sort((a, b) => a.ts - b.ts || a.phaseName.localeCompare(b.phaseName));
+    return rows;
+  }, [visiblePhases]);
 
   const handleSectionDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -217,8 +448,8 @@ export function TaskScaffoldView({
       const activeId = String(active.id);
       const overId = String(over.id);
       
-      const [activePhaseId, activeTaskId] = activeId.split('-').map(Number);
-      const [overPhaseId, overTaskId] = overId.split('-').map(Number);
+      const [activePhaseId, activeTaskId] = activeId.split("::");
+      const [overPhaseId, overTaskId] = overId.split("::");
 
       if (activePhaseId === overPhaseId) {
         setReorderedPhases((phases) => {
@@ -226,6 +457,10 @@ export function TaskScaffoldView({
             if (phase.id === activePhaseId) {
               const oldIndex = phase.tasks.findIndex((t) => t.id === activeTaskId);
               const newIndex = phase.tasks.findIndex((t) => t.id === overTaskId);
+              const reordered = arrayMove(phase.tasks, oldIndex, newIndex);
+              if (onReorderTasks) {
+                onReorderTasks(activePhaseId, reordered.map((task) => task.id));
+              }
               logEvent({
                 eventType: "feature_used",
                 action: "reorder_task",
@@ -234,7 +469,7 @@ export function TaskScaffoldView({
               });
               return {
                 ...phase,
-                tasks: arrayMove(phase.tasks, oldIndex, newIndex),
+                tasks: reordered,
               };
             }
             return phase;
@@ -246,14 +481,15 @@ export function TaskScaffoldView({
   };
 
   const getPhaseColor = (color: string) => {
+    if (color?.startsWith("#")) return color;
     const colorMap: Record<string, string> = {
-      blue: "bg-blue-500",
-      green: "bg-green-500",
-      yellow: "bg-yellow-500",
-      red: "bg-red-500",
-      purple: "bg-purple-500",
+      blue: "#3B82F6",
+      green: "#10B981",
+      yellow: "#F59E0B",
+      red: "#EF4444",
+      purple: "#8B5CF6",
     };
-    return colorMap[color] || "bg-gray-500";
+    return colorMap[color] || "#6B7280";
   };
 
   const handleViewChange = (next: "list" | "timeline" | "canvas") => {
@@ -266,12 +502,32 @@ export function TaskScaffoldView({
     });
   };
 
+  const sectionFilterBadges =
+    selectedSectionList.length > 0 ? (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-gray-500">Filtered by:</span>
+        {selectedSectionList.map((section) => (
+          <button
+            key={`filter-${section.id}`}
+            type="button"
+            onClick={() => toggleSection(section.id)}
+            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+          >
+            {section.name}
+            <span aria-hidden>×</span>
+          </button>
+        ))}
+      </div>
+    ) : null;
+
   return (
     <div className="flex gap-4 h-full">
       {/* Left Panel: Protocol Map */}
       <div className="w-80 bg-white rounded-lg border border-gray-200 p-6 overflow-y-auto">
         <h2 className="text-sm font-semibold text-gray-900 mb-1">Protocol Map</h2>
-        <p className="text-xs text-gray-500 mb-4">Click a section to filter timeline</p>
+        <p className="text-xs text-gray-500 mb-4">
+          Select sections to focus linked tasks across List, Timeline, and Canvas.
+        </p>
 
         <DndContext
           sensors={sensors}
@@ -288,7 +544,10 @@ export function TaskScaffoldView({
                   key={section.id}
                   section={section}
                   isSelected={selectedSections.has(section.id)}
+                  linkedTaskCount={sectionTaskCounts.get(section.id) ?? 0}
+                  linkedPhaseCount={section.linkedPhaseIds?.length ?? 0}
                   onToggle={() => toggleSection(section.id)}
+                  onOpenSource={() => onOpenProtocolPage?.(section.pageStart, section.name)}
                   onEdit={() => toast("Edit section: " + section.name)}
                 />
               ))}
@@ -386,18 +645,23 @@ export function TaskScaffoldView({
               onDragEnd={handleTaskDragEnd}
             >
               <div className="space-y-4">
-                {reorderedPhases.map((phase) => (
+                <div className="text-xs text-gray-500">
+                  Showing {visibleTaskCount} of {totalTaskCount} tasks
+                  {selectedSectionList.length > 0 ? " from selected protocol sections" : ""}
+                </div>
+                {sectionFilterBadges}
+                {visiblePhases.map((phase) => (
                   <div key={phase.id} className="space-y-3">
                     {/* Phase Header */}
                     <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${getPhaseColor(phase.color)}`} />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: getPhaseColor(phase.color) }} />
                       <h3 className="text-sm font-semibold text-gray-900">{phase.name}</h3>
                       <span className="text-xs text-gray-500">({phase.tasks.length})</span>
                     </div>
 
                     {/* Tasks */}
                     <SortableContext
-                      items={phase.tasks.map((t) => `${phase.id}-${t.id}`)}
+                      items={phase.tasks.map((t) => `${phase.id}::${t.id}`)}
                       strategy={verticalListSortingStrategy}
                     >
                       <div className="space-y-2">
@@ -406,6 +670,19 @@ export function TaskScaffoldView({
                             key={task.id}
                             task={task}
                             phaseId={phase.id}
+                            highlightSource={selectedTaskIds.size > 0 ? selectedTaskIds.has(task.id) : selectedSectionList.length > 0}
+                            dependencyLabel={
+                              task.dependencies?.length
+                                ? task.dependencies
+                                    .map((dep) => dep.sourceTaskName)
+                                    .filter(Boolean)
+                                    .slice(0, 2)
+                                    .join(", ")
+                                : null
+                            }
+                            onOpenSource={() =>
+                              onOpenProtocolPage?.(task.protocolReference?.page ?? null, task.protocolReference?.section || task.name)
+                            }
                             onEdit={() => {
                               logEvent({
                                 eventType: "task_edited",
@@ -430,27 +707,118 @@ export function TaskScaffoldView({
                     </SortableContext>
                   </div>
                 ))}
+                {visiblePhases.length === 0 && (
+                  <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
+                    No tasks are currently linked to the selected protocol sections.
+                  </div>
+                )}
               </div>
             </DndContext>
           )}
 
           {activeView === "timeline" && (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <div className="text-center">
-                <BarChart3 className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                <p>Timeline view coming soon</p>
+            <div className="space-y-3">
+              <div className="text-xs text-gray-500">
+                Showing {timelineRows.length} scheduled task{timelineRows.length === 1 ? "" : "s"} in timeline order.
               </div>
+              {sectionFilterBadges}
+              {timelineRows.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
+                  No scheduled tasks available for the selected protocol scope.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {timelineRows.map(({ task, phaseName }) => (
+                    <div key={`timeline-${task.id}`} className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{task.name}</div>
+                          <div className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-1.5">
+                            <span>{phaseName}</span>
+                            {(task.protocolReference?.section || task.protocolReference?.page) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenProtocolPage?.(
+                                    task.protocolReference?.page ?? null,
+                                    task.protocolReference?.section || task.name
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                              >
+                                <LinkIcon className="h-3 w-3" />
+                                {task.protocolReference?.section || "Protocol"}
+                                {task.protocolReference?.page ? ` · p.${task.protocolReference.page}` : ""}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-xs font-medium text-gray-600 whitespace-nowrap">
+                          {task.suggestedDate
+                            ? new Date(task.suggestedDate).toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              })
+                            : "No date"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
           {activeView === "canvas" && (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <div className="text-center">
-                <Workflow className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-                <p>Canvas view coming soon</p>
+            <div className="space-y-4">
+              <div className="text-xs text-gray-500">
+                Operational canvas of the same protocol-linked tasks, grouped by phase.
               </div>
+              {sectionFilterBadges}
+              {visiblePhases.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-600">
+                  No phase cards to show for the selected protocol sections.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {visiblePhases.map((phase) => (
+                    <div key={`canvas-${phase.id}`} className="rounded-lg border border-gray-200 bg-white p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: getPhaseColor(phase.color) }} />
+                        <h3 className="text-sm font-semibold text-gray-900">{phase.name}</h3>
+                        <span className="text-xs text-gray-500">({phase.tasks.length})</span>
+                      </div>
+                      <div className="space-y-2">
+                        {phase.tasks.map((task) => (
+                          <div key={`canvas-task-${task.id}`} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                            <div className="text-sm text-gray-900">{task.name}</div>
+                            {(task.protocolReference?.section || task.protocolReference?.page) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onOpenProtocolPage?.(
+                                    task.protocolReference?.page ?? null,
+                                    task.protocolReference?.section || task.name
+                                  )
+                                }
+                                className="mt-1 text-xs text-gray-500 inline-flex items-center gap-1 rounded px-1 py-0.5 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                              >
+                                <LinkIcon className="h-3 w-3" />
+                                {task.protocolReference?.section || "Protocol"}
+                                {task.protocolReference?.page ? ` · p.${task.protocolReference.page}` : ""}
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
+
         </div>
 
         {/* Warning Banner */}

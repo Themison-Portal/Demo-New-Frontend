@@ -1,8 +1,26 @@
 import { z } from "zod";
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { getDb } from "./db";
-import { trials } from "../drizzle/schema";
-import { eq, like, notLike } from "drizzle-orm";
+import {
+  trials,
+  protocols,
+  fileSearchDocuments,
+  fileSearchStores,
+  telemetryEvents,
+  taskScaffolds,
+  phases,
+  tasks,
+  taskDependencies,
+  phaseTransitions,
+  protocolSections,
+  protocolChunks,
+  aiFeatureSnapshots,
+  aiAnalyticsRollups,
+  aiTrainingExamples,
+  knowledgeGraphNodes,
+  knowledgeGraphEdges,
+} from "../drizzle/schema";
+import { and, desc, eq, inArray, like, notLike } from "drizzle-orm";
 import { toDemoId, serializeTrial, resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 
@@ -43,6 +61,550 @@ export const trialsRouter = router({
         .limit(1);
       
       return trial ? serializeTrial(trial) : null;
+    }),
+
+  // Get unified trial context for AI operations (v2 foundation payload)
+  getContext: publicProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        include: z
+          .array(z.enum(["trial", "documents", "telemetry", "execution", "suggestions", "insights"]))
+          .optional(),
+        pageContext: z.string().optional(),
+        emitTelemetry: z.boolean().optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedId = await resolveTrialId(db, mode, input.id, mode !== "building");
+      const include = new Set(
+        input.include ?? ["trial", "documents", "telemetry", "execution", "suggestions", "insights"]
+      );
+
+      const [trial] = await db
+        .select()
+        .from(trials)
+        .where(eq(trials.id, resolvedId))
+        .limit(1);
+
+      if (!trial) return null;
+
+      let documents: any = undefined;
+      let telemetry: any = undefined;
+      let execution: any = undefined;
+      let suggestions: any = undefined;
+      let insights: any = undefined;
+
+      let protocolRows: Array<any> = [];
+      const needsDocuments =
+        include.has("documents") ||
+        include.has("suggestions") ||
+        include.has("insights") ||
+        include.has("telemetry");
+      const needsTelemetry =
+        include.has("telemetry") || include.has("suggestions") || include.has("insights");
+      const needsExecution =
+        include.has("execution") || include.has("suggestions") || include.has("insights");
+
+      if (needsDocuments || needsExecution || needsTelemetry) {
+        try {
+          protocolRows = await db
+            .select()
+            .from(protocols)
+            .where(eq(protocols.trialId, resolvedId))
+            .orderBy(desc(protocols.createdAt));
+        } catch (error) {
+          console.warn("[trials.getContext] Unable to load protocol rows", error);
+        }
+      }
+
+      let documentStats = {
+        total: 0,
+        active: 0,
+        archived: 0,
+        indexed: 0,
+        processing: 0,
+        categories: {} as Record<string, number>,
+        latestUploadedAt: null as Date | null,
+        currentProtocol: null as any,
+        latestProtocolIndexed: false,
+      };
+      let indexedProtocolIds = new Set<number>();
+
+      if (include.has("documents") || include.has("suggestions") || include.has("insights")) {
+        try {
+          const protocolIds = protocolRows.map((doc) => doc.id);
+          indexedProtocolIds = protocolIds.length
+            ? new Set(
+                (
+                  await db
+                    .select({ protocolId: fileSearchDocuments.protocolId })
+                    .from(fileSearchDocuments)
+                    .where(inArray(fileSearchDocuments.protocolId, protocolIds))
+                ).map((row) => row.protocolId)
+              )
+            : new Set<number>();
+
+          const byCategory = protocolRows.reduce<Record<string, number>>((acc, doc) => {
+            const key = String(doc.category || "uncategorized").toLowerCase();
+            acc[key] = (acc[key] ?? 0) + 1;
+            return acc;
+          }, {});
+
+          const archived = protocolRows.filter((doc) => !!doc.archivedAt);
+          const active = protocolRows.filter((doc) => !doc.archivedAt);
+          const indexed = active.filter((doc) => indexedProtocolIds.has(doc.id));
+          const processing = active.filter((doc) => !indexedProtocolIds.has(doc.id));
+
+          const protocolDocs = protocolRows.filter(
+            (doc) => String(doc.category || "").toLowerCase() === "protocol"
+          );
+          const persistedCurrent = protocolDocs.find((doc) => !!doc.isCurrent && !doc.archivedAt);
+          const fallbackCurrent = protocolDocs.find((doc) => !doc.archivedAt) ?? protocolDocs[0];
+          const currentProtocol = persistedCurrent ?? fallbackCurrent ?? null;
+
+          documentStats = {
+            total: protocolRows.length,
+            active: active.length,
+            archived: archived.length,
+            indexed: indexed.length,
+            processing: processing.length,
+            categories: byCategory,
+            latestUploadedAt: protocolRows[0]?.createdAt ?? null,
+            currentProtocol: currentProtocol
+              ? {
+                  id: currentProtocol.id,
+                  filename: currentProtocol.filename,
+                  category: currentProtocol.category,
+                  documentVersion: currentProtocol.documentVersion,
+                  amendmentVersion: currentProtocol.amendmentVersion,
+                  releaseDate: currentProtocol.releaseDate,
+                  isCurrent: !!currentProtocol.isCurrent,
+                  createdAt: currentProtocol.createdAt,
+                }
+              : null,
+            latestProtocolIndexed: currentProtocol ? indexedProtocolIds.has(currentProtocol.id) : false,
+          };
+
+          if (include.has("documents")) {
+            documents = {
+              ...documentStats,
+              protocolCount: protocolDocs.length,
+              amendmentCount: byCategory["amendment"] ?? 0,
+            };
+          }
+        } catch (error) {
+          console.warn("[trials.getContext] Unable to build document context", error);
+          documentStats = {
+            total: 0,
+            active: 0,
+            archived: 0,
+            indexed: 0,
+            processing: 0,
+            categories: {},
+            latestUploadedAt: null,
+            currentProtocol: null,
+            latestProtocolIndexed: false,
+          };
+          if (include.has("documents")) {
+            documents = {
+              ...documentStats,
+              protocolCount: 0,
+              amendmentCount: 0,
+              unavailable: true,
+            };
+          }
+        }
+      }
+
+      let telemetryStats = {
+        totalEvents: 0,
+        eventsLast7Days: 0,
+        aiInvolvedEvents: 0,
+        aiUsageRate: 0,
+        byEventType: {} as Record<string, number>,
+        byAction: {} as Record<string, number>,
+        byEntityType: {} as Record<string, number>,
+        lastEventAt: null as Date | null,
+        recent: [] as any[],
+      };
+
+      if (needsTelemetry) {
+        try {
+          const relatedEntityIds = [resolvedId, ...protocolRows.map((row) => String(row.id))];
+          const trialEvents = await db
+            .select({
+              id: telemetryEvents.id,
+              eventType: telemetryEvents.eventType,
+              action: telemetryEvents.action,
+              aiInvolved: telemetryEvents.aiInvolved,
+              entityType: telemetryEvents.entityType,
+              entityId: telemetryEvents.entityId,
+              userId: telemetryEvents.userId,
+              timestamp: telemetryEvents.timestamp,
+            })
+            .from(telemetryEvents)
+            .where(
+              relatedEntityIds.length > 1
+                ? inArray(telemetryEvents.entityId, relatedEntityIds)
+                : eq(telemetryEvents.entityId, resolvedId)
+            )
+            .orderBy(desc(telemetryEvents.timestamp))
+            .limit(250);
+
+          const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+          const last7Days = trialEvents.filter((event) => {
+            const ts = event.timestamp ? new Date(event.timestamp).getTime() : 0;
+            return ts >= since;
+          });
+          const aiEvents = trialEvents.filter((event) => !!event.aiInvolved);
+
+          const byEventType = trialEvents.reduce<Record<string, number>>((acc, event) => {
+            acc[event.eventType] = (acc[event.eventType] ?? 0) + 1;
+            return acc;
+          }, {});
+          const byAction = trialEvents.reduce<Record<string, number>>((acc, event) => {
+            acc[event.action] = (acc[event.action] ?? 0) + 1;
+            return acc;
+          }, {});
+          const byEntityType = trialEvents.reduce<Record<string, number>>((acc, event) => {
+            const key = event.entityType ?? "unknown";
+            acc[key] = (acc[key] ?? 0) + 1;
+            return acc;
+          }, {});
+
+          telemetryStats = {
+            totalEvents: trialEvents.length,
+            eventsLast7Days: last7Days.length,
+            aiInvolvedEvents: aiEvents.length,
+            aiUsageRate: trialEvents.length
+              ? Number((aiEvents.length / trialEvents.length).toFixed(3))
+              : 0,
+            byEventType,
+            byAction,
+            byEntityType,
+            lastEventAt: trialEvents[0]?.timestamp ?? null,
+            recent: trialEvents.slice(0, 12),
+          };
+          if (include.has("telemetry")) {
+            telemetry = telemetryStats;
+          }
+        } catch (error) {
+          console.warn("[trials.getContext] Unable to build telemetry context", error);
+          telemetryStats = {
+            totalEvents: 0,
+            eventsLast7Days: 0,
+            aiInvolvedEvents: 0,
+            aiUsageRate: 0,
+            byEventType: {},
+            byAction: {},
+            byEntityType: {},
+            lastEventAt: null,
+            recent: [],
+          };
+          if (include.has("telemetry")) {
+            telemetry = {
+              ...telemetryStats,
+              unavailable: true,
+            };
+          }
+        }
+      }
+
+      let executionStats = {
+        scaffolds: 0,
+        phases: 0,
+        visitLikePhases: 0,
+        tasks: {
+          total: 0,
+          pending: 0,
+          completed: 0,
+          blocked: 0,
+          dueToday: 0,
+          progressPercent: 0,
+        },
+      };
+
+      if (needsExecution) {
+        try {
+          const scaffoldRows = await db
+            .select({
+              id: taskScaffolds.id,
+              status: taskScaffolds.status,
+            })
+            .from(taskScaffolds)
+            .where(eq(taskScaffolds.trialId, resolvedId));
+
+          const scaffoldIds = scaffoldRows.map((row) => row.id);
+          const phaseRows = scaffoldIds.length
+            ? await db
+                .select({
+                  id: phases.id,
+                  scaffoldId: phases.scaffoldId,
+                  name: phases.name,
+                })
+                .from(phases)
+                .where(inArray(phases.scaffoldId, scaffoldIds))
+            : [];
+
+          const phaseIds = phaseRows.map((row) => row.id);
+          const taskRows = phaseIds.length
+            ? await db
+                .select({
+                  id: tasks.id,
+                  phaseId: tasks.phaseId,
+                  name: tasks.name,
+                  suggestedDate: tasks.suggestedDate,
+                  status: tasks.status,
+                })
+                .from(tasks)
+                .where(inArray(tasks.phaseId, phaseIds))
+            : [];
+
+          const todayIso = new Date().toISOString().slice(0, 10);
+          const pendingTasks = taskRows.filter((task) => task.status === "pending").length;
+          const completedTasks = taskRows.filter((task) => task.status === "completed").length;
+          const blockedTasks = taskRows.filter((task) => task.status === "blocked").length;
+          const dueTodayTasks = taskRows.filter((task) => {
+            if (!task.suggestedDate || task.status === "completed") return false;
+            return new Date(task.suggestedDate).toISOString().slice(0, 10) === todayIso;
+          }).length;
+          const totalTasks = taskRows.length;
+          const progressPercent = totalTasks
+            ? Number(((completedTasks / totalTasks) * 100).toFixed(1))
+            : 0;
+
+          const visitLikePhases = phaseRows.filter((phase) =>
+            /(visit|screening|follow-up|baseline|eos|week)/i.test(phase.name)
+          );
+
+          executionStats = {
+            scaffolds: scaffoldRows.length,
+            phases: phaseRows.length,
+            visitLikePhases: visitLikePhases.length,
+            tasks: {
+              total: totalTasks,
+              pending: pendingTasks,
+              completed: completedTasks,
+              blocked: blockedTasks,
+              dueToday: dueTodayTasks,
+              progressPercent,
+            },
+          };
+          if (include.has("execution")) {
+            execution = executionStats;
+          }
+        } catch (error) {
+          console.warn("[trials.getContext] Unable to build execution context", error);
+          executionStats = {
+            scaffolds: 0,
+            phases: 0,
+            visitLikePhases: 0,
+            tasks: {
+              total: 0,
+              pending: 0,
+              completed: 0,
+              blocked: 0,
+              dueToday: 0,
+              progressPercent: 0,
+            },
+          };
+          if (include.has("execution")) {
+            execution = {
+              ...executionStats,
+              unavailable: true,
+            };
+          }
+        }
+      }
+
+      if (include.has("suggestions") || include.has("insights")) {
+        const draftSuggestions: Array<{
+          id: string;
+          category: "documents" | "execution" | "timeline" | "readiness" | "telemetry";
+          priority: "high" | "medium" | "low";
+          title: string;
+          description: string;
+          actionLabel: string;
+          actionTarget: "overview" | "document-hub" | "study-setup-wizard" | "assistant";
+          confidence: number;
+        }> = [];
+
+        if (documentStats.total === 0) {
+          draftSuggestions.push({
+            id: "upload_protocol",
+            category: "documents",
+            priority: "high",
+            title: "Protocol missing in Document Hub",
+            description: "Upload the protocol to enable retrieval, extraction traceability, and AI context.",
+            actionLabel: "Open Document Hub",
+            actionTarget: "document-hub",
+            confidence: 0.99,
+          });
+        } else if (documentStats.processing > 0) {
+          draftSuggestions.push({
+            id: "wait_for_indexing",
+            category: "documents",
+            priority: "high",
+            title: `${documentStats.processing} document(s) still indexing`,
+            description: "Themison AI will provide stronger guidance after indexing finishes.",
+            actionLabel: "Review Documents",
+            actionTarget: "document-hub",
+            confidence: 0.95,
+          });
+        }
+
+        if (executionStats.tasks.total === 0 && documentStats.total > 0) {
+          draftSuggestions.push({
+            id: "generate_study_setup",
+            category: "execution",
+            priority: "high",
+            title: "No execution plan generated yet",
+            description: "Run Study Setup Agent to convert protocol sections into actionable tasks.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.97,
+          });
+        }
+
+        if (!trial.startDate || !trial.endDate) {
+          draftSuggestions.push({
+            id: "set_trial_timeline",
+            category: "timeline",
+            priority: "medium",
+            title: "Timeline is incomplete",
+            description: "Set both start and end dates to activate schedule-based planning and alerts.",
+            actionLabel: "Set Dates in Overview",
+            actionTarget: "overview",
+            confidence: 0.92,
+          });
+        }
+
+        if ((trial.status || "not-started") === "not-started" && executionStats.tasks.total > 0) {
+          draftSuggestions.push({
+            id: "activate_trial",
+            category: "readiness",
+            priority: "medium",
+            title: "Trial is still not started",
+            description: "Activate when onboarding and core setup are complete to begin active tracking.",
+            actionLabel: "Review Trial Status",
+            actionTarget: "overview",
+            confidence: 0.82,
+          });
+        }
+
+        if (executionStats.tasks.blocked > 0) {
+          draftSuggestions.push({
+            id: "blocked_tasks",
+            category: "execution",
+            priority: "high",
+            title: `${executionStats.tasks.blocked} blocked task(s) detected`,
+            description: "Resolve blockers first to protect visit timelines and downstream dependencies.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.88,
+          });
+        }
+
+        if (telemetryStats.eventsLast7Days === 0) {
+          draftSuggestions.push({
+            id: "low_recent_activity",
+            category: "telemetry",
+            priority: "low",
+            title: "No recent operational activity detected",
+            description: "As the team uses tasks and documents, Themison AI recommendations become more precise.",
+            actionLabel: "Open Themison AI",
+            actionTarget: "assistant",
+            confidence: 0.7,
+          });
+        }
+
+        const priorityOrder = { high: 0, medium: 1, low: 2 } as const;
+        const rankedSuggestions = draftSuggestions.sort(
+          (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
+        );
+        const normalizedPageContext = String(input.pageContext || "").toLowerCase();
+        const pageCategoryFilters: Record<string, Array<"documents" | "execution" | "timeline" | "readiness" | "telemetry">> = {
+          // Overview is intentionally broad.
+          overview: ["documents", "execution", "timeline", "readiness", "telemetry"],
+          // Document Hub should only surface document-relevant signals.
+          "document-hub": ["documents"],
+          // Setup view should focus on execution readiness.
+          "study-setup-wizard": ["execution", "readiness", "documents"],
+        };
+        const allowedCategories = pageCategoryFilters[normalizedPageContext];
+        suggestions = allowedCategories
+          ? rankedSuggestions.filter((signal) => allowedCategories.includes(signal.category))
+          : rankedSuggestions;
+
+        const readinessParts = [
+          documentStats.total > 0,
+          documentStats.indexed > 0,
+          executionStats.tasks.total > 0,
+          Boolean(trial.startDate && trial.endDate),
+          (trial.status || "not-started") !== "not-started",
+        ];
+        const readinessScore = Math.round(
+          (readinessParts.filter(Boolean).length / readinessParts.length) * 100
+        );
+        const aiCoverageScore =
+          documentStats.active > 0
+            ? Math.round((documentStats.indexed / documentStats.active) * 100)
+            : 0;
+
+        insights = {
+          readinessScore,
+          aiCoverageScore,
+          blockedTaskRisk: executionStats.tasks.blocked > 0 ? "high" : "low",
+          pendingTaskLoad: executionStats.tasks.pending,
+          dueTodayTasks: executionStats.tasks.dueToday,
+          totalSignals: suggestions.length,
+        };
+      }
+
+      if (input.emitTelemetry) {
+        await logTelemetryEvent({
+          eventType: "trial_context_viewed",
+          action: "viewed",
+          userId: ctx.user ? String(ctx.user.id) : null,
+          entityType: "trial",
+          entityId: resolvedId,
+          payload: {
+            pageContext: input.pageContext ?? null,
+            include: Array.from(include),
+            suggestionCount: Array.isArray(suggestions) ? suggestions.length : 0,
+            documentTotal: documentStats.total,
+            executionTaskTotal: executionStats.tasks.total,
+            demoMode: mode,
+          },
+        });
+      }
+
+      return {
+        trial: include.has("trial") ? serializeTrial(trial) : undefined,
+        documents,
+        telemetry,
+        execution,
+        suggestions: include.has("suggestions") ? suggestions ?? [] : undefined,
+        insights:
+          include.has("insights")
+            ? insights ?? {
+                readinessScore: 0,
+                aiCoverageScore: 0,
+                blockedTaskRisk: "low",
+                pendingTaskLoad: 0,
+                dueTodayTasks: 0,
+                totalSignals: 0,
+              }
+            : undefined,
+        pageContext: input.pageContext ?? null,
+        generatedAt: new Date().toISOString(),
+        contextVersion: "v2",
+      };
     }),
 
   // List all trials
@@ -428,21 +990,96 @@ export const trialsRouter = router({
       id: z.string(),
       demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new Error("Database not available");
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedId = await resolveTrialId(db, mode, input.id, mode !== "building");
-      await db
-        .delete(trials)
-        .where(eq(trials.id, resolvedId));
+
+      const [existingTrial] = await db
+        .select({ id: trials.id, title: trials.title })
+        .from(trials)
+        .where(eq(trials.id, resolvedId))
+        .limit(1);
+
+      if (!existingTrial) {
+        return { success: true };
+      }
+
+      const protocolRows = await db
+        .select({ id: protocols.id })
+        .from(protocols)
+        .where(eq(protocols.trialId, resolvedId));
+      const protocolIds = protocolRows.map((row) => row.id);
+
+      const scaffoldRows = await db
+        .select({ id: taskScaffolds.id })
+        .from(taskScaffolds)
+        .where(eq(taskScaffolds.trialId, resolvedId));
+      const scaffoldIds = scaffoldRows.map((row) => row.id);
+
+      const phaseRows = scaffoldIds.length
+        ? await db
+            .select({ id: phases.id })
+            .from(phases)
+            .where(inArray(phases.scaffoldId, scaffoldIds))
+        : [];
+      const phaseIds = phaseRows.map((row) => row.id);
+
+      const taskRows = phaseIds.length
+        ? await db
+            .select({ id: tasks.id })
+            .from(tasks)
+            .where(inArray(tasks.phaseId, phaseIds))
+        : [];
+      const taskIds = taskRows.map((row) => row.id);
+
+      await db.transaction(async (tx) => {
+        if (taskIds.length > 0) {
+          await tx.delete(taskDependencies).where(inArray(taskDependencies.taskId, taskIds));
+          await tx.delete(taskDependencies).where(inArray(taskDependencies.dependsOnTaskId, taskIds));
+          await tx.delete(tasks).where(inArray(tasks.id, taskIds));
+        }
+
+        if (phaseIds.length > 0) {
+          await tx.delete(phaseTransitions).where(inArray(phaseTransitions.fromPhaseId, phaseIds));
+          await tx.delete(phaseTransitions).where(inArray(phaseTransitions.toPhaseId, phaseIds));
+          await tx.delete(phases).where(inArray(phases.id, phaseIds));
+        }
+
+        if (scaffoldIds.length > 0) {
+          await tx.delete(taskScaffolds).where(inArray(taskScaffolds.id, scaffoldIds));
+        }
+
+        if (protocolIds.length > 0) {
+          await tx.delete(protocolSections).where(inArray(protocolSections.protocolId, protocolIds));
+          await tx.delete(protocolChunks).where(inArray(protocolChunks.protocolId, protocolIds));
+          await tx.delete(fileSearchDocuments).where(inArray(fileSearchDocuments.protocolId, protocolIds));
+          await tx
+            .delete(telemetryEvents)
+            .where(inArray(telemetryEvents.entityId, protocolIds.map((id) => String(id))));
+        }
+
+        await tx.delete(protocols).where(eq(protocols.trialId, resolvedId));
+        await tx.delete(fileSearchStores).where(eq(fileSearchStores.trialId, resolvedId));
+
+        await tx.delete(aiFeatureSnapshots).where(eq(aiFeatureSnapshots.trialId, resolvedId));
+        await tx.delete(aiAnalyticsRollups).where(eq(aiAnalyticsRollups.trialId, resolvedId));
+        await tx.delete(aiTrainingExamples).where(eq(aiTrainingExamples.trialId, resolvedId));
+        await tx.delete(knowledgeGraphNodes).where(eq(knowledgeGraphNodes.trialId, resolvedId));
+        await tx.delete(knowledgeGraphEdges).where(eq(knowledgeGraphEdges.trialId, resolvedId));
+
+        await tx.delete(telemetryEvents).where(eq(telemetryEvents.entityId, resolvedId));
+        await tx.delete(trials).where(eq(trials.id, resolvedId));
+      });
 
       await logTelemetryEvent({
         eventType: "trial_deleted",
         action: "deleted",
+        userId: String(ctx.user.id),
         entityType: "trial",
         entityId: resolvedId,
-        payload: { demoMode: mode },
+        payload: { demoMode: mode, title: existingTrial.title },
       });
 
       return { success: true };

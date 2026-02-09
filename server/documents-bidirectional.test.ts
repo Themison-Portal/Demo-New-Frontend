@@ -26,7 +26,7 @@ describe("Bidirectional Document Synchronization", () => {
     }
   });
 
-  it("should show documents uploaded in Document Hub in the Study Setup Wizard", async () => {
+  it("should show documents uploaded in Document Hub in the Study Setup Agent", async () => {
     const caller = appRouter.createCaller(createTestContext());
 
     // Upload different document types via Document Hub

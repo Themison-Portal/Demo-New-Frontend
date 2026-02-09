@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { protocols, fileSearchStores, fileSearchDocuments, documentCategories, trials, users } from "../drizzle/schema";
-import { eq, like, notLike, inArray } from "drizzle-orm";
+import { protocols, fileSearchStores, fileSearchDocuments, documentCategories, trials, users, protocolChunks } from "../drizzle/schema";
+import { eq, like, notLike, inArray, and, or, desc } from "drizzle-orm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
 import { createVectorStore, uploadToVectorStore } from "./_core/openaiAssistant";
 import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
+import { ingestProtocolContextChunks } from "./_core/protocolContext";
 
 export const documentsRouter = router({
   list: publicProcedure
@@ -15,9 +16,11 @@ export const documentsRouter = router({
       z.object({
         trialId: z.string(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
+        pageContext: z.string().optional(),
+        emitTelemetry: z.boolean().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) {
         return [];
@@ -29,7 +32,8 @@ export const documentsRouter = router({
       let docs = await db
         .select()
         .from(protocols)
-        .where(eq(protocols.trialId, resolvedTrialId));
+        .where(eq(protocols.trialId, resolvedTrialId))
+        .orderBy(desc(protocols.createdAt));
 
       // Compatibility fallback for trials created before ID normalization fixes:
       // attempt to find protocol rows that were saved under an alternate trial ID variant.
@@ -38,7 +42,8 @@ export const documentsRouter = router({
         const prefixMatches = await db
           .select()
           .from(protocols)
-          .where(like(protocols.trialId, `${prefixedInputId}%`));
+          .where(like(protocols.trialId, `${prefixedInputId}%`))
+          .orderBy(desc(protocols.createdAt));
 
         if (prefixMatches.length > 0) {
           docs = prefixMatches;
@@ -48,7 +53,8 @@ export const documentsRouter = router({
             const suffixMatches = await db
               .select()
               .from(protocols)
-              .where(like(protocols.trialId, `${mode}:%-${suffixMatch[1]}`));
+              .where(like(protocols.trialId, `${mode}:%-${suffixMatch[1]}`))
+              .orderBy(desc(protocols.createdAt));
             if (suffixMatches.length > 0) {
               docs = suffixMatches;
             }
@@ -79,6 +85,18 @@ export const documentsRouter = router({
       }
 
       // Check File Search status for each document
+      const protocolIds = docs.map((doc) => doc.id);
+      const chunkRows = protocolIds.length
+        ? await db
+            .select({ protocolId: protocolChunks.protocolId })
+            .from(protocolChunks)
+            .where(inArray(protocolChunks.protocolId, protocolIds))
+        : [];
+      const chunkCountByProtocol = chunkRows.reduce<Record<number, number>>((acc, row) => {
+        acc[row.protocolId] = (acc[row.protocolId] ?? 0) + 1;
+        return acc;
+      }, {});
+
       const docsWithStatus = await Promise.all(
         docs.map(async (doc) => {
           const fileSearchDoc = await db
@@ -90,10 +108,29 @@ export const documentsRouter = router({
           return {
             ...doc,
             isIndexed: fileSearchDoc.length > 0,
+            contextIndexed: (chunkCountByProtocol[doc.id] ?? 0) > 0,
+            contextChunkCount: chunkCountByProtocol[doc.id] ?? 0,
             uploaderName: uploaderNameById.get(doc.uploadedBy) || `User ${doc.uploadedBy}`,
           };
         })
       );
+
+      if (input.emitTelemetry) {
+        await logTelemetryEvent({
+          eventType: "document_hub_viewed",
+          action: "viewed",
+          userId: ctx.user ? String(ctx.user.id) : null,
+          entityType: "trial",
+          entityId: resolvedTrialId,
+          payload: {
+            trialId: resolvedTrialId,
+            pageContext: input.pageContext ?? "document-hub",
+            totalDocuments: docsWithStatus.length,
+            indexedDocuments: docsWithStatus.filter((doc) => !!doc.isIndexed).length,
+            demoMode: mode,
+          },
+        });
+      }
 
       return docsWithStatus;
     }),
@@ -105,6 +142,12 @@ export const documentsRouter = router({
         filename: z.string(),
         fileData: z.string(), // base64 encoded
         category: z.string(),
+        documentVersion: z.string().max(50).optional(),
+        amendmentVersion: z.string().max(50).optional(),
+        releaseDate: z.string().max(50).optional(),
+        markAsCurrent: z.boolean().optional(),
+        sourceType: z.enum(["manual", "integration", "system"]).optional(),
+        sourceReference: z.string().max(255).optional(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
@@ -133,14 +176,80 @@ export const documentsRouter = router({
       const contentType = fileExtension === "pdf" ? "application/pdf" : "application/octet-stream";
       const { url } = await storagePut(fileKey, buffer, contentType);
 
+      const isProtocolCategory = input.category.toLowerCase() === "protocol";
+      const [trialMeta] = await db
+        .select({
+          currentVersion: trials.currentVersion,
+          amendmentVersion: trials.amendmentVersion,
+          releaseDate: trials.releaseDate,
+        })
+        .from(trials)
+        .where(eq(trials.id, resolvedTrialId))
+        .limit(1);
+
+      const parseVersionNumber = (value?: string | null) => {
+        if (!value) return 0;
+        const match = value.match(/(\d+)/);
+        const parsed = match ? Number.parseInt(match[1], 10) : 0;
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+
+      let nextAutoVersion = "v1";
+      if (isProtocolCategory) {
+        const existingProtocols = await db
+          .select({ documentVersion: protocols.documentVersion })
+          .from(protocols)
+          .where(
+            and(
+              eq(protocols.trialId, resolvedTrialId),
+              or(eq(protocols.category, "Protocol"), eq(protocols.category, "protocol"))
+            )
+          );
+        const maxVersion = existingProtocols.reduce((max, row) => {
+          const number = parseVersionNumber(row.documentVersion);
+          return number > max ? number : max;
+        }, 0);
+        nextAutoVersion = `v${maxVersion + 1}`;
+      }
+
+      const documentVersion =
+        input.documentVersion?.trim() ||
+        (isProtocolCategory ? trialMeta?.currentVersion || nextAutoVersion : undefined);
+      const amendmentVersion =
+        input.amendmentVersion?.trim() ||
+        (isProtocolCategory ? trialMeta?.amendmentVersion || undefined : undefined);
+      const releaseDate =
+        input.releaseDate?.trim() ||
+        (isProtocolCategory ? trialMeta?.releaseDate || undefined : undefined);
+      const markAsCurrent = isProtocolCategory ? (input.markAsCurrent ?? true) : false;
+
+      if (markAsCurrent) {
+        await db
+          .update(protocols)
+          .set({ isCurrent: false })
+          .where(
+            and(
+              eq(protocols.trialId, resolvedTrialId),
+              or(eq(protocols.category, "Protocol"), eq(protocols.category, "protocol"))
+            )
+          );
+      }
+
       // Save to database
-      const result = await db.insert(protocols).values({
+      await db.insert(protocols).values({
         trialId: resolvedTrialId,
         filename: input.filename,
         fileUrl: url,
         fileKey,
         fileSize,
         category: input.category,
+        documentVersion,
+        amendmentVersion,
+        releaseDate,
+        isCurrent: markAsCurrent,
+        archivedAt: null,
+        sourceType: input.sourceType ?? "manual",
+        sourceReference: input.sourceReference ?? null,
         uploadedBy: ctx.user.id,
         createdAt: new Date(),
       });
@@ -154,6 +263,11 @@ export const documentsRouter = router({
         payload: {
           filename: input.filename,
           category: input.category,
+          documentVersion,
+          amendmentVersion,
+          releaseDate,
+          isCurrent: markAsCurrent,
+          sourceType: input.sourceType ?? "manual",
           trialId: resolvedTrialId,
           demoMode: mode,
         },
@@ -172,6 +286,63 @@ export const documentsRouter = router({
       if (protocolId) {
         // Run in background
         (async () => {
+          try {
+            await logTelemetryEvent({
+              eventType: "document_context_index_started",
+              action: "started",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+
+            const chunkResult = await ingestProtocolContextChunks({
+              protocolId,
+              forceRefresh: true,
+            });
+
+            await logTelemetryEvent({
+              eventType: "document_context_index_completed",
+              action: "completed",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                chunksCreated: chunkResult.created,
+                reused: chunkResult.reused,
+                pageCount: chunkResult.pageCount,
+                wordCount: chunkResult.wordCount,
+                hasStructuredSchedule: chunkResult.hasStructuredSchedule,
+                embeddingCount: chunkResult.embeddingCount,
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+          } catch (error) {
+            console.error(`❌ Failed to parse ${input.filename} into context chunks:`, error);
+            await logTelemetryEvent({
+              eventType: "document_context_index_failed",
+              action: "failed",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                reason: error instanceof Error ? error.message : String(error),
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+          }
+
           try {
             // Get or create File Search Store for this trial
             let store = await db
@@ -284,6 +455,117 @@ export const documentsRouter = router({
       return { success: true };
     }),
 
+  updateControl: protectedProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        documentVersion: z.string().max(50).optional(),
+        amendmentVersion: z.string().max(50).optional(),
+        releaseDate: z.string().max(50).optional(),
+        isCurrent: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) {
+        throw new Error("Database not available");
+      }
+
+      const [doc] = await db
+        .select()
+        .from(protocols)
+        .where(eq(protocols.id, input.id))
+        .limit(1);
+
+      if (!doc) {
+        throw new Error("Document not found");
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (input.documentVersion !== undefined) updates.documentVersion = input.documentVersion;
+      if (input.amendmentVersion !== undefined) updates.amendmentVersion = input.amendmentVersion;
+      if (input.releaseDate !== undefined) updates.releaseDate = input.releaseDate;
+      if (input.isCurrent !== undefined) updates.isCurrent = input.isCurrent;
+
+      if (Object.keys(updates).length === 0) {
+        return { success: true };
+      }
+
+      if (input.isCurrent === true) {
+        await db
+          .update(protocols)
+          .set({ isCurrent: false })
+          .where(
+            and(
+              eq(protocols.trialId, doc.trialId),
+              or(eq(protocols.category, "Protocol"), eq(protocols.category, "protocol"))
+            )
+          );
+      }
+
+      await db
+        .update(protocols)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(protocols.id, input.id));
+
+      await logTelemetryEvent({
+        eventType: "document_control_updated",
+        action: "edited",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(input.id),
+        payload: updates,
+      });
+
+      return { success: true };
+    }),
+
+  setArchived: protectedProcedure
+    .input(
+      z.object({
+        id: z.number(),
+        archived: z.boolean(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) {
+        throw new Error("Database not available");
+      }
+
+      const [doc] = await db
+        .select()
+        .from(protocols)
+        .where(eq(protocols.id, input.id))
+        .limit(1);
+
+      if (!doc) {
+        throw new Error("Document not found");
+      }
+
+      await db
+        .update(protocols)
+        .set({
+          archivedAt: input.archived ? new Date() : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(protocols.id, input.id));
+
+      await logTelemetryEvent({
+        eventType: input.archived ? "document_archived" : "document_restored",
+        action: input.archived ? "archived" : "restored",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(input.id),
+        payload: { trialId: doc.trialId },
+      });
+
+      return { success: true };
+    }),
+
   retryProcessing: protectedProcedure
     .input(
       z.object({
@@ -370,6 +652,42 @@ export const documentsRouter = router({
         displayName: protocol.filename,
       });
 
+      try {
+        const chunkResult = await ingestProtocolContextChunks({
+          protocolId: protocol.id,
+          forceRefresh: false,
+        });
+        await logTelemetryEvent({
+          eventType: "document_context_index_completed",
+          action: "completed",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocol.id),
+          payload: {
+            trialId: protocol.trialId,
+            filename: protocol.filename,
+            chunksCreated: chunkResult.created,
+            reused: chunkResult.reused,
+            pageCount: chunkResult.pageCount,
+            wordCount: chunkResult.wordCount,
+            hasStructuredSchedule: chunkResult.hasStructuredSchedule,
+            embeddingCount: chunkResult.embeddingCount,
+          },
+          aiInvolved: true,
+        });
+      } catch (error) {
+        console.error(`❌ Failed to refresh local context for ${protocol.filename}:`, error);
+      }
+
+      await logTelemetryEvent({
+        eventType: "document_processing_retried",
+        action: "retry_processing",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(protocol.id),
+        payload: { trialId: protocol.trialId },
+      });
+
       return { success: true, message: "Document processed successfully" };
     }),
 
@@ -389,7 +707,7 @@ export const documentsRouter = router({
         name: z.string().min(1).max(100),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) {
         throw new Error("Database not available");
@@ -418,6 +736,15 @@ export const documentsRouter = router({
         .where(eq(documentCategories.name, input.name))
         .limit(1);
 
+      await logTelemetryEvent({
+        eventType: "document_category_created",
+        action: "created",
+        userId: String(ctx.user.id),
+        entityType: "document_category",
+        entityId: String(created[0]?.id ?? input.name),
+        payload: { name: input.name },
+      });
+
       return { success: true, category: created[0] };
     }),
 
@@ -428,17 +755,35 @@ export const documentsRouter = router({
         category: z.string().min(1).max(100),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) {
         throw new Error("Database not available");
       }
+
+      const [doc] = await db
+        .select()
+        .from(protocols)
+        .where(eq(protocols.id, input.id))
+        .limit(1);
 
       // Update the document category
       await db
         .update(protocols)
         .set({ category: input.category })
         .where(eq(protocols.id, input.id));
+
+      await logTelemetryEvent({
+        eventType: "document_category_updated",
+        action: "edited",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(input.id),
+        payload: {
+          category: input.category,
+          trialId: doc?.trialId ?? null,
+        },
+      });
 
       return { success: true };
     }),

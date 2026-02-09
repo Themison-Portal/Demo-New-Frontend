@@ -81,9 +81,17 @@ export function TrialCard({ trial }: TrialCardProps) {
   };
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={handleClick}
-      className="group relative bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-all duration-200 text-left w-full"
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleClick();
+        }
+      }}
+      className="group relative bg-card border border-border rounded-xl overflow-hidden hover:shadow-md transition-all duration-200 text-left w-full cursor-pointer"
     >
       {/* Header Image Section */}
       <div 
@@ -149,6 +157,6 @@ export function TrialCard({ trial }: TrialCardProps) {
           </div>
         </div>
       </div>
-    </button>
+    </div>
   );
 }

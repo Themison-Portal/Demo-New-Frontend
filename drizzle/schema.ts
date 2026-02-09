@@ -1,4 +1,16 @@
-import { int, json, mysqlEnum, mysqlTable, text, timestamp, varchar, boolean } from "drizzle-orm/mysql-core";
+import {
+  int,
+  json,
+  mysqlEnum,
+  mysqlTable,
+  text,
+  timestamp,
+  varchar,
+  boolean,
+  float,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -76,6 +88,13 @@ export const protocols = mysqlTable("protocols", {
   fileKey: varchar("fileKey", { length: 512 }).notNull(), // S3 key
   fileSize: int("fileSize").notNull(), // File size in bytes
   category: varchar("category", { length: 100 }).notNull(), // Protocols, Amendments, etc.
+  documentVersion: varchar("documentVersion", { length: 50 }),
+  amendmentVersion: varchar("amendmentVersion", { length: 50 }),
+  releaseDate: varchar("releaseDate", { length: 50 }),
+  isCurrent: boolean("isCurrent").default(false).notNull(),
+  archivedAt: timestamp("archivedAt"),
+  sourceType: varchar("sourceType", { length: 32 }).default("manual").notNull(), // manual | integration | system
+  sourceReference: varchar("sourceReference", { length: 255 }),
   uploadedBy: int("uploadedBy").notNull(), // User ID
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -184,6 +203,312 @@ export type ProtocolSection = typeof protocolSections.$inferSelect;
 export type InsertProtocolSection = typeof protocolSections.$inferInsert;
 
 /**
+ * ============================================================
+ * Map Foundation (single execution graph rendered by all views)
+ * ============================================================
+ */
+
+export const mapStatusEnum = mysqlEnum("map_status", ["draft", "active", "revised", "archived"]);
+export const phaseTypeEnum = mysqlEnum("phase_type", [
+  "screening",
+  "baseline",
+  "treatment_visit",
+  "follow_up",
+  "end_of_study",
+  "unscheduled",
+  "screen_fail",
+  "early_termination",
+  "custom",
+]);
+export const taskCategoryEnum = mysqlEnum("task_category", [
+  "consent",
+  "eligibility",
+  "lab_sample",
+  "vital_signs",
+  "imaging",
+  "drug_administration",
+  "assessment",
+  "questionnaire",
+  "data_entry",
+  "coordination",
+  "documentation",
+  "follow_up",
+  "safety_reporting",
+  "regulatory",
+  "custom",
+]);
+export const taskPriorityEnum = mysqlEnum("task_priority", ["critical", "high", "medium", "low"]);
+export const taskStatusEnum = mysqlEnum("task_status", [
+  "suggested",
+  "confirmed",
+  "todo",
+  "in_progress",
+  "blocked",
+  "waiting",
+  "done",
+  "skipped",
+  "cancelled",
+]);
+export const taskRoleEnum = mysqlEnum("task_role", [
+  "pi",
+  "sub_i",
+  "crc",
+  "nurse",
+  "pharmacist",
+  "lab_tech",
+  "data_manager",
+  "regulatory_coordinator",
+  "study_coordinator",
+  "custom",
+]);
+export const dependencyTypeEnum = mysqlEnum("dependency_type", [
+  "finish_to_start",
+  "start_to_start",
+  "finish_to_finish",
+  "concurrent",
+  "blocked_by",
+]);
+export const protocolMapSectionTypeEnum = mysqlEnum("protocol_map_section_type", [
+  "schedule",
+  "eligibility",
+  "procedure",
+  "safety",
+  "medication",
+  "randomization",
+  "lab",
+  "custom",
+]);
+
+/**
+ * execution_maps: top-level execution plan container per trial.
+ */
+export const executionMaps = mysqlTable(
+  "execution_maps",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    protocolId: int("protocolId").notNull(),
+    status: mapStatusEnum.default("draft").notNull(),
+    version: int("version").default(1).notNull(),
+    metadata: json("metadata").notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    launchedAt: timestamp("launchedAt"),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    trialIdx: index("idx_maps_trial").on(table.trialId),
+    statusIdx: index("idx_maps_status").on(table.status),
+  })
+);
+
+/**
+ * phases: grouped trial workflow units.
+ */
+export const mapPhases = mysqlTable(
+  "map_phases",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    mapId: varchar("mapId", { length: 36 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    phaseType: phaseTypeEnum.default("custom").notNull(),
+    displayOrder: int("displayOrder").notNull(),
+    color: varchar("color", { length: 7 }).default("#3B82F6").notNull(),
+    estimatedDate: timestamp("estimatedDate"),
+    windowStart: timestamp("windowStart"),
+    windowEnd: timestamp("windowEnd"),
+    protocolRef: json("protocolRef"),
+    canvasX: float("canvasX"),
+    canvasY: float("canvasY"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    mapOrderIdx: index("idx_map_phases_map_order").on(table.mapId, table.displayOrder),
+  })
+);
+
+/**
+ * phase transitions: patient journey edges between phases.
+ */
+export const mapPhaseTransitions = mysqlTable(
+  "map_phase_transitions",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    fromPhaseId: varchar("fromPhaseId", { length: 36 }).notNull(),
+    toPhaseId: varchar("toPhaseId", { length: 36 }).notNull(),
+    conditionLabel: varchar("conditionLabel", { length: 255 }),
+    isDefault: boolean("isDefault").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqueEdge: uniqueIndex("idx_map_transitions_unique").on(table.fromPhaseId, table.toPhaseId),
+    fromIdx: index("idx_map_transitions_from").on(table.fromPhaseId),
+    toIdx: index("idx_map_transitions_to").on(table.toPhaseId),
+  })
+);
+
+/**
+ * map tasks: sticky notes of execution.
+ */
+export const mapTasks = mysqlTable(
+  "map_tasks",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    phaseId: varchar("phaseId", { length: 36 }).notNull(),
+    mapId: varchar("mapId", { length: 36 }).notNull(),
+    name: varchar("name", { length: 500 }).notNull(),
+    description: text("description"),
+    category: taskCategoryEnum.default("custom").notNull(),
+    priority: taskPriorityEnum.default("medium").notNull(),
+    status: taskStatusEnum.default("suggested").notNull(),
+    blockedReason: text("blockedReason"),
+    blockedSince: timestamp("blockedSince"),
+    assignedRole: taskRoleEnum,
+    assignedUserId: int("assignedUserId"),
+    suggestedAssignee: varchar("suggestedAssignee", { length: 255 }),
+    suggestedDate: timestamp("suggestedDate"),
+    dueDate: timestamp("dueDate"),
+    estimatedDuration: int("estimatedDuration"),
+    startDate: timestamp("startDate"),
+    completedDate: timestamp("completedDate"),
+    orderInPhase: int("orderInPhase").default(0).notNull(),
+    canvasX: float("canvasX"),
+    canvasY: float("canvasY"),
+    createdBy: mysqlEnum("map_task_created_by", ["ai", "user"]).default("ai").notNull(),
+    aiConfidence: float("aiConfidence"),
+    conditionalNote: text("conditionalNote"),
+    isCustom: boolean("isCustom").default(false).notNull(),
+    tags: json("tags").notNull(),
+    protocolRefs: json("protocolRefs").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    phaseOrderIdx: index("idx_map_tasks_phase_order").on(table.phaseId, table.orderInPhase),
+    dateIdx: index("idx_map_tasks_dates").on(table.mapId, table.dueDate, table.suggestedDate),
+    statusIdx: index("idx_map_tasks_status").on(table.mapId, table.status),
+    assigneeIdx: index("idx_map_tasks_assignee").on(table.assignedUserId, table.status),
+    mapIdx: index("idx_map_tasks_map").on(table.mapId),
+  })
+);
+
+/**
+ * task dependency graph edges.
+ */
+export const mapTaskDependencies = mysqlTable(
+  "map_task_dependencies",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    sourceTaskId: varchar("sourceTaskId", { length: 36 }).notNull(),
+    targetTaskId: varchar("targetTaskId", { length: 36 }).notNull(),
+    dependencyType: dependencyTypeEnum.default("finish_to_start").notNull(),
+    conditionLabel: varchar("conditionLabel", { length: 255 }),
+    isCrossPhase: boolean("isCrossPhase").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    uniqueDep: uniqueIndex("idx_map_dependencies_unique").on(table.sourceTaskId, table.targetTaskId),
+    sourceIdx: index("idx_map_dependencies_source").on(table.sourceTaskId),
+    targetIdx: index("idx_map_dependencies_target").on(table.targetTaskId),
+  })
+);
+
+/**
+ * left-side protocol map sections with task/phase links.
+ */
+export const protocolMapSections = mysqlTable(
+  "protocol_map_sections",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    protocolId: int("protocolId").notNull(),
+    mapId: varchar("mapId", { length: 36 }).notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    sectionType: protocolMapSectionTypeEnum.default("custom").notNull(),
+    pageStart: int("pageStart"),
+    pageEnd: int("pageEnd"),
+    dateReference: timestamp("dateReference"),
+    parentSectionId: varchar("parentSectionId", { length: 36 }),
+    linkedPhaseIds: json("linkedPhaseIds").notNull(),
+    linkedTaskIds: json("linkedTaskIds").notNull(),
+    displayOrder: int("displayOrder").default(0).notNull(),
+    isChecked: boolean("isChecked").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    mapOrderIdx: index("idx_map_protocol_sections_map_order").on(table.mapId, table.displayOrder),
+    parentIdx: index("idx_map_protocol_sections_parent").on(table.parentSectionId),
+  })
+);
+
+/**
+ * high-resolution map telemetry events (data moat for map interactions).
+ */
+export const mapTelemetryEvents = mysqlTable(
+  "map_telemetry_events",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    mapId: varchar("mapId", { length: 36 }).notNull(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    eventType: varchar("eventType", { length: 100 }).notNull(),
+    userId: int("userId"),
+    targetId: varchar("targetId", { length: 36 }),
+    targetType: varchar("targetType", { length: 32 }),
+    payload: json("payload").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    mapTsIdx: index("idx_map_telemetry_map_ts").on(table.mapId, table.createdAt),
+    typeTsIdx: index("idx_map_telemetry_type_ts").on(table.eventType, table.createdAt),
+    trialTsIdx: index("idx_map_telemetry_trial_ts").on(table.trialId, table.createdAt),
+  })
+);
+
+export type ExecutionMap = typeof executionMaps.$inferSelect;
+export type InsertExecutionMap = typeof executionMaps.$inferInsert;
+
+export type MapPhase = typeof mapPhases.$inferSelect;
+export type InsertMapPhase = typeof mapPhases.$inferInsert;
+
+export type MapPhaseTransition = typeof mapPhaseTransitions.$inferSelect;
+export type InsertMapPhaseTransition = typeof mapPhaseTransitions.$inferInsert;
+
+export type MapTask = typeof mapTasks.$inferSelect;
+export type InsertMapTask = typeof mapTasks.$inferInsert;
+
+export type MapTaskDependency = typeof mapTaskDependencies.$inferSelect;
+export type InsertMapTaskDependency = typeof mapTaskDependencies.$inferInsert;
+
+export type ProtocolMapSection = typeof protocolMapSections.$inferSelect;
+export type InsertProtocolMapSection = typeof protocolMapSections.$inferInsert;
+
+export type MapTelemetryEvent = typeof mapTelemetryEvents.$inferSelect;
+export type InsertMapTelemetryEvent = typeof mapTelemetryEvents.$inferInsert;
+
+/**
+ * Protocol chunks - section-aware chunks for local context retrieval and citation grounding.
+ */
+export const protocolChunks = mysqlTable("protocolChunks", {
+  id: int("id").autoincrement().primaryKey(),
+  protocolId: int("protocolId").notNull(),
+  trialId: varchar("trialId", { length: 50 }).notNull(),
+  chunkIndex: int("chunkIndex").notNull(),
+  sectionType: varchar("sectionType", { length: 64 }).notNull(), // synopsis, visit, criteria, safety, etc.
+  sectionTitle: varchar("sectionTitle", { length: 255 }),
+  pageStart: int("pageStart"),
+  pageEnd: int("pageEnd"),
+  tokenEstimate: int("tokenEstimate"),
+  contentHash: varchar("contentHash", { length: 64 }).notNull(),
+  chunkText: text("chunkText").notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProtocolChunk = typeof protocolChunks.$inferSelect;
+export type InsertProtocolChunk = typeof protocolChunks.$inferInsert;
+
+/**
  * Vector Stores - tracks OpenAI Vector Stores (one per trial)
  * Each store is a managed vector database in OpenAI's cloud for RAG
  */
@@ -250,3 +575,98 @@ export const telemetryEvents = mysqlTable("telemetry_events", {
 
 export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
 export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;
+
+/**
+ * AI feature snapshots - model-ready trial features captured over time.
+ * Foundation for offline training and longitudinal analytics.
+ */
+export const aiFeatureSnapshots = mysqlTable("ai_feature_snapshots", {
+  id: int("id").autoincrement().primaryKey(),
+  trialId: varchar("trialId", { length: 50 }).notNull(),
+  snapshotDate: varchar("snapshotDate", { length: 10 }).notNull(), // YYYY-MM-DD
+  snapshotVersion: varchar("snapshotVersion", { length: 32 }).default("v1").notNull(),
+  featureVector: json("featureVector").notNull(),
+  readinessScore: int("readinessScore").default(0).notNull(),
+  riskScore: int("riskScore").default(0).notNull(),
+  aiCoverageScore: int("aiCoverageScore").default(0).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AiFeatureSnapshot = typeof aiFeatureSnapshots.$inferSelect;
+export type InsertAiFeatureSnapshot = typeof aiFeatureSnapshots.$inferInsert;
+
+/**
+ * AI analytics rollups - day-level operational rollups for cross-trial insights.
+ */
+export const aiAnalyticsRollups = mysqlTable("ai_analytics_rollups", {
+  id: int("id").autoincrement().primaryKey(),
+  trialId: varchar("trialId", { length: 50 }).notNull(),
+  rollupDate: varchar("rollupDate", { length: 10 }).notNull(), // YYYY-MM-DD
+  documentTotal: int("documentTotal").default(0).notNull(),
+  documentIndexed: int("documentIndexed").default(0).notNull(),
+  taskTotal: int("taskTotal").default(0).notNull(),
+  taskPending: int("taskPending").default(0).notNull(),
+  taskBlocked: int("taskBlocked").default(0).notNull(),
+  taskCompleted: int("taskCompleted").default(0).notNull(),
+  telemetryEvents7d: int("telemetryEvents7d").default(0).notNull(),
+  aiInvolvedEvents7d: int("aiInvolvedEvents7d").default(0).notNull(),
+  aiUsageRateBps: int("aiUsageRateBps").default(0).notNull(), // 0..10000
+  riskScore: int("riskScore").default(0).notNull(), // 0..100
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AiAnalyticsRollup = typeof aiAnalyticsRollups.$inferSelect;
+export type InsertAiAnalyticsRollup = typeof aiAnalyticsRollups.$inferInsert;
+
+/**
+ * AI training examples - captures supervised signals from user behavior and corrections.
+ */
+export const aiTrainingExamples = mysqlTable("ai_training_examples", {
+  id: int("id").autoincrement().primaryKey(),
+  sourceEventId: varchar("sourceEventId", { length: 36 }),
+  trialId: varchar("trialId", { length: 50 }),
+  userId: varchar("userId", { length: 64 }),
+  prompt: text("prompt"),
+  response: text("response"),
+  label: varchar("label", { length: 32 }).default("unknown").notNull(), // accepted|rejected|edited|unknown
+  correction: text("correction"),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AiTrainingExample = typeof aiTrainingExamples.$inferSelect;
+export type InsertAiTrainingExample = typeof aiTrainingExamples.$inferInsert;
+
+/**
+ * Knowledge graph nodes - persisted entities for graph queries.
+ */
+export const knowledgeGraphNodes = mysqlTable("knowledge_graph_nodes", {
+  id: int("id").autoincrement().primaryKey(),
+  trialId: varchar("trialId", { length: 50 }).notNull(),
+  nodeType: varchar("nodeType", { length: 64 }).notNull(),
+  nodeKey: varchar("nodeKey", { length: 191 }).notNull(),
+  displayName: varchar("displayName", { length: 255 }),
+  properties: json("properties"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type KnowledgeGraphNode = typeof knowledgeGraphNodes.$inferSelect;
+export type InsertKnowledgeGraphNode = typeof knowledgeGraphNodes.$inferInsert;
+
+/**
+ * Knowledge graph edges - persisted relationships between entities.
+ */
+export const knowledgeGraphEdges = mysqlTable("knowledge_graph_edges", {
+  id: int("id").autoincrement().primaryKey(),
+  trialId: varchar("trialId", { length: 50 }).notNull(),
+  edgeType: varchar("edgeType", { length: 64 }).notNull(),
+  fromNodeKey: varchar("fromNodeKey", { length: 191 }).notNull(),
+  toNodeKey: varchar("toNodeKey", { length: 191 }).notNull(),
+  properties: json("properties"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type KnowledgeGraphEdge = typeof knowledgeGraphEdges.$inferSelect;
+export type InsertKnowledgeGraphEdge = typeof knowledgeGraphEdges.$inferInsert;

@@ -7,9 +7,380 @@ import { type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { storagePut } from "./storage";
 import { randomUUID } from "crypto";
+import {
+  getProtocolContextChunks,
+  getStructuredScheduleOfActivities,
+  ingestProtocolContextChunks,
+  type StructuredSchedule,
+} from "./_core/protocolContext";
+
+const FALLBACK_SECTION_NAMES = [
+  "Schedule of Events",
+  "Inclusion / Exclusion",
+  "Dosing & Administration",
+  "Procedures & Assessments",
+  "Lab & Samples",
+  "Adverse Events & Safety",
+  "Concomitant Medications",
+];
+
+const FALLBACK_PHASE_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#06B6D4", "#EF4444", "#6366F1"];
+
+function normalizeToken(value: string | null | undefined) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function inferFallbackCategory(name: string) {
+  const text = normalizeToken(name);
+  if (/(consent)/.test(text)) return "consent";
+  if (/(inclusion|exclusion|eligib)/.test(text)) return "eligibility";
+  if (/(blood|sample|lab|cbc|chemistry|pk|biomarker|urine)/.test(text)) return "lab_sample";
+  if (/(vital|blood pressure|heart rate|temperature|weight|pulse)/.test(text)) return "vital_signs";
+  if (/(ct|mri|x ray|scan|imaging|recist)/.test(text)) return "imaging";
+  if (/(dose|dosing|drug|infusion|injection|administer|dispense)/.test(text)) return "drug_administration";
+  if (/(physical|ecg|assessment|exam|ecog)/.test(text)) return "assessment";
+  if (/(questionnaire|qol|pro)/.test(text)) return "questionnaire";
+  if (/(edc|crf|data entry|source data)/.test(text)) return "data_entry";
+  if (/(ae|sae|adverse|safety|observation)/.test(text)) return "safety_reporting";
+  if (/(irb|ethics|regulatory)/.test(text)) return "regulatory";
+  if (/(follow up|followup|termination)/.test(text)) return "follow_up";
+  if (/(schedule|coordination|randomization|irt)/.test(text)) return "coordination";
+  return "custom";
+}
+
+function inferFallbackRole(category: string, name: string) {
+  const text = normalizeToken(name);
+  if (category === "consent") return "pi";
+  if (category === "eligibility") return "crc";
+  if (category === "lab_sample") return "nurse";
+  if (category === "vital_signs") return "nurse";
+  if (category === "drug_administration") return /(prepare|dispense|accountability)/.test(text) ? "pharmacist" : "nurse";
+  if (category === "assessment") return /(medical|physical|ae|sae|exam)/.test(text) ? "pi" : "sub_i";
+  if (category === "data_entry") return "crc";
+  if (category === "coordination") return "crc";
+  if (category === "safety_reporting") return "pi";
+  if (category === "regulatory") return "regulatory_coordinator";
+  return "crc";
+}
+
+function inferFallbackDuration(category: string, name: string) {
+  const text = normalizeToken(name);
+  if (text.includes("informed consent")) return 45;
+  if (/(post dose observation|post-dose observation|observation)/.test(text)) return 60;
+  if (/(infusion)/.test(text)) return 120;
+  if (/(ecg)/.test(text)) return 12;
+  if (/(blood|sample|lab)/.test(text)) return 12;
+  if (/(data entry|edc|crf)/.test(text)) return 20;
+  const defaults: Record<string, number> = {
+    consent: 45,
+    eligibility: 20,
+    lab_sample: 12,
+    vital_signs: 8,
+    imaging: 45,
+    drug_administration: 30,
+    assessment: 20,
+    questionnaire: 12,
+    data_entry: 20,
+    coordination: 15,
+    documentation: 15,
+    follow_up: 20,
+    safety_reporting: 15,
+    regulatory: 30,
+    custom: 20,
+  };
+  return defaults[category] ?? 20;
+}
+
+function inferFallbackPriority(category: string, name: string) {
+  const text = normalizeToken(name);
+  if (/(informed consent|sae|serious adverse|drug administration|randomization)/.test(text)) return "critical";
+  if (["consent", "eligibility", "drug_administration", "lab_sample", "safety_reporting"].includes(category)) {
+    return "high";
+  }
+  return "medium";
+}
+
+function withActionVerb(name: string, category: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return "Complete task";
+  if (/^(obtain|verify|review|draw|collect|record|perform|administer|assess|complete|submit|schedule|notify|document|enter|monitor|prepare)\b/i.test(trimmed)) {
+    return trimmed;
+  }
+  const verbs: Record<string, string> = {
+    consent: "Obtain",
+    eligibility: "Verify",
+    lab_sample: "Collect",
+    vital_signs: "Record",
+    imaging: "Perform",
+    drug_administration: "Administer",
+    assessment: "Assess",
+    questionnaire: "Complete",
+    data_entry: "Enter",
+    coordination: "Schedule",
+    documentation: "Document",
+    follow_up: "Perform",
+    safety_reporting: "Assess",
+    regulatory: "Submit",
+    custom: "Complete",
+  };
+  const verb = verbs[category] ?? "Complete";
+  return `${verb} ${trimmed.charAt(0).toLowerCase()}${trimmed.slice(1)}`;
+}
+
+type FallbackTask = {
+  name: string;
+  suggestedDate: string | null;
+  estimatedDuration: number;
+  category: string;
+  assignedRole: string;
+  priority: "critical" | "high" | "medium" | "low";
+  protocolReference: {
+    section: string;
+    page: number | null;
+    extractedText: string | null;
+  };
+  aiConfidence: number;
+  conditionalNote: string | null;
+  dependencies: string[];
+};
+
+type FallbackPhase = {
+  name: string;
+  color: string;
+  tasks: FallbackTask[];
+  transitions: Array<{ toPhase: string; condition: string | null }>;
+};
+
+function buildFallbackScaffold(protocolFilename: string, schedule: StructuredSchedule | null) {
+  const pageRef = schedule?.sourcePages?.[0] ? `P.${schedule.sourcePages[0]}` : null;
+  const protocolSections = FALLBACK_SECTION_NAMES.map((name) => ({
+    name,
+    dateReference: null,
+    pageReference: pageRef,
+    children: [],
+  }));
+
+  const phaseNamesFromSchedule =
+    schedule?.visits
+      ?.map((visit) => String(visit.name || "").trim())
+      .filter((name) => name.length > 0) ?? [];
+  const uniqueSchedulePhases = Array.from(new Set(phaseNamesFromSchedule));
+  const visitPhases =
+    uniqueSchedulePhases.length > 0
+      ? uniqueSchedulePhases
+      : ["Screening", "Visit 1 - Baseline", "Visit 2 - Week 4", "End of Study"];
+
+  const footnoteMap = new Map((schedule?.footnotes ?? []).map((footnote) => [footnote.number, footnote.text]));
+
+  const phases: FallbackPhase[] = visitPhases.map((phaseName, index) => {
+    const normalizedPhase = normalizeToken(phaseName);
+    const visitEntries = (schedule?.entries ?? []).filter(
+      (entry) => entry.required && normalizeToken(entry.visit) === normalizedPhase
+    );
+    const tasks: FallbackTask[] = visitEntries.map((entry) => {
+      const baseName = withActionVerb(entry.procedure, inferFallbackCategory(entry.procedure));
+      const category = inferFallbackCategory(baseName);
+      const footnoteText = entry.footnoteRef ? footnoteMap.get(entry.footnoteRef) ?? null : null;
+      return {
+        name: baseName,
+        suggestedDate: null,
+        estimatedDuration: inferFallbackDuration(category, baseName),
+        category,
+        assignedRole: inferFallbackRole(category, baseName),
+        priority: inferFallbackPriority(category, baseName),
+        protocolReference: {
+          section: "Schedule of Activities",
+          page: schedule?.sourcePages?.[0] ?? null,
+          extractedText: `${entry.procedure} required at ${phaseName}`,
+        },
+        aiConfidence: entry.footnoteRef ? 0.88 : 0.95,
+        conditionalNote: footnoteText,
+        dependencies: [],
+      };
+    });
+
+    const addTaskIfMissing = (name: string, category?: string, priority?: "critical" | "high" | "medium" | "low") => {
+      const normalized = normalizeToken(name);
+      if (tasks.some((task) => normalizeToken(task.name) === normalized)) return;
+      const resolvedCategory = category || inferFallbackCategory(name);
+      tasks.push({
+        name: withActionVerb(name, resolvedCategory),
+        suggestedDate: null,
+        estimatedDuration: inferFallbackDuration(resolvedCategory, name),
+        category: resolvedCategory,
+        assignedRole: inferFallbackRole(resolvedCategory, name),
+        priority: priority || inferFallbackPriority(resolvedCategory, name),
+        protocolReference: {
+          section: "Protocol requirements",
+          page: schedule?.sourcePages?.[0] ?? null,
+          extractedText: null,
+        },
+        aiConfidence: 0.82,
+        conditionalNote: null,
+        dependencies: [],
+      });
+    };
+
+    if (normalizedPhase.includes("screen")) {
+      addTaskIfMissing("Obtain written informed consent", "consent", "critical");
+      addTaskIfMissing("Verify inclusion criteria", "eligibility", "critical");
+      addTaskIfMissing("Verify exclusion criteria", "eligibility", "critical");
+    }
+    if (normalizedPhase.includes("visit") || normalizedPhase.includes("cycle") || normalizedPhase.includes("baseline")) {
+      addTaskIfMissing("Assess adverse events since last visit", "safety_reporting", "critical");
+      addTaskIfMissing("Review concomitant medications", "assessment", "medium");
+      const hasDrugAdmin = tasks.some((task) => task.category === "drug_administration");
+      if (hasDrugAdmin) {
+        addTaskIfMissing("Record pre-dose vital signs", "vital_signs", "high");
+        addTaskIfMissing("Monitor post-dose observation", "safety_reporting", "high");
+      }
+    }
+    addTaskIfMissing(`Enter ${phaseName} data in EDC`, "data_entry", "medium");
+
+    return {
+      name: phaseName,
+      color: FALLBACK_PHASE_COLORS[index % FALLBACK_PHASE_COLORS.length],
+      tasks,
+      transitions: [],
+    };
+  });
+
+  phases.push({
+    name: "Screen Fail",
+    color: "#EF4444",
+    tasks: [
+      {
+        name: "Document screen failure reason",
+        suggestedDate: null,
+        estimatedDuration: 15,
+        category: "documentation",
+        assignedRole: "crc",
+        priority: "high",
+        protocolReference: { section: "Eligibility", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.86,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Notify sponsor of screen failure",
+        suggestedDate: null,
+        estimatedDuration: 10,
+        category: "coordination",
+        assignedRole: "crc",
+        priority: "high",
+        protocolReference: { section: "Protocol administration", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.84,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Close participant screening record",
+        suggestedDate: null,
+        estimatedDuration: 10,
+        category: "data_entry",
+        assignedRole: "crc",
+        priority: "medium",
+        protocolReference: { section: "Data management", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.84,
+        conditionalNote: null,
+        dependencies: [],
+      },
+    ],
+    transitions: [],
+  });
+
+  phases.push({
+    name: "Early Termination",
+    color: "#6366F1",
+    tasks: [
+      {
+        name: "Document reason for early termination",
+        suggestedDate: null,
+        estimatedDuration: 20,
+        category: "documentation",
+        assignedRole: "pi",
+        priority: "high",
+        protocolReference: { section: "Early termination", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.84,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Perform end-of-study assessments",
+        suggestedDate: null,
+        estimatedDuration: 30,
+        category: "assessment",
+        assignedRole: "pi",
+        priority: "high",
+        protocolReference: { section: "End-of-study", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.83,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Collect final blood samples",
+        suggestedDate: null,
+        estimatedDuration: 15,
+        category: "lab_sample",
+        assignedRole: "nurse",
+        priority: "high",
+        protocolReference: { section: "Laboratory", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.83,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Complete termination CRF in EDC",
+        suggestedDate: null,
+        estimatedDuration: 20,
+        category: "data_entry",
+        assignedRole: "crc",
+        priority: "medium",
+        protocolReference: { section: "Data management", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.83,
+        conditionalNote: null,
+        dependencies: [],
+      },
+      {
+        name: "Notify IRB and sponsor of termination",
+        suggestedDate: null,
+        estimatedDuration: 30,
+        category: "regulatory",
+        assignedRole: "regulatory_coordinator",
+        priority: "critical",
+        protocolReference: { section: "Regulatory reporting", page: schedule?.sourcePages?.[0] ?? null, extractedText: null },
+        aiConfidence: 0.82,
+        conditionalNote: null,
+        dependencies: [],
+      },
+    ],
+    transitions: [],
+  });
+
+  for (let i = 0; i < phases.length - 1; i += 1) {
+    const current = phases[i];
+    const next = phases[i + 1];
+    if (current.name === "Screen Fail" || current.name === "Early Termination") continue;
+    if (next.name === "Screen Fail" || next.name === "Early Termination") continue;
+    current.transitions = [{ toPhase: next.name, condition: null }];
+    if (normalizeToken(current.name).includes("screen")) {
+      current.transitions.push({ toPhase: "Screen Fail", condition: "Failed" });
+    }
+  }
+
+  return {
+    protocolSections,
+    phases,
+    source: "deterministic_fallback",
+    protocolFilename,
+  };
+}
 
 /**
- * Study Setup Wizard Router
+ * Study Setup Agent Router
  * Handles protocol analysis and task scaffold generation
  */
 export const studySetupWizardRouter = router({
@@ -160,6 +531,86 @@ ${protocolContent}`;
         tempFile: uploaded,
       };
     }),
+
+  /**
+   * Retrieve section-aware context chunks for protocol-grounded setup generation.
+   */
+  getProtocolContext: protectedProcedure
+    .input(
+      z.object({
+        protocolId: z.number(),
+        query: z.string().optional(),
+        sectionTypes: z.array(z.string()).optional(),
+        limit: z.number().min(1).max(20).optional(),
+        forceRefresh: z.boolean().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const protocol = await db.getProtocolById(input.protocolId);
+      if (!protocol) {
+        throw new Error("Protocol not found");
+      }
+      const protocolTrialId = protocol.trialId;
+      const hasPrefix = protocolTrialId.includes(":");
+      const matchesMode = protocolTrialId.startsWith(`${mode}:`);
+      const legacyAllowed = mode !== "building";
+      if ((hasPrefix && !matchesMode) || (!hasPrefix && !legacyAllowed)) {
+        throw new Error("Protocol does not belong to this demo mode");
+      }
+
+      const ingest = await ingestProtocolContextChunks({
+        protocolId: input.protocolId,
+        forceRefresh: input.forceRefresh ?? false,
+      });
+      const chunks = await getProtocolContextChunks({
+        protocolId: input.protocolId,
+        query: input.query,
+        sectionTypes: input.sectionTypes,
+        limit: input.limit ?? 6,
+      });
+
+      await logTelemetryEvent({
+        eventType: "protocol_context_retrieved",
+        action: "retrieved",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(input.protocolId),
+        payload: {
+          trialId: protocol.trialId,
+          query: input.query ?? null,
+          sectionTypes: input.sectionTypes ?? [],
+          returnedChunks: chunks.length,
+          createdChunks: ingest.created,
+          reused: ingest.reused,
+          pageCount: ingest.pageCount,
+          wordCount: ingest.wordCount,
+          hasStructuredSchedule: ingest.hasStructuredSchedule,
+          embeddingCount: ingest.embeddingCount,
+          demoMode: mode,
+        },
+        aiInvolved: true,
+      });
+
+      return {
+        protocol: {
+          id: protocol.id,
+          filename: protocol.filename,
+          trialId: protocol.trialId,
+        },
+        chunks,
+        stats: {
+          returned: chunks.length,
+        createdOnIngest: ingest.created,
+        reusedExisting: ingest.reused,
+        pageCount: ingest.pageCount,
+        wordCount: ingest.wordCount,
+        hasStructuredSchedule: ingest.hasStructuredSchedule,
+        embeddingCount: ingest.embeddingCount,
+      },
+    };
+    }),
   /**
    * Generate task scaffold from protocol
    * This is the AI-powered "Generate Execution Plan" button
@@ -205,24 +656,27 @@ ${protocolContent}`;
       }
 
       // Use AI to analyze protocol and generate task scaffold
-      const systemPrompt = `You are an expert clinical trial coordinator. Analyze the protocol document and generate a comprehensive task scaffold for executing the clinical trial.
+      const systemPrompt = `You are an expert clinical trial operations planner.
+Analyze the protocol and generate a complete study setup scaffold with actionable tasks.
 
-Your response MUST be valid JSON matching this structure:
+Each task must be operationally specific and include:
+- name (must start with an action verb)
+- category
+- assignedRole
+- estimatedDuration (minutes)
+- priority
+- protocolReference.section + protocolReference.page
+- aiConfidence (0-1)
+- conditionalNote (if applicable)
+
+Return ONLY valid JSON in this shape:
 {
   "protocolSections": [
     {
-      "name": "Schedule of activities",
-      "dateReference": "Mar 28",
-      "pageReference": null,
-      "children": [
-        { "name": "Screening", "dateReference": "Mar 28", "pageReference": null },
-        { "name": "Baseline / Visit 1", "pageReference": "P.2" }
-      ]
-    },
-    {
-      "name": "Inclusion / Exclusion",
-      "dateReference": "Apr 25",
-      "pageReference": null
+      "name": "Schedule of Events",
+      "dateReference": null,
+      "pageReference": "P.22",
+      "children": []
     }
   ],
   "phases": [
@@ -231,17 +685,19 @@ Your response MUST be valid JSON matching this structure:
       "color": "#3B82F6",
       "tasks": [
         {
-          "name": "Screen potential participants",
+          "name": "Obtain written informed consent",
           "suggestedDate": "2026-03-05",
-          "duration": 3,
-          "protocolSection": "Schedule of activities",
-          "protocolPage": 12,
-          "dependencies": []
-        },
-        {
-          "name": "Prep Screening tools & kits",
-          "suggestedDate": "2026-03-08",
-          "duration": 2,
+          "estimatedDuration": 45,
+          "category": "consent",
+          "assignedRole": "pi",
+          "priority": "critical",
+          "protocolReference": {
+            "section": "Schedule of Activities",
+            "page": 22,
+            "extractedText": "Informed Consent must be completed before screening procedures."
+          },
+          "aiConfidence": 0.95,
+          "conditionalNote": null,
           "dependencies": []
         }
       ],
@@ -253,11 +709,15 @@ Your response MUST be valid JSON matching this structure:
   ]
 }
 
-Generate realistic tasks based on typical clinical trial workflows. Include:
-- Protocol sections for the sidebar (Schedule of activities, Inclusion/Exclusion, Procedures, Lab & Samples, Adverse Events, Concomitant Medications, Randomization & Dosing)
-- Phases (Screening, Visit 1, Visit 2, etc.) with appropriate colors
-- Tasks with suggested dates, durations, and dependencies
-- Phase transitions showing workflow paths`;
+Rules:
+- Use realistic phase names from protocol schedule.
+- Use protocol sections for left-map navigation: Schedule of Events, Inclusion / Exclusion, Dosing & Administration, Procedures & Assessments, Lab & Samples, Adverse Events & Safety, Concomitant Medications.
+- Tasks must be precise (no vague labels like "Lab work").
+- Every visit phase must include a data-entry task.
+- Screening must include consent + inclusion/exclusion checks.
+- Include Screen Fail and Early Termination phases with key closeout tasks.
+- If drug administration exists in a phase, include pre-dose checks and post-dose observation.
+- Keep dependencies as task names referencing prior tasks in same phase or previous phases.`;
 
       // Extract text from the PDF
       let protocolContent = '';
@@ -269,25 +729,75 @@ Generate realistic tasks based on typical clinical trial workflows. Include:
         throw new Error('Failed to read protocol document. Please ensure the file is a valid PDF.');
       }
 
-      // Truncate if too long (keep first 50000 characters to stay within token limits)
-      const maxLength = 50000;
+      // Prepare section-aware context chunks first; this improves grounding for setup generation.
+      let contextChunks: Array<{
+        sectionType: string;
+        sectionTitle: string | null;
+        chunkText: string;
+        citation: { filename: string; sectionTitle: string | null; page: string };
+      }> = [];
+      try {
+        await ingestProtocolContextChunks({
+          protocolId,
+          forceRefresh: false,
+        });
+        contextChunks = await getProtocolContextChunks({
+          protocolId,
+          query:
+            "study design objectives endpoints visits schedule assessments procedures inclusion exclusion criteria dosing safety",
+          limit: 6,
+        });
+      } catch (error) {
+        console.warn("[studySetup] Failed to load protocol context chunks", error);
+      }
+
+      await logTelemetryEvent({
+        eventType: "execution_plan_context_prepared",
+        action: "prepared",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(protocolId),
+        payload: {
+          trialId: protocolTrialId,
+          contextChunkCount: contextChunks.length,
+          usedSectionAwareContext: contextChunks.length > 0,
+          demoMode: mode,
+        },
+        aiInvolved: true,
+      });
+
+      // Truncate if too long to stay within token limits.
+      // If we have context chunks, we can keep the raw protocol payload smaller.
+      const maxLength = contextChunks.length > 0 ? 16000 : 22000;
       if (protocolContent.length > maxLength) {
         protocolContent = protocolContent.substring(0, maxLength) + '\n\n[Content truncated due to length...]';
       }
 
+      const contextBlock = contextChunks
+        .map((chunk, index) => {
+          const title = chunk.sectionTitle || "Untitled section";
+          return `[Context Chunk ${index + 1}] ${title} (${chunk.sectionType}, ${chunk.citation.page})
+${chunk.chunkText.slice(0, 1400)}`;
+        })
+        .join("\n\n");
+
       const userPrompt = `Protocol Document: ${protocol.filename}
+
+Priority Context Chunks:
+${contextBlock || "[No pre-processed context chunks available]"}
 
 Protocol Content:
 ${protocolContent}
 
 Based on the protocol content above, generate a complete task scaffold for this clinical trial. Include all necessary phases, tasks, and dependencies.`;
 
-      const response = await invokeLLM({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        response_format: {
+      const invokeScaffoldLLM = async (prompt: string) =>
+        invokeLLM({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt },
+          ],
+          response_format: {
           type: "json_schema",
           json_schema: {
             name: "task_scaffold",
@@ -335,15 +845,75 @@ Based on the protocol content above, generate a complete task scaffold for this 
                           properties: {
                             name: { type: "string" },
                             suggestedDate: { type: ["string", "null"] },
-                            duration: { type: ["number", "null"] },
-                            protocolSection: { type: ["string", "null"] },
-                            protocolPage: { type: ["number", "null"] },
+                            estimatedDuration: { type: ["number", "null"] },
+                            category: {
+                              type: "string",
+                              enum: [
+                                "consent",
+                                "eligibility",
+                                "lab_sample",
+                                "vital_signs",
+                                "imaging",
+                                "drug_administration",
+                                "assessment",
+                                "questionnaire",
+                                "data_entry",
+                                "coordination",
+                                "documentation",
+                                "follow_up",
+                                "safety_reporting",
+                                "regulatory",
+                                "custom",
+                              ],
+                            },
+                            assignedRole: {
+                              type: ["string", "null"],
+                              enum: [
+                                "pi",
+                                "sub_i",
+                                "crc",
+                                "nurse",
+                                "pharmacist",
+                                "lab_tech",
+                                "data_manager",
+                                "regulatory_coordinator",
+                                "custom",
+                                null,
+                              ],
+                            },
+                            priority: {
+                              type: "string",
+                              enum: ["critical", "high", "medium", "low"],
+                            },
+                            protocolReference: {
+                              type: "object",
+                              properties: {
+                                section: { type: "string" },
+                                page: { type: ["number", "null"] },
+                                extractedText: { type: ["string", "null"] },
+                              },
+                              required: ["section", "page", "extractedText"],
+                              additionalProperties: false,
+                            },
+                            aiConfidence: { type: ["number", "null"] },
+                            conditionalNote: { type: ["string", "null"] },
                             dependencies: {
                               type: "array",
                               items: { type: "string" },
                             },
                           },
-                          required: ["name", "dependencies"],
+                          required: [
+                            "name",
+                            "suggestedDate",
+                            "estimatedDuration",
+                            "category",
+                            "assignedRole",
+                            "priority",
+                            "protocolReference",
+                            "aiConfidence",
+                            "conditionalNote",
+                            "dependencies",
+                          ],
                           additionalProperties: false,
                         },
                       },
@@ -372,12 +942,80 @@ Based on the protocol content above, generate a complete task scaffold for this 
         },
       });
 
-      const content = response.choices[0]?.message?.content;
-      if (!content || typeof content !== 'string') {
-        throw new Error("Failed to generate task scaffold");
+      const structuredSchedule = await getStructuredScheduleOfActivities(protocolId).catch(() => null);
+      let response;
+      let scaffoldData: any = null;
+      try {
+        response = await invokeScaffoldLLM(userPrompt);
+      } catch (error) {
+        const compactContextBlock = contextChunks
+          .slice(0, 3)
+          .map((chunk, index) => {
+            const title = chunk.sectionTitle || "Untitled section";
+            return `[Compact Context ${index + 1}] ${title} (${chunk.sectionType}, ${chunk.citation.page})
+${chunk.chunkText.slice(0, 700)}`;
+          })
+          .join("\n\n");
+
+        const compactPrompt = `Protocol Document: ${protocol.filename}
+
+Priority Context Chunks:
+${compactContextBlock || "[No pre-processed context chunks available]"}
+
+Protocol Content (compact fallback):
+${protocolContent.slice(0, 9000)}
+
+Generate the same JSON scaffold format, but prioritize correctness over completeness if content is limited.`;
+
+        await logTelemetryEvent({
+          eventType: "execution_plan_generation_retried",
+          action: "retry",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocolId),
+          payload: {
+            trialId: protocolTrialId,
+            reason: error instanceof Error ? error.message : String(error),
+            mode: "compact_fallback",
+            demoMode: mode,
+          },
+          aiInvolved: true,
+        });
+
+        try {
+          response = await invokeScaffoldLLM(compactPrompt);
+        } catch (compactError) {
+          await logTelemetryEvent({
+            eventType: "execution_plan_generation_retried",
+            action: "fallback_used",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocolId),
+            payload: {
+              trialId: protocolTrialId,
+              reason: compactError instanceof Error ? compactError.message : String(compactError),
+              mode: "deterministic_fallback",
+              hasStructuredSchedule: Boolean(structuredSchedule),
+              demoMode: mode,
+            },
+            aiInvolved: true,
+          });
+          scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
+        }
       }
 
-      const scaffoldData = JSON.parse(content);
+      if (!scaffoldData) {
+        const content = response?.choices?.[0]?.message?.content;
+        if (!content || typeof content !== "string") {
+          scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
+        } else {
+          try {
+            scaffoldData = JSON.parse(content);
+          } catch {
+            scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
+          }
+        }
+      }
 
       // Create task scaffold
       await db.createTaskScaffold({
@@ -447,9 +1085,13 @@ Based on the protocol content above, generate a complete task scaffold for this 
               phaseId: createdPhase.id,
               name: task.name,
               suggestedDate: task.suggestedDate ? new Date(task.suggestedDate) : null,
-              duration: task.duration || null,
-              protocolSection: task.protocolSection || null,
-              protocolPage: task.protocolPage || null,
+              duration:
+                (typeof task.estimatedDuration === "number" && Number.isFinite(task.estimatedDuration)
+                  ? Math.max(1, Math.round(task.estimatedDuration))
+                  : null) || null,
+              protocolSection: task.protocolReference?.section || null,
+              protocolPage:
+                typeof task.protocolReference?.page === "number" ? task.protocolReference.page : null,
               status: "pending",
               orderIndex: j,
             });

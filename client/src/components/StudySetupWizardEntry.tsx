@@ -85,21 +85,56 @@ export function StudySetupWizardEntry({
     e.target.value = '';
   };
   
-  const uploadedDocs = documents?.filter(d => d.trialId === trialId) || [];
-  
-  // Helper function to find document by category
-  const findDocByCategory = (category: string) => {
-    return uploadedDocs.find(d => d.category === category);
+  const uploadedDocs = documents || [];
+
+  const normalize = (value: string | null | undefined) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+
+  // Helper function to find document by category with resilient matching.
+  const findDocByCategory = (
+    category: string,
+    aliases: string[] = [],
+    filenameHints: string[] = []
+  ) => {
+    const expected = [category, ...aliases].map((item) => normalize(item));
+    const hints = [category, ...aliases, ...filenameHints].map((item) => normalize(item));
+    return uploadedDocs.find((doc) => {
+      if (doc.archivedAt) return false;
+      const docCategory = normalize(doc.category);
+      const docFilename = normalize(doc.filename);
+      const categoryMatch = expected.some((item) => docCategory === item || docCategory.includes(item));
+      const filenameMatch = hints.some((item) => item && docFilename.includes(item));
+      return categoryMatch || filenameMatch;
+    });
   };
-  
-  const protocolDoc = findDocByCategory("Protocol");
-  const labManualDoc = findDocByCategory("Lab Manual");
-  const pharmacyManualDoc = findDocByCategory("Pharmacy Manual");
-  const soaDoc = findDocByCategory("Schedule of Assessments (SoA)");
-  const icfDoc = findDocByCategory("Informed Consent Form (ICF)");
-  const edcDoc = findDocByCategory("EDC/CRF Completion Guide");
-  const safetyManualDoc = findDocByCategory("Safety Reporting Manual");
-  const monitoringPlanDoc = findDocByCategory("Monitoring Plan");
+
+  const protocolDoc = findDocByCategory("Protocol", [], ["protocol"]);
+  const labManualDoc = findDocByCategory("Lab Manual", [], ["lab manual"]);
+  const pharmacyManualDoc = findDocByCategory("Pharmacy Manual", [], ["pharmacy manual"]);
+  const soaDoc = findDocByCategory(
+    "Schedule of Assessments (SoA)",
+    ["Schedule of Assessments", "SOA"],
+    ["schedule of assessments", "soa"]
+  );
+  const icfDoc = findDocByCategory(
+    "Informed Consent Form (ICF)",
+    ["Informed Consent Form", "ICF"],
+    ["informed consent", "icf"]
+  );
+  const edcDoc = findDocByCategory(
+    "EDC/CRF Completion Guide",
+    ["EDC CRF Completion Guide", "EDC Guide", "CRF Guide"],
+    ["edc", "crf"]
+  );
+  const safetyManualDoc = findDocByCategory(
+    "Safety Reporting Manual",
+    ["Safety Manual"],
+    ["safety reporting", "safety manual"]
+  );
+  const monitoringPlanDoc = findDocByCategory("Monitoring Plan", [], ["monitoring plan"]);
   
   const documentTypes = [
     { name: "Protocol", description: "Core task scaffold, visit structure", uploaded: !!protocolDoc, filename: protocolDoc?.filename, required: true },
@@ -121,8 +156,8 @@ export function StudySetupWizardEntry({
     { number: 3, title: "Generate Plan", description: "Create execution plan" },
   ];
   
-  const canProceedToStep2 = uploadedCount > 0;
-  const canProceedToStep3 = uploadedCount > 0;
+  const canProceedToStep2 = !!protocolDoc;
+  const canProceedToStep3 = !!protocolDoc;
   
   return (
     <>
@@ -136,7 +171,7 @@ export function StudySetupWizardEntry({
       <div className="bg-white rounded-lg border border-gray-200">
       {/* Header */}
       <div className="px-8 py-4 border-b border-gray-200">
-        <h2 className="text-2xl font-semibold text-gray-900">Study Setup Wizard</h2>
+        <h2 className="text-2xl font-semibold text-gray-900">Study Setup Agent</h2>
         <p className="text-sm text-gray-700 mt-2 max-w-3xl">
           Transform your protocol into an operational execution plan. Themison will extract visits, procedures, and assessments from your clinical documents and turn them into tasks you can assign and track.
         </p>

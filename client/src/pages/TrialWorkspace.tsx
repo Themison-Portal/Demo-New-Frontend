@@ -3,7 +3,7 @@
  * Design: Clinical Modernism - Card-based trial overview with filters and status grouping
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ export function TrialWorkspace() {
   const [protocolFile, setProtocolFile] = useState<File | null>(null);
   const [protocolBase64, setProtocolBase64] = useState<string | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "indexing" | "indexed">("idle");
+  const [indexedAnimationInstance, setIndexedAnimationInstance] = useState(0);
   const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
   const utils = trpc.useUtils();
@@ -52,7 +53,6 @@ export function TrialWorkspace() {
   const [selectedTeamMembers, setSelectedTeamMembers] = useState<string[]>([]);
   const [aiFilledFields, setAiFilledFields] = useState<Set<string>>(new Set());
   const [addMemberOpen, setAddMemberOpen] = useState(false);
-  const DotLottieWC = "dotlottie-wc" as any;
   const analyzeProtocolMutation = trpc.studySetupWizard.analyzeProtocol.useMutation();
   const uploadDocumentMutation = trpc.documents.upload.useMutation();
 
@@ -246,22 +246,12 @@ export function TrialWorkspace() {
     }
   };
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (document.querySelector('script[data-dotlottie-wc="true"]')) return;
-    const script = document.createElement("script");
-    script.type = "module";
-    script.src =
-      "https://unpkg.com/@lottiefiles/dotlottie-wc@0.8.11/dist/dotlottie-wc.js";
-    script.dataset.dotlottieWc = "true";
-    document.head.appendChild(script);
-  }, []);
-
   const handleProtocolSelected = async (file: File | null) => {
     if (!file) {
       setProtocolFile(null);
       setProtocolBase64(null);
       setUploadState("idle");
+      setIndexedAnimationInstance(0);
       return;
     }
     if (!file.type.includes("pdf")) {
@@ -270,6 +260,7 @@ export function TrialWorkspace() {
     }
     setProtocolFile(file);
     setUploadState("indexing");
+    setIndexedAnimationInstance(0);
     const startedAt = Date.now();
     const base64 = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -322,6 +313,7 @@ export function TrialWorkspace() {
       const elapsed = Date.now() - startedAt;
       const remaining = Math.max(0, 5000 - elapsed);
       window.setTimeout(() => {
+        setIndexedAnimationInstance((prev) => prev + 1);
         setUploadState("indexed");
       }, remaining);
     } catch (error: any) {
@@ -424,33 +416,40 @@ export function TrialWorkspace() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-6">
             <div className="min-h-full flex items-start justify-center">
               {createStep === 1 ? (
                 <div className="w-full flex flex-col items-center py-6">
                   <label className="text-sm font-semibold text-gray-700 self-start w-full mt-2">Upload Document*</label>
-                  <label className="mt-5 w-full rounded-2xl border border-dashed border-gray-200 bg-white/60 p-10 text-center min-h-[520px] flex flex-col items-center justify-center cursor-pointer">
+                  <label className="mt-5 w-full rounded-2xl border border-dashed border-gray-200 bg-white/60 p-6 text-center min-h-[620px] flex flex-col items-center justify-center cursor-pointer overflow-hidden">
                     <div className="flex flex-col items-center">
-                      <div className="mx-auto flex h-96 w-96 items-center justify-center">
+                      <div className="mx-auto h-[400px] w-full max-w-[1260px] -mb-10">
                         {uploadState === "indexing" ? (
                           <DotLottieReact
                             src="https://lottie.host/babf317b-a2f8-4c40-bb70-40082d489926/Bo2qfgn2Fh.lottie"
                             loop
                             autoplay
-                            className="h-[520px] w-[520px]"
+                            layout={{ fit: "contain", align: [0.5, 0.5] }}
+                            renderConfig={{ autoResize: true }}
+                            className="h-full w-full"
                           />
                         ) : uploadState === "indexed" ? (
-                          <DotLottieWC
-                            src="https://lottie.host/380ac5d7-1418-454e-9723-cf417bb21149/g7x5GQDVLc.lottie"
-                            style={{ width: "160px", height: "160px" }}
+                          <DotLottieReact
+                            key={`indexed-${indexedAnimationInstance}`}
+                            src="https://lottie.host/83fd8277-5c96-4552-b39d-e5cca2fc8e75/LU0ipQCTro.lottie"
                             autoplay
                             loop={false}
+                            layout={{ fit: "contain", align: [0.5, 0.5] }}
+                            renderConfig={{ autoResize: true }}
+                            className="h-full w-full"
                           />
                         ) : (
-                          <Upload className="h-32 w-32 text-gray-300" />
+                          <div className="h-full w-full flex items-center justify-center">
+                            <Upload className="h-32 w-32 text-gray-300" />
+                          </div>
                         )}
                       </div>
-                      <div style={{ marginTop: "5px" }}>
+                      <div className="mt-8">
                         <p className="text-lg text-gray-400">
                           {uploadState === "indexing"
                             ? "We are extracting the key study details from your protocol."
@@ -946,7 +945,10 @@ export function TrialWorkspace() {
               {showAssignedToMe && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {assignedTrials.map((trial) => (
-                    <TrialCard key={trial.id} trial={{ ...trial, teamCount: (trial as any).__teamCount }} />
+                    <TrialCard
+                      key={trial.id}
+                      trial={{ ...trial, teamCount: (trial as any).__teamCount }}
+                    />
                   ))}
                 </div>
               )}
@@ -971,7 +973,10 @@ export function TrialWorkspace() {
               {showPaused && (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {pausedTrials.map((trial) => (
-                    <TrialCard key={trial.id} trial={{ ...trial, teamCount: (trial as any).__teamCount }} />
+                    <TrialCard
+                      key={trial.id}
+                      trial={{ ...trial, teamCount: (trial as any).__teamCount }}
+                    />
                   ))}
                 </div>
               )}

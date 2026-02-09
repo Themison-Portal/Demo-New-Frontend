@@ -6,7 +6,7 @@ import { useLocation } from "wouter";
 import { useDemoState } from "@/contexts/DemoStateContext";
 
 /**
- * Study Setup Wizard - Entry Point Screen
+ * Study Setup Agent - Entry Point Screen
  * Transforms protocol into operational execution plan
  */
 export default function StudySetupWizard() {
@@ -65,7 +65,7 @@ export default function StudySetupWizard() {
 
           {/* Title */}
           <h1 className="text-3xl font-semibold text-gray-900 mb-3">
-            Study Setup Wizard
+            Study Setup Agent
           </h1>
 
           {/* Subtitle */}
