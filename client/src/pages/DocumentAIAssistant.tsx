@@ -397,6 +397,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           role: msg.role,
           content: msg.content,
         })),
+        ...(selectedTrialId && selectedTrialId !== "all" ? { trialId: selectedTrialId, demoMode: currentDataMode } : {}),
         // If in all documents mode, don't send documentIds (backend will search all)
         // If in filtered mode, send specific documentIds
         ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {}),

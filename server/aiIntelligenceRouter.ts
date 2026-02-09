@@ -10,10 +10,105 @@ import {
   persistTrialSnapshot,
   syncTrialKnowledgeGraph,
 } from "./_core/aiIntelligence";
+import { evaluateUnifiedRetrievalQuality, runUnifiedQuery } from "./_core/unifiedQuery";
 import { aiTrainingExamples, knowledgeGraphEdges, knowledgeGraphNodes } from "../drizzle/schema";
 import { desc, eq } from "drizzle-orm";
 
 export const aiIntelligenceRouter = router({
+  query: protectedProcedure
+    .input(
+      z.object({
+        query: z.string().min(2).max(5000),
+        trialId: z.string().optional(),
+        documentIds: z.array(z.number().int().positive()).optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        messages: z
+          .array(
+            z.object({
+              role: z.enum(["user", "assistant"]),
+              content: z.string(),
+            })
+          )
+          .optional(),
+        sessionId: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId =
+        input.trialId && input.trialId !== "all"
+          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          : undefined;
+
+      await logTelemetryEvent({
+        eventType: "ai_query_submitted",
+        action: "submitted",
+        userId: String(ctx.user.id),
+        sessionId: input.sessionId,
+        entityType: "query",
+        entityId: resolvedTrialId,
+        payload: {
+          query: input.query,
+          trialId: resolvedTrialId,
+          documentIds: input.documentIds ?? [],
+          demoMode: mode,
+        },
+        aiInvolved: true,
+      });
+
+      const result = await runUnifiedQuery({
+        db,
+        query: input.query,
+        messages: input.messages,
+        protocolIds: input.documentIds,
+        trialId: resolvedTrialId,
+        userId: ctx.user.id,
+      });
+
+      await logTelemetryEvent({
+        eventType: "ai_response_generated",
+        action: "generated",
+        userId: String(ctx.user.id),
+        sessionId: input.sessionId,
+        entityType: "response",
+        entityId: resolvedTrialId,
+        payload: {
+          route: result.route,
+          confidence: result.confidence,
+          abstained: result.abstained,
+        },
+        aiInvolved: true,
+        aiOutput: result.message,
+        aiSources: result.sources,
+      });
+
+      return {
+        ...result,
+        trialId: resolvedTrialId ? stripDemoId(resolvedTrialId) : null,
+      };
+    }),
+
+  evaluateRetrievalQuality: protectedProcedure
+    .input(
+      z.object({
+        query: z.string().min(2).max(2000),
+        documentIds: z.array(z.number().int().positive()).min(1),
+      })
+    )
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      return await evaluateUnifiedRetrievalQuality({
+        db,
+        query: input.query,
+        protocolIds: input.documentIds,
+      });
+    }),
+
   getTrialSnapshot: protectedProcedure
     .input(
       z.object({
@@ -262,4 +357,3 @@ export const aiIntelligenceRouter = router({
       } as const;
     }),
 });
-

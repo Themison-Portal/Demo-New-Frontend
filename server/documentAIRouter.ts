@@ -8,6 +8,7 @@ import { resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { invokeLLM } from "./_core/llm";
 import { getProtocolContextChunks, type ProtocolContextChunk } from "./_core/protocolContext";
+import { runUnifiedQuery } from "./_core/unifiedQuery";
 
 type DocumentAISource = {
   fileId?: string;
@@ -228,13 +229,21 @@ export const documentAIRouter = router({
           })
         ),
         documentIds: z.array(z.string()).optional(), // Optional: specific documents to query
+        trialId: z.string().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
         sessionId: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) {
         throw new Error("Database not available");
+      }
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      let resolvedTrialId: string | undefined;
+      if (input.trialId && input.trialId !== "all") {
+        resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
       }
 
       // Get the latest user message
@@ -260,6 +269,29 @@ export const documentAIRouter = router({
 
       // If no documents specified, use basic LLM without grounding
       if (!input.documentIds || input.documentIds.length === 0) {
+        if (resolvedTrialId) {
+          const unified = await runUnifiedQuery({
+            db,
+            query: latestUserMessage.content,
+            messages: input.messages,
+            trialId: resolvedTrialId,
+            userId: ctx.user?.id,
+          });
+
+          await logTelemetryEvent({
+            eventType: "ai_response_generated",
+            action: "generated",
+            sessionId: input.sessionId,
+            entityType: "response",
+            entityId: resolvedTrialId,
+            aiInvolved: true,
+            aiOutput: unified.message,
+            aiSources: unified.sources,
+          });
+
+          return unified;
+        }
+
         // Build conversation history for context
         const conversationHistory = input.messages.map(msg => 
           `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
@@ -322,6 +354,36 @@ ${conversationHistory}`;
         return {
           message: "The selected documents have not been processed yet. Please wait for processing to complete.",
         };
+      }
+
+      if (!resolvedTrialId) {
+        resolvedTrialId = selectedProtocols[0]?.trialId;
+      }
+
+      try {
+        const unified = await runUnifiedQuery({
+          db,
+          query: latestUserMessage.content,
+          messages: input.messages,
+          protocolIds: documentIds,
+          trialId: resolvedTrialId,
+          userId: ctx.user?.id,
+        });
+
+        await logTelemetryEvent({
+          eventType: "ai_response_generated",
+          action: "generated",
+          sessionId: input.sessionId,
+          entityType: "response",
+          entityId: resolvedTrialId,
+          aiInvolved: true,
+          aiOutput: unified.message,
+          aiSources: unified.sources,
+        });
+
+        return unified;
+      } catch (error) {
+        console.warn("[Document AI] Unified query path failed; falling back to legacy path.", error);
       }
 
       const protocolById = new Map(selectedProtocols.map((protocol) => [protocol.id, protocol]));
