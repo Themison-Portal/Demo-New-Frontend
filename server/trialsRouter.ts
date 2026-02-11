@@ -7,6 +7,9 @@ import {
   fileSearchDocuments,
   fileSearchStores,
   telemetryEvents,
+  executionMaps,
+  mapPhases,
+  mapTasks,
   taskScaffolds,
   phases,
   tasks,
@@ -322,79 +325,202 @@ export const trialsRouter = router({
         tasks: {
           total: 0,
           pending: 0,
+          inProgress: 0,
           completed: 0,
           blocked: 0,
+          unassigned: 0,
           dueToday: 0,
+          dueSoon: 0,
+          overdue: 0,
           progressPercent: 0,
         },
       };
 
       if (needsExecution) {
         try {
-          const scaffoldRows = await db
+          const now = new Date();
+          const todayIso = now.toISOString().slice(0, 10);
+          const terminalStatuses = new Set(["done", "completed", "cancelled", "skipped"]);
+          const blockedStatuses = new Set(["blocked", "waiting"]);
+          const inProgressStatuses = new Set(["in_progress"]);
+
+          const executionMapRows = await db
             .select({
-              id: taskScaffolds.id,
-              status: taskScaffolds.status,
+              id: executionMaps.id,
+              status: executionMaps.status,
+              updatedAt: executionMaps.updatedAt,
             })
-            .from(taskScaffolds)
-            .where(eq(taskScaffolds.trialId, resolvedId));
+            .from(executionMaps)
+            .where(eq(executionMaps.trialId, resolvedId))
+            .orderBy(desc(executionMaps.updatedAt));
 
-          const scaffoldIds = scaffoldRows.map((row) => row.id);
-          const phaseRows = scaffoldIds.length
-            ? await db
-                .select({
-                  id: phases.id,
-                  scaffoldId: phases.scaffoldId,
-                  name: phases.name,
-                })
-                .from(phases)
-                .where(inArray(phases.scaffoldId, scaffoldIds))
-            : [];
+          const activeExecutionMap = executionMapRows.find((row) => row.status !== "archived") ?? null;
+          const activeMapId = activeExecutionMap?.id ?? null;
 
-          const phaseIds = phaseRows.map((row) => row.id);
-          const taskRows = phaseIds.length
-            ? await db
-                .select({
-                  id: tasks.id,
-                  phaseId: tasks.phaseId,
-                  name: tasks.name,
-                  suggestedDate: tasks.suggestedDate,
-                  status: tasks.status,
-                })
-                .from(tasks)
-                .where(inArray(tasks.phaseId, phaseIds))
-            : [];
+          if (activeMapId) {
+            const phaseRows = await db
+              .select({
+                id: mapPhases.id,
+                name: mapPhases.name,
+              })
+              .from(mapPhases)
+              .where(eq(mapPhases.mapId, activeMapId));
 
-          const todayIso = new Date().toISOString().slice(0, 10);
-          const pendingTasks = taskRows.filter((task) => task.status === "pending").length;
-          const completedTasks = taskRows.filter((task) => task.status === "completed").length;
-          const blockedTasks = taskRows.filter((task) => task.status === "blocked").length;
-          const dueTodayTasks = taskRows.filter((task) => {
-            if (!task.suggestedDate || task.status === "completed") return false;
-            return new Date(task.suggestedDate).toISOString().slice(0, 10) === todayIso;
-          }).length;
-          const totalTasks = taskRows.length;
-          const progressPercent = totalTasks
-            ? Number(((completedTasks / totalTasks) * 100).toFixed(1))
-            : 0;
+            const taskRows = await db
+              .select({
+                id: mapTasks.id,
+                name: mapTasks.name,
+                status: mapTasks.status,
+                suggestedDate: mapTasks.suggestedDate,
+                dueDate: mapTasks.dueDate,
+                assignedUserId: mapTasks.assignedUserId,
+              })
+              .from(mapTasks)
+              .where(eq(mapTasks.mapId, activeMapId));
 
-          const visitLikePhases = phaseRows.filter((phase) =>
-            /(visit|screening|follow-up|baseline|eos|week)/i.test(phase.name)
-          );
+            const normalizeStatus = (status: unknown) => String(status || "").toLowerCase();
+            const totalTasks = taskRows.length;
+            const completedTasks = taskRows.filter((task) => terminalStatuses.has(normalizeStatus(task.status))).length;
+            const blockedTasks = taskRows.filter((task) => blockedStatuses.has(normalizeStatus(task.status))).length;
+            const inProgressTasks = taskRows.filter((task) => inProgressStatuses.has(normalizeStatus(task.status))).length;
+            const pendingTasks = taskRows.filter((task) => {
+              const normalized = normalizeStatus(task.status);
+              if (terminalStatuses.has(normalized)) return false;
+              if (blockedStatuses.has(normalized)) return false;
+              if (inProgressStatuses.has(normalized)) return false;
+              return true;
+            }).length;
+            const unassignedTasks = taskRows.filter((task) => task.assignedUserId == null).length;
+            const dueTodayTasks = taskRows.filter((task) => {
+              const normalized = normalizeStatus(task.status);
+              if (terminalStatuses.has(normalized)) return false;
+              const candidateDate = task.dueDate || task.suggestedDate;
+              if (!candidateDate) return false;
+              return new Date(candidateDate).toISOString().slice(0, 10) === todayIso;
+            }).length;
+            const dueSoonTasks = taskRows.filter((task) => {
+              const normalized = normalizeStatus(task.status);
+              if (terminalStatuses.has(normalized)) return false;
+              const candidateDate = task.dueDate || task.suggestedDate;
+              if (!candidateDate) return false;
+              const candidate = new Date(candidateDate);
+              const deltaMs = candidate.getTime() - now.getTime();
+              const deltaDays = deltaMs / (1000 * 60 * 60 * 24);
+              return deltaDays > 0 && deltaDays <= 3;
+            }).length;
+            const overdueTasks = taskRows.filter((task) => {
+              const normalized = normalizeStatus(task.status);
+              if (terminalStatuses.has(normalized)) return false;
+              const candidateDate = task.dueDate || task.suggestedDate;
+              if (!candidateDate) return false;
+              return new Date(candidateDate) < now;
+            }).length;
+            const progressPercent = totalTasks
+              ? Number(((completedTasks / totalTasks) * 100).toFixed(1))
+              : 0;
 
-          executionStats = {
-            scaffolds: scaffoldRows.length,
-            phases: phaseRows.length,
-            visitLikePhases: visitLikePhases.length,
-            tasks: {
-              total: totalTasks,
-              pending: pendingTasks,
-              completed: completedTasks,
-              blocked: blockedTasks,
-              dueToday: dueTodayTasks,
-              progressPercent,
-            },
-          };
+            const visitLikePhases = phaseRows.filter((phase) =>
+              /(visit|screening|follow-up|baseline|eos|week)/i.test(phase.name)
+            );
+
+            executionStats = {
+              scaffolds: executionMapRows.length,
+              phases: phaseRows.length,
+              visitLikePhases: visitLikePhases.length,
+              tasks: {
+                total: totalTasks,
+                pending: pendingTasks,
+                inProgress: inProgressTasks,
+                completed: completedTasks,
+                blocked: blockedTasks,
+                unassigned: unassignedTasks,
+                dueToday: dueTodayTasks,
+                dueSoon: dueSoonTasks,
+                overdue: overdueTasks,
+                progressPercent,
+              },
+            };
+          } else {
+            const scaffoldRows = await db
+              .select({
+                id: taskScaffolds.id,
+                status: taskScaffolds.status,
+              })
+              .from(taskScaffolds)
+              .where(eq(taskScaffolds.trialId, resolvedId));
+
+            const scaffoldIds = scaffoldRows.map((row) => row.id);
+            const phaseRows = scaffoldIds.length
+              ? await db
+                  .select({
+                    id: phases.id,
+                    scaffoldId: phases.scaffoldId,
+                    name: phases.name,
+                  })
+                  .from(phases)
+                  .where(inArray(phases.scaffoldId, scaffoldIds))
+              : [];
+
+            const phaseIds = phaseRows.map((row) => row.id);
+            const taskRows = phaseIds.length
+              ? await db
+                  .select({
+                    id: tasks.id,
+                    phaseId: tasks.phaseId,
+                    name: tasks.name,
+                    suggestedDate: tasks.suggestedDate,
+                    status: tasks.status,
+                  })
+                  .from(tasks)
+                  .where(inArray(tasks.phaseId, phaseIds))
+              : [];
+
+            const pendingTasks = taskRows.filter((task) => task.status === "pending").length;
+            const completedTasks = taskRows.filter((task) => task.status === "completed").length;
+            const blockedTasks = taskRows.filter((task) => task.status === "blocked").length;
+            const dueTodayTasks = taskRows.filter((task) => {
+              if (!task.suggestedDate || task.status === "completed") return false;
+              return new Date(task.suggestedDate).toISOString().slice(0, 10) === todayIso;
+            }).length;
+            const dueSoonTasks = taskRows.filter((task) => {
+              if (!task.suggestedDate || task.status === "completed") return false;
+              const candidate = new Date(task.suggestedDate);
+              const deltaMs = candidate.getTime() - now.getTime();
+              const deltaDays = deltaMs / (1000 * 60 * 60 * 24);
+              return deltaDays > 0 && deltaDays <= 3;
+            }).length;
+            const overdueTasks = taskRows.filter((task) => {
+              if (!task.suggestedDate || task.status === "completed") return false;
+              return new Date(task.suggestedDate) < now;
+            }).length;
+            const totalTasks = taskRows.length;
+            const progressPercent = totalTasks
+              ? Number(((completedTasks / totalTasks) * 100).toFixed(1))
+              : 0;
+
+            const visitLikePhases = phaseRows.filter((phase) =>
+              /(visit|screening|follow-up|baseline|eos|week)/i.test(phase.name)
+            );
+
+            executionStats = {
+              scaffolds: scaffoldRows.length,
+              phases: phaseRows.length,
+              visitLikePhases: visitLikePhases.length,
+              tasks: {
+                total: totalTasks,
+                pending: pendingTasks,
+                inProgress: 0,
+                completed: completedTasks,
+                blocked: blockedTasks,
+                unassigned: 0,
+                dueToday: dueTodayTasks,
+                dueSoon: dueSoonTasks,
+                overdue: overdueTasks,
+                progressPercent,
+              },
+            };
+          }
+
           if (include.has("execution")) {
             execution = executionStats;
           }
@@ -407,9 +533,13 @@ export const trialsRouter = router({
             tasks: {
               total: 0,
               pending: 0,
+              inProgress: 0,
               completed: 0,
               blocked: 0,
+              unassigned: 0,
               dueToday: 0,
+              dueSoon: 0,
+              overdue: 0,
               progressPercent: 0,
             },
           };
@@ -458,6 +588,33 @@ export const trialsRouter = router({
           });
         }
 
+        const protocolDocCount = documentStats.categories["protocol"] ?? 0;
+        if (documentStats.total > 0 && protocolDocCount === 0) {
+          draftSuggestions.push({
+            id: "missing_protocol_category",
+            category: "documents",
+            priority: "high",
+            title: "No protocol document categorized",
+            description: "Tag at least one document as Protocol so task generation and citations stay traceable.",
+            actionLabel: "Review Document Categories",
+            actionTarget: "document-hub",
+            confidence: 0.93,
+          });
+        }
+
+        if (documentStats.currentProtocol && !documentStats.latestProtocolIndexed) {
+          draftSuggestions.push({
+            id: "current_protocol_not_indexed",
+            category: "documents",
+            priority: "high",
+            title: "Current protocol is not indexed yet",
+            description: "Wait for indexing or retry processing to ensure complete AI retrieval and citations.",
+            actionLabel: "Open Document Hub",
+            actionTarget: "document-hub",
+            confidence: 0.94,
+          });
+        }
+
         if (executionStats.tasks.total === 0 && documentStats.total > 0) {
           draftSuggestions.push({
             id: "generate_study_setup",
@@ -482,6 +639,23 @@ export const trialsRouter = router({
             actionTarget: "overview",
             confidence: 0.92,
           });
+        }
+
+        if (trial.startDate && trial.endDate) {
+          const startMs = new Date(trial.startDate).getTime();
+          const endMs = new Date(trial.endDate).getTime();
+          if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs < startMs) {
+            draftSuggestions.push({
+              id: "timeline_invalid_range",
+              category: "timeline",
+              priority: "high",
+              title: "Timeline date range is invalid",
+              description: "End date is earlier than start date. Correct timeline dates to avoid schedule errors.",
+              actionLabel: "Fix Dates in Overview",
+              actionTarget: "overview",
+              confidence: 0.98,
+            });
+          }
         }
 
         if ((trial.status || "not-started") === "not-started" && executionStats.tasks.total > 0) {
@@ -510,22 +684,98 @@ export const trialsRouter = router({
           });
         }
 
+        if (executionStats.tasks.overdue > 0) {
+          draftSuggestions.push({
+            id: "overdue_tasks",
+            category: "execution",
+            priority: "high",
+            title: `${executionStats.tasks.overdue} overdue task(s)`,
+            description: "Overdue tasks may impact near-term visits. Review and re-sequence immediately.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.91,
+          });
+        }
+
+        if (executionStats.tasks.unassigned > 0) {
+          draftSuggestions.push({
+            id: "unassigned_tasks",
+            category: "execution",
+            priority: "medium",
+            title: `${executionStats.tasks.unassigned} task(s) are unassigned`,
+            description: "Assign owners to improve execution accountability and reduce delays.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.84,
+          });
+        }
+
+        if (executionStats.tasks.dueToday > 0) {
+          draftSuggestions.push({
+            id: "high_due_today_load",
+            category: "execution",
+            priority: executionStats.tasks.dueToday >= 5 ? "high" : "medium",
+            title: `${executionStats.tasks.dueToday} task(s) due today`,
+            description:
+              executionStats.tasks.dueToday >= 5
+                ? "Today’s workload is high. Prioritize critical-path items and confirm owners now."
+                : "Review today’s due tasks and confirm ownership to protect protocol timelines.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.8,
+          });
+        }
+
+        if (executionStats.tasks.dueSoon > 0) {
+          draftSuggestions.push({
+            id: "due_soon_tasks",
+            category: "execution",
+            priority: "medium",
+            title: `${executionStats.tasks.dueSoon} task(s) due within 72 hours`,
+            description:
+              "Near-term task deadlines are approaching. Sequence work now to avoid overdue spillover.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.83,
+          });
+        }
+
         if (telemetryStats.eventsLast7Days === 0) {
+          const isActiveLike =
+            (trial.status || "not-started") === "active" ||
+            (trial.status || "not-started") === "recruiting";
           draftSuggestions.push({
             id: "low_recent_activity",
             category: "telemetry",
-            priority: "low",
-            title: "No recent operational activity detected",
-            description: "As the team uses tasks and documents, Themison AI recommendations become more precise.",
+            priority: isActiveLike ? "medium" : "low",
+            title: isActiveLike
+              ? "No recent activity detected on an active trial"
+              : "No recent operational activity detected",
+            description: isActiveLike
+              ? "Log current trial activity to keep risk detection and signals current."
+              : "As the team uses tasks and documents, Themison AI recommendations become more precise.",
             actionLabel: "Open Themison AI",
             actionTarget: "assistant",
-            confidence: 0.7,
+            confidence: 0.76,
+          });
+        }
+
+        if (telemetryStats.totalEvents >= 10 && telemetryStats.aiUsageRate < 0.08) {
+          draftSuggestions.push({
+            id: "low_ai_utilization",
+            category: "telemetry",
+            priority: "low",
+            title: "Low AI utilization in recent workflow",
+            description: "Use Themison AI for task clarifications and protocol Q&A to improve decision speed and consistency.",
+            actionLabel: "Ask Themison AI",
+            actionTarget: "assistant",
+            confidence: 0.67,
           });
         }
 
         const priorityOrder = { high: 0, medium: 1, low: 2 } as const;
         const rankedSuggestions = draftSuggestions.sort(
-          (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]
+          (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || b.confidence - a.confidence
         );
         const normalizedPageContext = String(input.pageContext || "").toLowerCase();
         const pageCategoryFilters: Record<string, Array<"documents" | "execution" | "timeline" | "readiness" | "telemetry">> = {
@@ -537,9 +787,9 @@ export const trialsRouter = router({
           "study-setup-wizard": ["execution", "readiness", "documents"],
         };
         const allowedCategories = pageCategoryFilters[normalizedPageContext];
-        suggestions = allowedCategories
+        suggestions = (allowedCategories
           ? rankedSuggestions.filter((signal) => allowedCategories.includes(signal.category))
-          : rankedSuggestions;
+          : rankedSuggestions).slice(0, 12);
 
         const readinessParts = [
           documentStats.total > 0,
@@ -562,6 +812,7 @@ export const trialsRouter = router({
           blockedTaskRisk: executionStats.tasks.blocked > 0 ? "high" : "low",
           pendingTaskLoad: executionStats.tasks.pending,
           dueTodayTasks: executionStats.tasks.dueToday,
+          dueSoonTasks: executionStats.tasks.dueSoon,
           totalSignals: suggestions.length,
         };
       }
@@ -598,6 +849,7 @@ export const trialsRouter = router({
                 blockedTaskRisk: "low",
                 pendingTaskLoad: 0,
                 dueTodayTasks: 0,
+                dueSoonTasks: 0,
                 totalSignals: 0,
               }
             : undefined,

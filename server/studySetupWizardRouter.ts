@@ -379,6 +379,279 @@ function buildFallbackScaffold(protocolFilename: string, schedule: StructuredSch
   };
 }
 
+function canonicalSectionName(name: string) {
+  const normalized = normalizeToken(name);
+  if (!normalized) return null;
+  if (/(schedule|study days|visit window|visit schedule|soa|soe)/.test(normalized)) return "Schedule of Events";
+  if (/(inclusion|exclusion|eligib)/.test(normalized)) return "Inclusion / Exclusion";
+  if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "Dosing & Administration";
+  if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "Procedures & Assessments";
+  if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "Lab & Samples";
+  if (/(adverse event|safety|sae|ae)/.test(normalized)) return "Adverse Events & Safety";
+  if (/(concomitant|medication)/.test(normalized)) return "Concomitant Medications";
+  return null;
+}
+
+function normalizeProtocolSections(rawSections: any[]) {
+  const source = Array.isArray(rawSections) ? rawSections : [];
+  const normalizedSections = source
+    .map((section: any) => {
+      const originalName = String(section?.name || "").trim();
+      if (!originalName) return null;
+      const canonical = canonicalSectionName(originalName) || originalName;
+      return {
+        name: canonical,
+        dateReference: section?.dateReference || null,
+        pageReference: section?.pageReference || null,
+        children: Array.isArray(section?.children)
+          ? section.children
+              .map((child: any) => {
+                const childName = String(child?.name || "").trim();
+                if (!childName) return null;
+                return {
+                  name: childName,
+                  dateReference: child?.dateReference || null,
+                  pageReference: child?.pageReference || null,
+                };
+              })
+              .filter(Boolean)
+          : [],
+      };
+    })
+    .filter(Boolean) as Array<{
+      name: string;
+      dateReference: string | null;
+      pageReference: string | null;
+      children: Array<{ name: string; dateReference: string | null; pageReference: string | null }>;
+    }>;
+
+  const deduped: typeof normalizedSections = [];
+  const seen = new Set<string>();
+  for (const section of normalizedSections) {
+    const key = canonicalSectionName(section.name) || normalizeToken(section.name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(section);
+  }
+
+  for (const defaultName of FALLBACK_SECTION_NAMES) {
+    const key = canonicalSectionName(defaultName) || normalizeToken(defaultName);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    deduped.push({
+      name: defaultName,
+      dateReference: null,
+      pageReference: null,
+      children: [],
+    });
+  }
+
+  return deduped;
+}
+
+function scheduleVisitLabel(visit: { name: string; day?: string | null }) {
+  const name = String(visit?.name || "").trim();
+  const day = String(visit?.day || "").trim();
+  if (!name) return "";
+  return day ? `${name} (${day})` : name;
+}
+
+function normalizeScheduleTask(task: any, fallbackPage: number | null) {
+  const rawName = String(task?.name || "").trim();
+  if (!rawName) return null;
+  const category = String(task?.category || inferFallbackCategory(rawName));
+  return {
+    name: withActionVerb(rawName, category),
+    suggestedDate: task?.suggestedDate ?? null,
+    estimatedDuration:
+      typeof task?.estimatedDuration === "number" && Number.isFinite(task.estimatedDuration)
+        ? Math.max(1, Math.round(task.estimatedDuration))
+        : inferFallbackDuration(category, rawName),
+    category,
+    assignedRole: task?.assignedRole || inferFallbackRole(category, rawName),
+    priority: task?.priority || inferFallbackPriority(category, rawName),
+    protocolReference: {
+      section: String(task?.protocolReference?.section || "Schedule of Activities"),
+      page:
+        typeof task?.protocolReference?.page === "number" && Number.isFinite(task.protocolReference.page)
+          ? task.protocolReference.page
+          : fallbackPage,
+      extractedText:
+        typeof task?.protocolReference?.extractedText === "string" ? task.protocolReference.extractedText : null,
+    },
+    aiConfidence:
+      typeof task?.aiConfidence === "number" && Number.isFinite(task.aiConfidence)
+        ? task.aiConfidence
+        : 0.86,
+    conditionalNote: typeof task?.conditionalNote === "string" ? task.conditionalNote : null,
+    dependencies: Array.isArray(task?.dependencies)
+      ? task.dependencies.map((dep: any) => String(dep || "").trim()).filter(Boolean)
+      : [],
+  };
+}
+
+function visitMatchesEntry(
+  entryVisit: string,
+  visit: { name: string; day?: string | null },
+  dayTokenCounts: Map<string, number>
+) {
+  const normalizedEntry = normalizeToken(entryVisit);
+  const normalizedName = normalizeToken(visit.name);
+  const normalizedDay = normalizeToken(String(visit.day || ""));
+  const normalizedLabel = normalizeToken(scheduleVisitLabel(visit));
+
+  if (!normalizedEntry) return false;
+  if (normalizedEntry === normalizedLabel || normalizedEntry === normalizedName) return true;
+  if (normalizedEntry.includes(normalizedLabel) || normalizedLabel.includes(normalizedEntry)) return true;
+  if (normalizedEntry.includes(normalizedName) || normalizedName.includes(normalizedEntry)) return true;
+
+  const dayToken = normalizedEntry.match(/(?:^| )day\s*(-?\d{1,3})(?: |$)/)?.[1] || normalizedEntry.match(/^(-?\d{1,3})$/)?.[1];
+  if (!dayToken || !normalizedDay) return false;
+  if (!new RegExp(`(^| )${dayToken}( |$)`).test(normalizedDay)) return false;
+  return (dayTokenCounts.get(dayToken) || 0) === 1;
+}
+
+function normalizeScaffoldWithSchedule(
+  scaffoldData: any,
+  schedule: StructuredSchedule | null,
+  protocolFilename: string
+) {
+  const fallbackPage = schedule?.sourcePages?.[0] ?? null;
+  const base =
+    scaffoldData && typeof scaffoldData === "object"
+      ? scaffoldData
+      : buildFallbackScaffold(protocolFilename, schedule);
+
+  const protocolSections = normalizeProtocolSections(base.protocolSections);
+  const rawPhases = Array.isArray(base.phases) ? base.phases : [];
+  const dedupedPhases: any[] = [];
+  const phaseByKey = new Map<string, any>();
+
+  for (const phase of rawPhases) {
+    const phaseName = String(phase?.name || "").trim();
+    if (!phaseName) continue;
+    const key = normalizeToken(phaseName);
+    const normalizedTasks = (Array.isArray(phase?.tasks) ? phase.tasks : [])
+      .map((task: any) => normalizeScheduleTask(task, fallbackPage))
+      .filter(Boolean);
+
+    if (!phaseByKey.has(key)) {
+      const next = {
+        name: phaseName,
+        color: typeof phase?.color === "string" ? phase.color : FALLBACK_PHASE_COLORS[dedupedPhases.length % FALLBACK_PHASE_COLORS.length],
+        tasks: normalizedTasks,
+        transitions: Array.isArray(phase?.transitions) ? phase.transitions : [],
+      };
+      phaseByKey.set(key, next);
+      dedupedPhases.push(next);
+      continue;
+    }
+
+    const existing = phaseByKey.get(key);
+    const existingTaskNames = new Set(existing.tasks.map((task: any) => normalizeToken(task.name)));
+    for (const task of normalizedTasks) {
+      const taskKey = normalizeToken(task.name);
+      if (!taskKey || existingTaskNames.has(taskKey)) continue;
+      existingTaskNames.add(taskKey);
+      existing.tasks.push(task);
+    }
+    if (Array.isArray(phase?.transitions)) {
+      for (const transition of phase.transitions) {
+        if (!transition?.toPhase) continue;
+        const exists = existing.transitions.some((row: any) => normalizeToken(row?.toPhase) === normalizeToken(transition.toPhase));
+        if (!exists) existing.transitions.push(transition);
+      }
+    }
+  }
+
+  if (schedule?.visits?.length) {
+    const footnoteMap = new Map((schedule.footnotes || []).map((note) => [String(note.number || "").trim(), String(note.text || "").trim()]));
+    const dayTokenCounts = new Map<string, number>();
+    for (const visit of schedule.visits) {
+      const dayToken = String(visit?.day || "").match(/-?\d{1,3}/)?.[0];
+      if (!dayToken) continue;
+      dayTokenCounts.set(dayToken, (dayTokenCounts.get(dayToken) || 0) + 1);
+    }
+
+    for (let visitIndex = 0; visitIndex < schedule.visits.length; visitIndex += 1) {
+      const visit = schedule.visits[visitIndex];
+      const visitLabel = scheduleVisitLabel(visit);
+      if (!visitLabel) continue;
+      const visitKey = normalizeToken(visitLabel);
+
+      let phase = phaseByKey.get(visitKey);
+      if (!phase) {
+        phase = {
+          name: visitLabel,
+          color: FALLBACK_PHASE_COLORS[visitIndex % FALLBACK_PHASE_COLORS.length],
+          tasks: [],
+          transitions: [],
+        };
+        phaseByKey.set(visitKey, phase);
+        dedupedPhases.push(phase);
+      }
+
+      const existingTaskNames = new Set((phase.tasks || []).map((task: any) => normalizeToken(task.name)));
+      const visitEntries = (schedule.entries || []).filter(
+        (entry) => entry.required && visitMatchesEntry(String(entry.visit || ""), visit, dayTokenCounts)
+      );
+
+      for (const entry of visitEntries) {
+        const category = inferFallbackCategory(entry.procedure);
+        const baseName = withActionVerb(entry.procedure, category);
+        const taskKey = normalizeToken(baseName);
+        if (!taskKey || existingTaskNames.has(taskKey)) continue;
+        existingTaskNames.add(taskKey);
+
+        const note = entry.footnoteRef ? footnoteMap.get(String(entry.footnoteRef).trim()) || null : null;
+        phase.tasks.push({
+          name: baseName,
+          suggestedDate: null,
+          estimatedDuration: inferFallbackDuration(category, baseName),
+          category,
+          assignedRole: inferFallbackRole(category, baseName),
+          priority: inferFallbackPriority(category, baseName),
+          protocolReference: {
+            section: "Schedule of Activities",
+            page: fallbackPage,
+            extractedText: `${entry.procedure} required at ${visitLabel}`,
+          },
+          aiConfidence: note ? 0.88 : 0.95,
+          conditionalNote: note,
+          dependencies: [],
+        });
+      }
+
+      const edcTaskName = `Enter ${visitLabel} data in EDC`;
+      const edcKey = normalizeToken(edcTaskName);
+      if (!existingTaskNames.has(edcKey)) {
+        phase.tasks.push({
+          name: edcTaskName,
+          suggestedDate: null,
+          estimatedDuration: 20,
+          category: "data_entry",
+          assignedRole: "crc",
+          priority: "medium",
+          protocolReference: {
+            section: "Schedule of Activities",
+            page: fallbackPage,
+            extractedText: null,
+          },
+          aiConfidence: 0.86,
+          conditionalNote: null,
+          dependencies: [],
+        });
+      }
+    }
+  }
+
+  return {
+    ...base,
+    protocolSections,
+    phases: dedupedPhases.length > 0 ? dedupedPhases : buildFallbackScaffold(protocolFilename, schedule).phases,
+  };
+}
+
 /**
  * Study Setup Agent Router
  * Handles protocol analysis and task scaffold generation
@@ -1016,6 +1289,7 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
           }
         }
       }
+      scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);
 
       // Create task scaffold
       await db.createTaskScaffold({

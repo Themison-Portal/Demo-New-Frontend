@@ -27,7 +27,7 @@ export function DashboardLayout({ children, breadcrumbs, breadcrumbIcon }: Dashb
         <Sidebar />
         
         {/* Main Content Area */}
-        <main className={`relative z-20 h-screen bg-[#F9FAFB] flex-1 overflow-hidden transition-all duration-300 rounded-tl-2xl rounded-bl-2xl mr-0 border border-[#E4E7EC] border-r-0 shadow-[-3px_0_9px_rgba(15,23,42,0.03)] ${
+        <main className={`relative z-20 h-screen bg-[#F7F8FB] flex-1 overflow-hidden transition-all duration-300 rounded-tl-2xl rounded-bl-2xl mr-0 border border-[#D6DCE5] border-r-0 shadow-[-4px_0_12px_rgba(15,23,42,0.05)] ${
           isCollapsed ? "ml-[64px]" : "ml-[280px]"
         }`}>
           <div className="px-0">

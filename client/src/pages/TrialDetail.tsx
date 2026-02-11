@@ -11,7 +11,6 @@ import {
   Users as UsersIcon,
   UserCheck,
   Sparkles,
-  UserPlus2,
   ChevronDown,
   FolderOpen,
   Wand2,
@@ -27,10 +26,16 @@ import {
   Share2,
   ArrowRight,
   Check,
+  Brain,
+  Maximize2,
+  X,
+  User,
 } from "lucide-react";
+import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import { useRoute, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
@@ -43,23 +48,218 @@ import { useDemoState } from "@/contexts/DemoStateContext";
 import { logEvent } from "@/lib/telemetry";
 import { AddMemberPanel } from "@/components/AddMemberPanel";
 import { useMapStore } from "@/stores/mapStore";
+import type { TaskCategory, TaskPriority, TaskStatus } from "@/types/map";
+import studySetupBackground from "@/assets/study-setup-background.svg";
+
+const TRIAL_DETAIL_TAB_IDS = new Set([
+  "overview",
+  "document-hub",
+  "study-setup-wizard",
+  "visit-template",
+  "bookmarks",
+  "team",
+  "patients",
+  "notifications",
+  "settings",
+]);
+
+function getInitialTrialDetailTab() {
+  if (typeof window === "undefined") return "overview";
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = (params.get("tab") || "").trim();
+  if (TRIAL_DETAIL_TAB_IDS.has(fromQuery)) return fromQuery;
+  return "overview";
+}
+
+const SETUP_TASK_STATUS_OPTIONS: TaskStatus[] = [
+  "suggested",
+  "confirmed",
+  "todo",
+  "in_progress",
+  "blocked",
+  "waiting",
+  "done",
+  "skipped",
+  "cancelled",
+];
+
+const SETUP_TASK_PRIORITY_OPTIONS: TaskPriority[] = ["critical", "high", "medium", "low"];
+
+const SETUP_TASK_CATEGORY_OPTIONS: TaskCategory[] = [
+  "consent",
+  "eligibility",
+  "lab_sample",
+  "vital_signs",
+  "imaging",
+  "drug_administration",
+  "assessment",
+  "questionnaire",
+  "data_entry",
+  "coordination",
+  "documentation",
+  "follow_up",
+  "safety_reporting",
+  "regulatory",
+  "custom",
+];
+
+const SETUP_ASSIGNED_ROLE_OPTIONS = [
+  "pi",
+  "sub_i",
+  "crc",
+  "nurse",
+  "pharmacist",
+  "lab_tech",
+  "data_manager",
+  "regulatory_coordinator",
+  "study_coordinator",
+  "custom",
+] as const;
+
+type SetupTaskModalMode = "create" | "edit";
+
+type SetupTaskFormState = {
+  title: string;
+  description: string;
+  phaseId: string;
+  category: TaskCategory;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignedRole: string;
+  assigneeMemberId: string;
+  dueDate: string;
+  sourceSection: string;
+  sourcePage: string;
+  sourceText: string;
+};
+
+function titleCase(value: string): string {
+  if (!value) return value;
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function toDateInputValue(value?: string | Date | null): string {
+  if (!value) return "";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toIsoDateTime(value: string): string | null {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function normalizeRoleToken(value?: string | null): string {
+  const token = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (!token) return "";
+  if (token === "pi" || token.includes("principalinvestigator")) return "pi";
+  if (token === "subi" || token === "subinvestigator" || token.includes("subinvestigator")) return "sub_i";
+  if (token === "crc" || token.includes("clinicalresearchcoordinator")) return "crc";
+  if (token.includes("nurse")) return "nurse";
+  if (token.includes("pharmac")) return "pharmacist";
+  if (token.includes("lab")) return "lab_tech";
+  if (token.includes("datamanager")) return "data_manager";
+  if (token.includes("regulatory")) return "regulatory_coordinator";
+  if (token.includes("studycoordinator")) return "study_coordinator";
+  return token;
+}
+
+function formatRoleLabel(role?: string | null): string {
+  const raw = String(role || "").trim().toLowerCase();
+  if (!raw) return "Unassigned";
+  const alias: Record<string, string> = {
+    pi: "PI",
+    sub_i: "Sub-I",
+    crc: "CRC",
+    nurse: "Nurse",
+    pharmacist: "Pharmacist",
+    lab_tech: "Lab Tech",
+    data_manager: "Data Manager",
+    regulatory_coordinator: "Regulatory Coordinator",
+    study_coordinator: "Study Coordinator",
+  };
+  return alias[raw] || titleCase(raw);
+}
 
 export default function TrialDetail() {
   const [, navigate] = useLocation();
   const [, params] = useRoute("/trial/:id");
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(getInitialTrialDetailTab);
   const [isGeneratingScaffold, setIsGeneratingScaffold] = useState(false);
   const [manageTeamOpen, setManageTeamOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [assignedMemberIds, setAssignedMemberIds] = useState<string[]>([]);
   const [sponsorLogoFailed, setSponsorLogoFailed] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isSetupFullscreenOpen, setIsSetupFullscreenOpen] = useState(false);
+  const [isSetupFullscreenVisible, setIsSetupFullscreenVisible] = useState(false);
+  const [generatedSetupMapId, setGeneratedSetupMapId] = useState<string | null>(null);
+  const [setupScaffoldView, setSetupScaffoldView] = useState<"list" | "timeline" | "canvas">("list");
+  const [setupTaskModalOpen, setSetupTaskModalOpen] = useState(false);
+  const [setupTaskModalMode, setSetupTaskModalMode] = useState<SetupTaskModalMode>("create");
+  const [setupEditingTaskId, setSetupEditingTaskId] = useState<string | null>(null);
+  const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
+  const [setupTaskForm, setSetupTaskForm] = useState<SetupTaskFormState>({
+    title: "",
+    description: "",
+    phaseId: "",
+    category: "custom",
+    status: "todo",
+    priority: "medium",
+    assignedRole: "",
+    assigneeMemberId: "",
+    dueDate: "",
+    sourceSection: "",
+    sourcePage: "",
+    sourceText: "",
+  });
 
   const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
 
   const trialId = (params?.id || "").toLowerCase();
   const isValidTrialId = trialId.length > 0;
+  const trialTabStorageKey = trialId ? `trial-active-tab:${currentDataMode}:${trialId}` : null;
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialTabStorageKey) return;
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = (params.get("tab") || "").trim();
+    const fromStorage = (window.localStorage.getItem(trialTabStorageKey) || "").trim();
+    const nextTab = TRIAL_DETAIL_TAB_IDS.has(fromQuery)
+      ? fromQuery
+      : TRIAL_DETAIL_TAB_IDS.has(fromStorage)
+      ? fromStorage
+      : "overview";
+    setActiveTab(nextTab);
+  }, [trialTabStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialTabStorageKey) return;
+    const normalizedTab = TRIAL_DETAIL_TAB_IDS.has(activeTab) ? activeTab : "overview";
+    window.localStorage.setItem(trialTabStorageKey, normalizedTab);
+
+    const params = new URLSearchParams(window.location.search);
+    if (normalizedTab === "overview") {
+      params.delete("tab");
+    } else {
+      params.set("tab", normalizedTab);
+    }
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [activeTab, trialTabStorageKey]);
 
   const { data: protocols = [] } = trpc.documents.list.useQuery(
     { trialId, demoMode: currentDataMode },
@@ -78,6 +278,7 @@ export default function TrialDetail() {
     { trialId, includeArchived: false },
     { enabled: isValidTrialId }
   );
+  const confirmSuggestedMutation = trpc.map.confirmSuggested.useMutation();
 
   const map = useMapStore((store) => store.map);
   const mapPhases = useMapStore((store) => store.phases);
@@ -90,8 +291,26 @@ export default function TrialDetail() {
   const updateExecutionTask = useMapStore((store) => store.updateTask);
   const removeExecutionTask = useMapStore((store) => store.removeTask);
   const reorderExecutionTasks = useMapStore((store) => store.reorderTasks);
+  const moveExecutionTask = useMapStore((store) => store.moveTask);
+  const addExecutionDependency = useMapStore((store) => store.addDependency);
+  const removeExecutionDependency = useMapStore((store) => store.removeDependency);
 
   const bootstrapGuardRef = useRef<string | null>(null);
+  const generationRunRef = useRef<number>(0);
+  const cancelledGenerationRunsRef = useRef<Set<number>>(new Set());
+  const normalizedMapTrialId = String(map?.trialId || "").toLowerCase();
+  const isCurrentTrialExecutionMap =
+    Boolean(map?.id) &&
+    Boolean(executionMapSummary?.id) &&
+    map?.id === executionMapSummary?.id &&
+    normalizedMapTrialId === trialId;
+
+  const scopedMapPhases = isCurrentTrialExecutionMap ? mapPhases : [];
+  const scopedMapTasks = isCurrentTrialExecutionMap ? mapTasks : [];
+  const scopedMapDependencies = isCurrentTrialExecutionMap ? mapDependencies : [];
+  const scopedMapSections = isCurrentTrialExecutionMap ? mapSections : [];
+  const setupMapStatus = isCurrentTrialExecutionMap ? map?.status : executionMapSummary?.status;
+  const isSetupPlanLaunched = setupMapStatus === "active";
 
   const { data: trial } = trpc.trials.getById.useQuery(
     { id: trialId, demoMode: currentDataMode },
@@ -103,11 +322,16 @@ export default function TrialDetail() {
       demoMode: currentDataMode,
       include: ["documents", "telemetry", "execution", "suggestions", "insights"],
       pageContext: activeTab,
-      emitTelemetry: activeTab === "overview" || activeTab === "document-hub",
+      emitTelemetry: false,
     },
     {
       enabled: isValidTrialId && (activeTab === "overview" || activeTab === "document-hub"),
-      staleTime: 30000,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
+      refetchIntervalInBackground: true,
     }
   );
 
@@ -119,35 +343,132 @@ export default function TrialDetail() {
   }, [isValidTrialId, navigate]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !trialId) return;
-    const storageKey = `trial-team:${currentDataMode}:${trialId}`;
-    const stored = window.localStorage.getItem(storageKey);
-    if (!stored) {
-      setAssignedMemberIds([]);
+    if (activeTab !== "study-setup-wizard") {
+      setIsSetupFullscreenVisible(false);
+      setIsSetupFullscreenOpen(false);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isSetupFullscreenOpen || typeof window === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsSetupFullscreenVisible(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isSetupFullscreenOpen]);
+
+  useEffect(() => {
+    if (!isSetupFullscreenOpen || isSetupFullscreenVisible || typeof window === "undefined") return;
+    const timeout = window.setTimeout(() => {
+      setIsSetupFullscreenOpen(false);
+    }, 1400);
+    return () => window.clearTimeout(timeout);
+  }, [isSetupFullscreenOpen, isSetupFullscreenVisible]);
+
+  const openSetupFullscreen = () => {
+    if (isSetupFullscreenOpen) return;
+    setIsSetupFullscreenOpen(true);
+    if (typeof window === "undefined") {
+      setIsSetupFullscreenVisible(true);
       return;
     }
-    try {
-      const parsed = JSON.parse(stored);
-      setAssignedMemberIds(Array.isArray(parsed) ? parsed : []);
-    } catch {
-      setAssignedMemberIds([]);
-    }
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setIsSetupFullscreenVisible(true);
+      });
+    });
+  };
+
+  useEffect(() => {
+    if (activeTab !== "study-setup-wizard") return;
+    if (!isSetupPlanLaunched) return;
+    if (!isSetupFullscreenOpen && !isSetupFullscreenVisible) return;
+    setIsSetupFullscreenVisible(false);
+    setIsSetupFullscreenOpen(false);
+  }, [activeTab, isSetupPlanLaunched, isSetupFullscreenOpen, isSetupFullscreenVisible]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialId) return;
+
+    const readAssignedMembers = () => {
+      const exactKey = `trial-team:${currentDataMode}:${trialId}`;
+      let stored = window.localStorage.getItem(exactKey);
+
+      if (!stored) {
+        const prefix = `trial-team:${currentDataMode}:`;
+        const trialIdLower = trialId.toLowerCase();
+        for (let i = 0; i < window.localStorage.length; i += 1) {
+          const key = window.localStorage.key(i);
+          if (!key || !key.startsWith(prefix)) continue;
+          const candidateId = key.slice(prefix.length).toLowerCase();
+          if (candidateId !== trialIdLower) continue;
+          stored = window.localStorage.getItem(key);
+          if (stored) break;
+        }
+      }
+
+      if (!stored) {
+        setAssignedMemberIds([]);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stored);
+        setAssignedMemberIds(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setAssignedMemberIds([]);
+      }
+    };
+
+    readAssignedMembers();
+
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || !event.key.startsWith(`trial-team:${currentDataMode}:`)) return;
+      readAssignedMembers();
+    };
+    const onTeamUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ trialId?: string; mode?: string }>;
+      const eventTrialId = String(customEvent.detail?.trialId || "").toLowerCase();
+      const eventMode = String(customEvent.detail?.mode || "");
+      if (eventMode && eventMode !== currentDataMode) return;
+      if (eventTrialId && eventTrialId !== trialId) return;
+      readAssignedMembers();
+    };
+    const onWindowFocus = () => readAssignedMembers();
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("trial-team-updated", onTeamUpdated as EventListener);
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("trial-team-updated", onTeamUpdated as EventListener);
+      window.removeEventListener("focus", onWindowFocus);
+    };
   }, [trialId, currentDataMode]);
 
   useEffect(() => {
     const mapId = executionMapSummary?.id;
     if (!mapId) return;
+    if (generatedSetupMapId && generatedSetupMapId === mapId) return;
     void loadExecutionMap(mapId).catch((error) => {
       console.error("Failed to load execution map:", error);
       toast.error("Failed to load execution map");
     });
-  }, [executionMapSummary?.id, loadExecutionMap]);
+  }, [executionMapSummary?.id, loadExecutionMap, generatedSetupMapId]);
 
   const utils = trpc.useUtils();
   const updateTrial = trpc.trials.update.useMutation({
     onSuccess: async () => {
       await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
       await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.trials.getContext.invalidate({ id: trialId, demoMode: currentDataMode });
       toast.success("Trial updated");
     },
     onError: (error) => {
@@ -187,7 +508,13 @@ export default function TrialDetail() {
     setAssignedMemberIds(nextIds);
     if (typeof window !== "undefined") {
       const storageKey = `trial-team:${currentDataMode}:${trialId}`;
-      window.localStorage.setItem(storageKey, JSON.stringify(nextIds));
+      const payload = JSON.stringify(nextIds);
+      window.localStorage.setItem(storageKey, payload);
+      window.dispatchEvent(
+        new CustomEvent("trial-team-updated", {
+          detail: { trialId, mode: currentDataMode },
+        })
+      );
     }
   };
 
@@ -296,6 +623,10 @@ export default function TrialDetail() {
 
     if (!trial) return;
 
+    const runId = Date.now();
+    generationRunRef.current = runId;
+    cancelledGenerationRunsRef.current.delete(runId);
+    setGeneratedSetupMapId(null);
     setIsGeneratingScaffold(true);
     logEvent({
       eventType: "trial_setup_started",
@@ -312,30 +643,71 @@ export default function TrialDetail() {
         trialId: trial.id,
         demoMode: currentDataMode,
       });
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
       const imported = await importLegacyScaffold.mutateAsync({
         trialId: trial.id,
         protocolId: protocols[0].id,
         clearExisting: true,
       });
-      await refetchExecutionMapSummary();
-      if (imported?.mapId) {
-        await loadExecutionMap(imported.mapId);
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      const refreshedSummary = await refetchExecutionMapSummary();
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      const resolvedMapId =
+        imported?.mapId || refreshedSummary.data?.id || executionMapSummary?.id || null;
+      if (resolvedMapId) {
+        setGeneratedSetupMapId(resolvedMapId);
+      } else {
+        toast.error("Plan was generated, but map sync is still in progress.");
       }
       logEvent({
         eventType: "trial_setup_step_completed",
         action: "generated",
         entityType: "task_scaffold",
-        payload: { trialId, demoMode: currentDataMode, mapId: imported?.mapId ?? null },
+        payload: { trialId, demoMode: currentDataMode, mapId: resolvedMapId },
         aiInvolved: true,
       });
       toast.success("Execution map generated");
     } catch (error: any) {
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
       console.error("Failed to generate scaffold:", error);
       toast.error("Failed to generate execution plan", {
         description: error?.message || "Please upload a protocol in Document Hub and try again.",
       });
     } finally {
+      cancelledGenerationRunsRef.current.delete(runId);
       setIsGeneratingScaffold(false);
+    }
+  };
+
+  const handleCancelGenerateScaffold = () => {
+    if (!isGeneratingScaffold) return;
+    const currentRunId = generationRunRef.current;
+    if (currentRunId) {
+      cancelledGenerationRunsRef.current.add(currentRunId);
+    }
+    setIsGeneratingScaffold(false);
+    toast.message("Plan generation stopped");
+  };
+
+  const handleOpenGeneratedScaffold = async () => {
+    const mapId = generatedSetupMapId || executionMapSummary?.id;
+    if (!mapId) {
+      toast.error("Generated plan is not ready yet.");
+      return;
+    }
+    try {
+      await loadExecutionMap(mapId);
+      setGeneratedSetupMapId(null);
+    } catch (error: any) {
+      toast.error(`Failed to open generated plan: ${error?.message || "Unknown error"}`);
     }
   };
 
@@ -378,8 +750,8 @@ export default function TrialDetail() {
   const targetPatients = trial?.targetPatients || 0;
   const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
   const scaffoldTasks =
-    mapTasks.length > 0
-      ? mapTasks
+    scopedMapTasks.length > 0
+      ? scopedMapTasks
       : (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
   const pendingTasks = scaffoldTasks.filter((task: any) => {
     const status = String(task?.status || "");
@@ -397,9 +769,16 @@ export default function TrialDetail() {
     if (!candidateDate) return false;
     return new Date(candidateDate).toISOString().slice(0, 10) === todayIso;
   }).length;
+  const overdueTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
+    const candidateDate = task?.dueDate || task?.suggestedDate;
+    if (!candidateDate) return false;
+    return new Date(candidateDate) < new Date();
+  }).length;
   const totalTasks = pendingTasks + completedTasks;
   const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const scheduledVisits = (mapPhases.length > 0 ? mapPhases : existingScaffold?.phases || []).filter((phase: any) =>
+  const scheduledVisits = (scopedMapPhases.length > 0 ? scopedMapPhases : existingScaffold?.phases || []).filter((phase: any) =>
     String(phase?.name || "").toLowerCase().includes("visit")
   ).length;
 
@@ -411,7 +790,7 @@ export default function TrialDetail() {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() || "")
     .join("") || "SP";
-  const contextSuggestions = (trialContext?.suggestions || []) as Array<{
+  const rawContextSuggestions = (trialContext?.suggestions || []) as Array<{
     id: string;
     title: string;
     description: string;
@@ -421,7 +800,6 @@ export default function TrialDetail() {
     priority: "high" | "medium" | "low";
     confidence: number;
   }>;
-  const primarySuggestion = contextSuggestions[0];
 
   useEffect(() => {
     setSponsorLogoFailed(false);
@@ -433,20 +811,64 @@ export default function TrialDetail() {
     }
   }, [activeTab]);
 
-  const hasText = (value?: string | null) => Boolean(value && value.trim().length > 0);
   const hasProtocolInHub = protocols.some((doc: any) => {
     const category = String(doc?.category || "").toLowerCase();
     const filename = String(doc?.filename || "").toLowerCase();
     return category.includes("protocol") || filename.includes("protocol");
   });
-  const trialProfileReady = [
-    trial?.protocolNumber,
-    trial?.sponsor,
-    trial?.phase,
-    trial?.investigationalProduct,
-    trial?.indication,
-  ].filter(hasText).length >= 4;
   const timelineReady = Boolean(trial?.startDate) && Boolean(trial?.endDate);
+  const trialStatusValue = (trial?.status || "not-started").toLowerCase();
+  const trialStatusLabel =
+    trialStatusValue === "not-started"
+      ? "Not started"
+      : trialStatusValue === "on-hold"
+      ? "On hold"
+      : trialStatusValue.charAt(0).toUpperCase() + trialStatusValue.slice(1);
+  const trialStatusDisplayClass =
+    trialStatusValue === "active" || trialStatusValue === "recruiting"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-emerald-100 text-emerald-700"
+      : trialStatusValue === "on-hold"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700"
+      : trialStatusValue === "terminated"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-red-100 text-red-700"
+      : trialStatusValue === "completed"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-700"
+      : "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-700";
+  const contextSuggestions = rawContextSuggestions.filter(
+    (signal) => !(signal.id === "set_trial_timeline" && timelineReady)
+  );
+  const primarySuggestion = contextSuggestions[0];
+  const normalizedAssignedRoles = trialTeamMembers.map((member) =>
+    String(member.role || "").toLowerCase().trim()
+  );
+  const hasPrincipalInvestigator = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("principal investigator") ||
+      role === "pi"
+  );
+  const hasCrc = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("crc") ||
+      role.includes("clinical research coordinator") ||
+      role.includes("study coordinator")
+  );
+  const hasOperationalSupportRole = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("nurse") ||
+      role.includes("lab") ||
+      role.includes("data manager") ||
+      role.includes("regulatory") ||
+      role.includes("safety") ||
+      role.includes("pharmac") ||
+      role.includes("quality") ||
+      role.includes("project manager")
+  );
+  const teamReadinessRequirements = [
+    !hasPrincipalInvestigator ? "PI" : null,
+    !hasCrc ? "CRC" : null,
+    !hasOperationalSupportRole ? "1 support role (Nurse/Lab/Data/Regulatory/Safety)" : null,
+  ].filter(Boolean) as string[];
+  const teamReady = hasPrincipalInvestigator && hasCrc && hasOperationalSupportRole;
   const launchChecklist = [
     ...(!hasProtocolInHub
       ? [
@@ -459,12 +881,6 @@ export default function TrialDetail() {
         ]
       : []),
     {
-      id: "protocol-profile",
-      title: "Confirm AI-extracted trial profile",
-      subtitle: "Protocol number, sponsor, phase, indication, and product.",
-      done: trialProfileReady,
-    },
-    {
       id: "setup-wizard",
       title: "Generate execution plan in Study Setup Agent",
       subtitle: "Convert protocol requirements into operational tasks.",
@@ -473,8 +889,10 @@ export default function TrialDetail() {
     {
       id: "team",
       title: "Assign trial team members",
-      subtitle: "Add PI/CRC and required site roles.",
-      done: trialTeamMembers.length > 0,
+      subtitle: teamReady
+        ? "Core trial team is in place."
+        : `Missing: ${teamReadinessRequirements.join(", ")}.`,
+      done: teamReady,
     },
     {
       id: "timeline",
@@ -507,7 +925,7 @@ export default function TrialDetail() {
       ? "Set start/end dates to unlock time-based planning and alerts."
       : firstIncompleteChecklistItem.id === "activate-trial"
       ? "All onboarding is ready. Set status to Active when the trial is ready to start."
-      : "Review extracted trial profile to ensure execution starts from verified data."
+      : "Open Themison AI for protocol-grounded guidance."
     : nextOperationalTasks.length > 0
     ? "Execution plan is live. Assign owners to the next tasks and monitor progress."
     : "Launch readiness is complete. Generate or refresh your execution plan as needed.";
@@ -524,14 +942,10 @@ export default function TrialDetail() {
       ? "Set Timeline"
       : firstIncompleteChecklistItem.id === "activate-trial"
       ? "Set Trial Status"
-      : "Review Profile in Themison AI"
+      : "Open Themison AI"
     : nextOperationalTasks.length > 0
     ? "Open Study Setup Agent"
     : "Open Themison AI";
-  const launchReadyWithoutActivation = launchChecklist
-    .filter((item) => item.id !== "activate-trial")
-    .every((item) => item.done);
-
   const handleAiRecommendedAction = () => {
     if (primarySuggestion) {
       logEvent({
@@ -593,9 +1007,7 @@ export default function TrialDetail() {
       }
       return;
     }
-    if (firstIncompleteChecklistItem.id === "protocol-profile") {
-      navigate(`/trial/${trialId}/assistant`);
-    }
+    navigate(`/trial/${trialId}/assistant`);
   };
 
   const formatDate = (value?: string | Date | null) => {
@@ -622,10 +1034,10 @@ export default function TrialDetail() {
   };
 
   const setupPhases = useMemo(() => {
-    if (mapPhases.length === 0) return [];
-    const taskById = new Map(mapTasks.map((task) => [task.id, task]));
+    if (scopedMapPhases.length === 0) return [];
+    const taskById = new Map(scopedMapTasks.map((task) => [task.id, task]));
     const depsByTask = new Map<string, any[]>();
-    for (const dep of mapDependencies) {
+    for (const dep of scopedMapDependencies) {
       const current = depsByTask.get(dep.targetTaskId) ?? [];
       current.push({
         ...dep,
@@ -634,10 +1046,10 @@ export default function TrialDetail() {
       depsByTask.set(dep.targetTaskId, current);
     }
 
-    return [...mapPhases]
+    return [...scopedMapPhases]
       .sort((a, b) => a.displayOrder - b.displayOrder)
       .map((phase) => {
-        const phaseTasks = mapTasks
+        const phaseTasks = scopedMapTasks
           .filter((task) => task.phaseId === phase.id)
           .sort((a, b) => a.orderInPhase - b.orderInPhase)
           .map((task) => {
@@ -652,7 +1064,13 @@ export default function TrialDetail() {
             return {
               id: task.id,
               name: task.name,
-              suggestedDate: task.suggestedDate ? new Date(task.suggestedDate) : task.dueDate ? new Date(task.dueDate) : null,
+              suggestedDate: task.suggestedDate
+                ? new Date(task.suggestedDate)
+                : task.dueDate
+                ? new Date(task.dueDate)
+                : null,
+              startDate: task.startDate ? new Date(task.startDate) : null,
+              dueDate: task.dueDate ? new Date(task.dueDate) : null,
               suggestedAssigneeId: task.assignedUserId ?? null,
               dependencies: depsByTask.get(task.id) ?? [],
               status: task.status,
@@ -677,63 +1095,402 @@ export default function TrialDetail() {
           tasks: phaseTasks,
         };
       });
-  }, [mapPhases, mapTasks, mapDependencies]);
+  }, [scopedMapPhases, scopedMapTasks, scopedMapDependencies]);
 
   const setupSections = useMemo(() => {
-    if (mapSections.length === 0) return [];
-    return [...mapSections]
-      .sort((a, b) => a.displayOrder - b.displayOrder)
+    if (scopedMapSections.length > 0) {
+      const normalizeSectionKey = (name: string) => {
+        const normalized = String(name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        if (/(schedule|visit window|study days|soa|soe)/.test(normalized)) return "schedule";
+        if (/(inclusion|exclusion|eligib)/.test(normalized)) return "eligibility";
+        if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "dosing";
+        if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "procedure";
+        if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "lab";
+        if (/(adverse event|safety|sae|ae)/.test(normalized)) return "safety";
+        if (/(concomitant|medication)/.test(normalized)) return "medication";
+        return normalized || "custom";
+      };
+
+      const dedupedSections = [...scopedMapSections]
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .filter((section, index, all) => {
+          const key = normalizeSectionKey(section.name);
+          return all.findIndex((row) => normalizeSectionKey(row.name) === key) === index;
+        });
+
+      return dedupedSections
       .map((section) => ({
+          id: section.id,
+          name: section.name,
+          dateReference: section.dateReference
+            ? new Date(section.dateReference).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+            : null,
+          pageReference: section.pageStart ? `P.${section.pageStart}` : null,
+          pageStart: section.pageStart ?? null,
+          linkedTaskIds: section.linkedTaskIds ?? [],
+          linkedPhaseIds: section.linkedPhaseIds ?? [],
+        }));
+    }
+
+    if (setupPhases.length === 0) return [];
+
+    type FallbackSection = {
+      id: string;
+      name: string;
+      linkedTaskIds: string[];
+      linkedPhaseIds: string[];
+      pageStart: number | null;
+    };
+
+    const buckets: Array<{
+      id: string;
+      name: string;
+      match: (task: any, normalizedName: string) => boolean;
+    }> = [
+      {
+        id: "schedule",
+        name: "Schedule of Events",
+        match: () => true,
+      },
+      {
+        id: "inclusion-exclusion",
+        name: "Inclusion / Exclusion",
+        match: (task, normalizedName) =>
+          task.category === "eligibility" ||
+          task.category === "consent" ||
+          normalizedName.includes("inclusion") ||
+          normalizedName.includes("exclusion") ||
+          normalizedName.includes("consent"),
+      },
+      {
+        id: "dosing",
+        name: "Dosing & Administration",
+        match: (task, normalizedName) =>
+          task.category === "drug_administration" ||
+          normalizedName.includes("dose") ||
+          normalizedName.includes("infusion") ||
+          normalizedName.includes("administration"),
+      },
+      {
+        id: "procedures",
+        name: "Procedures & Assessments",
+        match: (task) =>
+          ["assessment", "vital_signs", "questionnaire", "imaging"].includes(String(task.category || "")),
+      },
+      {
+        id: "lab",
+        name: "Lab & Samples",
+        match: (task, normalizedName) =>
+          task.category === "lab_sample" ||
+          normalizedName.includes("sample") ||
+          normalizedName.includes("blood") ||
+          normalizedName.includes("lab"),
+      },
+      {
+        id: "safety",
+        name: "Adverse Events & Safety",
+        match: (task, normalizedName) =>
+          task.category === "safety_reporting" ||
+          normalizedName.includes("adverse") ||
+          normalizedName.includes("safety"),
+      },
+      {
+        id: "concomitant",
+        name: "Concomitant Medications",
+        match: (_task, normalizedName) =>
+          normalizedName.includes("concomitant") || normalizedName.includes("medication"),
+      },
+    ];
+
+    const fallbackMap = new Map<string, FallbackSection>();
+    for (const bucket of buckets) {
+      fallbackMap.set(bucket.id, {
+        id: `fallback-${bucket.id}`,
+        name: bucket.name,
+        linkedTaskIds: [],
+        linkedPhaseIds: [],
+        pageStart: null,
+      });
+    }
+
+    for (const phase of setupPhases) {
+      for (const task of phase.tasks) {
+        const normalizedName = String(task.name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        for (const bucket of buckets) {
+          if (!bucket.match(task, normalizedName)) continue;
+          const target = fallbackMap.get(bucket.id);
+          if (!target) continue;
+          if (!target.linkedTaskIds.includes(task.id)) target.linkedTaskIds.push(task.id);
+          if (!target.linkedPhaseIds.includes(phase.id)) target.linkedPhaseIds.push(phase.id);
+          if (!target.pageStart && task.protocolReference?.page) {
+            target.pageStart = task.protocolReference.page;
+          }
+        }
+      }
+    }
+
+    const fallbackSections = Array.from(fallbackMap.values()).filter((section) => section.linkedTaskIds.length > 0);
+    if (fallbackSections.length > 0) {
+      return fallbackSections.map((section, index) => ({
         id: section.id,
         name: section.name,
-        dateReference: section.dateReference
-          ? new Date(section.dateReference).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-          : null,
+        dateReference: null,
         pageReference: section.pageStart ? `P.${section.pageStart}` : null,
-        pageStart: section.pageStart ?? null,
-        linkedTaskIds: section.linkedTaskIds ?? [],
-        linkedPhaseIds: section.linkedPhaseIds ?? [],
+        pageStart: section.pageStart,
+        linkedTaskIds: section.linkedTaskIds,
+        linkedPhaseIds: section.linkedPhaseIds,
+        displayOrder: index,
       }));
-  }, [mapSections]);
+    }
 
-  const handleAddSetupTask = async () => {
+    const allTasks = setupPhases.flatMap((phase) => phase.tasks);
+    const allTaskIds = allTasks.map((task) => task.id);
+    const allPhaseIds = setupPhases.map((phase) => phase.id);
+    const firstPage = allTasks.find((task) => task.protocolReference?.page)?.protocolReference?.page ?? null;
+
+    return [
+      {
+        id: "fallback-schedule",
+        name: "Schedule of Events",
+        dateReference: null,
+        pageReference: firstPage ? `P.${firstPage}` : null,
+        pageStart: firstPage,
+        linkedTaskIds: allTaskIds,
+        linkedPhaseIds: allPhaseIds,
+      },
+    ];
+  }, [scopedMapSections, setupPhases]);
+
+  const setupDependencyCandidates = useMemo(
+    () =>
+      scopedMapTasks
+        .filter((task) => task.id !== setupEditingTaskId)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [scopedMapTasks, setupEditingTaskId]
+  );
+
+  const setupAssignedMembersForTaskForm = useMemo(
+    () =>
+      trialTeamMembers.map((member) => ({
+        id: String(member.id),
+        name: member.name,
+        role: member.role || "",
+      })),
+    [trialTeamMembers]
+  );
+
+  useEffect(() => {
+    if (!setupTaskModalOpen || setupPhases.length === 0) return;
+    if (setupPhases.some((phase) => phase.id === setupTaskForm.phaseId)) return;
+    setSetupTaskForm((prev) => ({ ...prev, phaseId: setupPhases[0]?.id || "" }));
+  }, [setupTaskModalOpen, setupPhases, setupTaskForm.phaseId]);
+
+  const syncSetupTaskDependencies = async (targetTaskId: string, selectedSourceTaskIds: string[]) => {
+    if (!map?.id) return;
+    const existingDeps = scopedMapDependencies.filter((dep) => dep.targetTaskId === targetTaskId);
+    const existingSourceSet = new Set(existingDeps.map((dep) => dep.sourceTaskId));
+    const selectedSourceSet = new Set(selectedSourceTaskIds);
+    const toAdd = selectedSourceTaskIds.filter((taskId) => !existingSourceSet.has(taskId));
+    const toRemove = existingDeps.filter((dep) => !selectedSourceSet.has(dep.sourceTaskId));
+
+    for (const sourceTaskId of toAdd) {
+      await addExecutionDependency({
+        sourceTaskId,
+        targetTaskId,
+        dependencyType: "finish_to_start",
+      });
+    }
+
+    for (const dep of toRemove) {
+      await removeExecutionDependency(dep.id);
+    }
+  };
+
+  const handleAddSetupTask = () => {
     if (!map?.id || setupPhases.length === 0) {
       toast.error("No execution map loaded");
       return;
     }
-    const name = window.prompt("Task name");
-    if (!name || !name.trim()) return;
+    setSetupTaskModalMode("create");
+    setSetupEditingTaskId(null);
+    setSetupDependencyTaskIds([]);
+    setSetupTaskForm({
+      title: "",
+      description: "",
+      phaseId: setupPhases[0]?.id || "",
+      category: "custom",
+      status: map.status === "active" ? "todo" : "suggested",
+      priority: "medium",
+      assignedRole: "",
+      assigneeMemberId: "",
+      dueDate: "",
+      sourceSection: "",
+      sourcePage: "",
+      sourceText: "",
+    });
+    setSetupTaskModalOpen(true);
+  };
+
+  const handleEditSetupTask = (taskId: string) => {
+    const task = scopedMapTasks.find((row) => row.id === taskId);
+    if (!task) return;
+    const sourceRef = (task.protocolRefs || [])[0] as unknown as Record<string, unknown> | undefined;
+    const sourcePageRaw = sourceRef?.page;
+    const sourcePage =
+      typeof sourcePageRaw === "number"
+        ? String(sourcePageRaw)
+        : typeof sourcePageRaw === "string"
+        ? sourcePageRaw
+        : "";
+    const memberForAssignee = setupAssignedMembersForTaskForm.find(
+      (member) =>
+        String(member.id) === String(task.assignedUserId || "") ||
+        member.name === (task.suggestedAssignee || "")
+    );
+    const predecessorTaskIds = scopedMapDependencies
+      .filter((dep) => dep.targetTaskId === task.id)
+      .map((dep) => dep.sourceTaskId);
+
+    setSetupTaskModalMode("edit");
+    setSetupEditingTaskId(task.id);
+    setSetupDependencyTaskIds(predecessorTaskIds);
+    setSetupTaskForm({
+      title: task.name || "",
+      description: task.description || "",
+      phaseId: task.phaseId,
+      category: (task.category as TaskCategory) || "custom",
+      status: (task.status as TaskStatus) || "todo",
+      priority: (task.priority as TaskPriority) || "medium",
+      assignedRole: String(task.assignedRole || ""),
+      assigneeMemberId: memberForAssignee ? String(memberForAssignee.id) : "",
+      dueDate: toDateInputValue(task.dueDate || task.suggestedDate),
+      sourceSection: String(sourceRef?.section || ""),
+      sourcePage,
+      sourceText: String(sourceRef?.extractedText || ""),
+    });
+    setSetupTaskModalOpen(true);
+  };
+
+  const handleSaveSetupTaskModal = async () => {
+    if (!map?.id) {
+      toast.error("No execution map loaded");
+      return;
+    }
+    const title = setupTaskForm.title.trim();
+    if (!title) {
+      toast.error("Task title is required.");
+      return;
+    }
+    if (!setupTaskForm.phaseId) {
+      toast.error("Phase / visit is required.");
+      return;
+    }
+
+    const selectedMember = setupAssignedMembersForTaskForm.find(
+      (member) => String(member.id) === setupTaskForm.assigneeMemberId
+    );
+    const assignedRole =
+      setupTaskForm.assignedRole &&
+      SETUP_ASSIGNED_ROLE_OPTIONS.includes(setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
+        ? (setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
+        : null;
+    const dueDateIso = toIsoDateTime(setupTaskForm.dueDate);
+    const pageNumber = Number(setupTaskForm.sourcePage);
+    const hasSource =
+      Boolean(setupTaskForm.sourceSection.trim()) ||
+      Boolean(setupTaskForm.sourceText.trim()) ||
+      (Number.isFinite(pageNumber) && pageNumber > 0);
+    const protocolRefs = hasSource
+      ? [
+          {
+            section: setupTaskForm.sourceSection.trim() || "Protocol",
+            ...(Number.isFinite(pageNumber) && pageNumber > 0 ? { page: Math.round(pageNumber) } : {}),
+            ...(setupTaskForm.sourceText.trim() ? { extractedText: setupTaskForm.sourceText.trim() } : {}),
+          },
+        ]
+      : [];
+
     try {
-      await addExecutionTask(setupPhases[0].id, {
-        name: name.trim(),
-        createdBy: "user",
-        isCustom: true,
-        status: map.status === "active" ? "todo" : "suggested",
-        category: "custom",
-        priority: "medium",
-        protocolRefs: [],
-      });
-      toast.success("Task added");
+      if (setupTaskModalMode === "create") {
+        const created = await addExecutionTask(setupTaskForm.phaseId, {
+          name: title,
+          description: setupTaskForm.description.trim() || undefined,
+          category: setupTaskForm.category,
+          status: setupTaskForm.status,
+          priority: setupTaskForm.priority,
+          assignedRole,
+          assignedUserId: null,
+          suggestedAssignee: selectedMember?.name || null,
+          suggestedDate: dueDateIso,
+          dueDate: dueDateIso,
+          createdBy: "user",
+          isCustom: true,
+          protocolRefs: protocolRefs as any,
+          tags: [],
+        });
+        await syncSetupTaskDependencies(created.id, setupDependencyTaskIds);
+        toast.success("Task created.");
+      } else {
+        const taskId = setupEditingTaskId;
+        const existing = taskId ? scopedMapTasks.find((task) => task.id === taskId) : null;
+        if (!taskId || !existing) {
+          toast.error("Task not found.");
+          return;
+        }
+        await updateExecutionTask(taskId, {
+          name: title,
+          description: setupTaskForm.description.trim() || "",
+          category: setupTaskForm.category,
+          status: setupTaskForm.status,
+          priority: setupTaskForm.priority,
+          assignedRole,
+          assignedUserId: null,
+          suggestedAssignee: selectedMember?.name || null,
+          suggestedDate: dueDateIso,
+          dueDate: dueDateIso,
+          protocolRefs: protocolRefs as any,
+          isCustom: true,
+          createdBy: "user",
+        });
+        if (existing.phaseId !== setupTaskForm.phaseId) {
+          const nextOrder = scopedMapTasks.filter((task) => task.phaseId === setupTaskForm.phaseId).length;
+          await moveExecutionTask(taskId, setupTaskForm.phaseId, nextOrder);
+        }
+        await syncSetupTaskDependencies(taskId, setupDependencyTaskIds);
+        toast.success("Task updated.");
+      }
+      setSetupTaskModalOpen(false);
+      setSetupEditingTaskId(null);
     } catch (error: any) {
-      toast.error(`Failed to add task: ${error?.message || "Unknown error"}`);
+      toast.error(error?.message || "Failed to save task.");
     }
   };
 
-  const handleEditSetupTask = async (taskId: string) => {
-    const task = mapTasks.find((row) => row.id === taskId);
+  const handleDeleteSetupTaskFromModal = async () => {
+    if (!setupEditingTaskId) return;
+    const task = scopedMapTasks.find((item) => item.id === setupEditingTaskId);
     if (!task) return;
-    const name = window.prompt("Edit task name", task.name);
-    if (!name || !name.trim() || name.trim() === task.name) return;
+    const confirmed = window.confirm(`Delete "${task.name}"?`);
+    if (!confirmed) return;
     try {
-      await updateExecutionTask(taskId, { name: name.trim() });
-      toast.success("Task updated");
+      await removeExecutionTask(setupEditingTaskId);
+      setSetupTaskModalOpen(false);
+      setSetupEditingTaskId(null);
+      toast.success("Task deleted.");
     } catch (error: any) {
-      toast.error(`Failed to update task: ${error?.message || "Unknown error"}`);
+      toast.error(error?.message || "Failed to delete task.");
     }
   };
 
   const handleDeleteSetupTask = async (taskId: string) => {
-    const task = mapTasks.find((row) => row.id === taskId);
+    const task = scopedMapTasks.find((row) => row.id === taskId);
     if (!task) return;
     if (!window.confirm(`Delete task "${task.name}"?`)) return;
     try {
@@ -745,17 +1502,169 @@ export default function TrialDetail() {
   };
 
   const handleLaunchExecutionMap = async () => {
+    if (!map?.id) {
+      toast.error("No execution map loaded");
+      return;
+    }
+
     try {
+      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId: map.id });
+      if (confirmation.updated > 0) {
+        await loadExecutionMap(map.id);
+      }
       await launchExecutionMap();
       await refetchExecutionMapSummary();
-      toast.success("Execution map launched");
+      if (confirmation.updated > 0) {
+        toast.success(
+          `Execution map launched (${confirmation.updated} suggested task${confirmation.updated === 1 ? "" : "s"} auto-confirmed)`
+        );
+      } else {
+        toast.success("Execution map launched");
+      }
     } catch (error: any) {
       toast.error(`Failed to launch map: ${error?.message || "Review suggested tasks first."}`);
     }
   };
 
   let mainContent: React.ReactNode = null;
-  const hasRenderableSetupMap = !!map?.id && setupPhases.length > 0 && mapTasks.length > 0;
+  let lockPageScrollToScaffold = false;
+  const hasRenderableSetupMap =
+    isCurrentTrialExecutionMap && !!map?.id && setupPhases.length > 0 && scopedMapTasks.length > 0;
+  const renderSetupScaffoldWorkspace = (fullscreen: boolean) => (
+    <div
+      className={
+        fullscreen
+          ? "h-full w-full bg-white flex flex-col"
+          : "h-full bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col"
+      }
+    >
+      <div
+        className={`relative ${
+          fullscreen ? "px-6 py-5 border-b border-gray-100" : "px-6 pt-5 pb-4 border-b border-gray-200"
+        }`}
+      >
+        <div className="w-full max-w-[720px]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-900">Step 4 of 4</p>
+          <div className="mt-6 h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+            <div className="h-full rounded-full bg-[#0E0017]" style={{ width: "100%" }} />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mt-8">Review & Launch</h2>
+          <p className="text-sm text-gray-500 mt-2">
+            Validate the generated execution plan, adjust tasks if needed, then confirm launch.
+          </p>
+        </div>
+        {fullscreen ? (
+          <button
+            type="button"
+            onClick={() => setIsSetupFullscreenVisible(false)}
+            className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
+            aria-label="Close fullscreen setup"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={openSetupFullscreen}
+            className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
+            aria-label="Expand setup"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
+        <div className="h-full min-h-0">
+          <TaskScaffoldView
+            phases={setupPhases}
+            sections={setupSections}
+            view={setupScaffoldView}
+            onViewChange={setSetupScaffoldView}
+            onConfirm={handleLaunchExecutionMap}
+            onAddTask={handleAddSetupTask}
+            onEditTask={handleEditSetupTask}
+            onDeleteTask={handleDeleteSetupTask}
+            onOpenProtocolPage={(page, sectionName) => {
+              const protocolDoc =
+                protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
+                protocols[0];
+              const url = protocolDoc?.fileUrl as string | undefined;
+              if (!url) {
+                toast.error("No protocol PDF available to open");
+                return;
+              }
+              const target = page && Number.isFinite(page) ? `${url}#page=${page}` : url;
+              window.open(target, "_blank", "noopener,noreferrer");
+              logEvent({
+                eventType: "document_section_accessed",
+                action: "open_source_from_protocol_map",
+                entityType: "protocol_section",
+                payload: {
+                  sectionName,
+                  page: page ?? null,
+                  trialId,
+                },
+                aiInvolved: true,
+              });
+            }}
+            onReorderTasks={(phaseId, orderedTaskIds) => {
+              void reorderExecutionTasks(phaseId, orderedTaskIds).catch((error) => {
+                toast.error(`Failed to reorder tasks: ${error?.message || "Unknown error"}`);
+              });
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderSetupAgentAlwaysOn = () => (
+    <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
+      <div className="h-full bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="relative h-full w-full overflow-hidden flex items-center justify-center py-10">
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundColor: "#ffffff",
+              backgroundImage: "radial-gradient(rgba(148, 163, 184, 0.16) 1px, transparent 1px)",
+              backgroundSize: "18px 18px",
+            }}
+          />
+          <div
+            className="absolute inset-0 bg-center bg-cover bg-no-repeat opacity-75 pointer-events-none"
+            style={{ backgroundImage: `url(${studySetupBackground})` }}
+          />
+          <div className="relative z-10 text-center max-w-3xl px-6 pb-10">
+            <div className="mx-auto h-[360px] w-[360px]">
+              <DotLottieReact
+                src="https://lottie.host/d8617406-7b38-4ae4-968d-b934a05d4a10/UKTFUbeuwK.lottie"
+                autoplay
+                loop
+                className="h-full w-full"
+              />
+            </div>
+            <h2 className="mt-2 text-3xl font-bold text-gray-900">Themison Study Setup Agent is always on</h2>
+            <p className="mt-3 text-base text-gray-600">
+              If a new amendment arrives, Themison will flag impacted tasks, timing windows, and dependencies so your
+              execution plan stays current.
+            </p>
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <Button
+                className="bg-[#2F6FED] hover:bg-[#255BD1] text-white"
+                onClick={() => navigate(`/tasks?trialId=${trialId}`)}
+              >
+                Open Task Manager
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+              <Button variant="outline" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+                Ask Themison AI
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   if (activeTab === "document-hub") {
     mainContent = (
@@ -764,62 +1673,55 @@ export default function TrialDetail() {
       </div>
     );
   } else if (activeTab === "study-setup-wizard") {
-    const isSyncingExecutionMap = importLegacyScaffold.isPending && !map?.id;
-    mainContent = hasRenderableSetupMap ? (
-      <div className="px-6 pb-6">
-        <TaskScaffoldView
-          phases={setupPhases}
-          sections={setupSections}
-          onConfirm={handleLaunchExecutionMap}
-          onAddTask={handleAddSetupTask}
-          onEditTask={handleEditSetupTask}
-          onDeleteTask={handleDeleteSetupTask}
-          onOpenProtocolPage={(page, sectionName) => {
-            const protocolDoc =
-              protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
-              protocols[0];
-            const url = protocolDoc?.fileUrl as string | undefined;
-            if (!url) {
-              toast.error("No protocol PDF available to open");
-              return;
-            }
-            const target = page && Number.isFinite(page) ? `${url}#page=${page}` : url;
-            window.open(target, "_blank", "noopener,noreferrer");
-            logEvent({
-              eventType: "document_section_accessed",
-              action: "open_source_from_protocol_map",
-              entityType: "protocol_section",
-              payload: {
-                sectionName,
-                page: page ?? null,
-                trialId,
-              },
-              aiInvolved: true,
-            });
-          }}
-          onReorderTasks={(phaseId, orderedTaskIds) => {
-            void reorderExecutionTasks(phaseId, orderedTaskIds).catch((error) => {
-              toast.error(`Failed to reorder tasks: ${error?.message || "Unknown error"}`);
-            });
-          }}
-        />
+    const isSyncingExecutionMap = importLegacyScaffold.isPending;
+    const generationReady = Boolean(generatedSetupMapId) && !(isGeneratingScaffold || isSyncingExecutionMap);
+    const showSetupAgentAlwaysOn =
+      isSetupPlanLaunched && !(isGeneratingScaffold || isSyncingExecutionMap || generationReady);
+    const shouldShowSetupWizard =
+      isGeneratingScaffold || isSyncingExecutionMap || generationReady || !hasRenderableSetupMap || showSetupAgentAlwaysOn;
+
+    mainContent = showSetupAgentAlwaysOn ? (
+      renderSetupAgentAlwaysOn()
+    ) : !shouldShowSetupWizard ? (
+      <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
+        {renderSetupScaffoldWorkspace(false)}
+        {isSetupFullscreenOpen ? (
+          <div className="fixed inset-0 z-[70] pointer-events-auto">
+            <div
+              className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-500 ${
+                isSetupFullscreenVisible ? "opacity-100" : "opacity-0"
+              }`}
+              onClick={() => setIsSetupFullscreenVisible(false)}
+            />
+            <div
+              className={`absolute left-0 top-0 h-full w-full bg-white flex flex-col transform-gpu transition-[transform,opacity] duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+                isSetupFullscreenVisible ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"
+              }`}
+            >
+              {renderSetupScaffoldWorkspace(true)}
+            </div>
+          </div>
+        ) : null}
       </div>
     ) : (
       <div className="px-6 pb-6 space-y-3">
-        {isSyncingExecutionMap && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
-            Syncing generated scaffold into the execution map...
-          </div>
-        )}
         <StudySetupWizardEntry
           trialId={trialId}
           onGenerate={() => {
             void handleGenerateScaffold();
           }}
+          onCancelGenerate={handleCancelGenerateScaffold}
+          generationReady={generationReady}
+          onSeePlan={() => {
+            void handleOpenGeneratedScaffold();
+          }}
           isGenerating={isGeneratingScaffold || isSyncingExecutionMap}
         />
       </div>
     );
+    if (!shouldShowSetupWizard || showSetupAgentAlwaysOn) {
+      lockPageScrollToScaffold = true;
+    }
   } else if (activeTab === "bookmarks") {
     mainContent = (
       <div className="px-6 pb-6">
@@ -915,7 +1817,9 @@ export default function TrialDetail() {
               {trialTeamMembers.map((member) => (
                 <div key={member.id} className="rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
                   <Avatar className="h-8 w-8">
-                    <AvatarFallback className="text-xs bg-blue-50 text-blue-700">{member.initials || "TM"}</AvatarFallback>
+                    <AvatarFallback className="bg-[#e6e7eb] text-gray-600">
+                      <User className="h-4 w-4" />
+                    </AvatarFallback>
                   </Avatar>
                   <div>
                     <p className="text-sm font-medium text-gray-900">{member.name}</p>
@@ -1209,7 +2113,8 @@ export default function TrialDetail() {
               <div className="flex items-center justify-between gap-4">
                 <span className="text-sm text-gray-600">Status:</span>
                 <EditableField
-                  value={trial?.status || "not-started"}
+                  value={trialStatusValue}
+                  displayValue={trialStatusLabel}
                   onSave={async (newValue) => {
                     await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, status: newValue as any });
                   }}
@@ -1223,7 +2128,8 @@ export default function TrialDetail() {
                     { value: "terminated", label: "Terminated" },
                   ]}
                   emptyText="Not started"
-                  className="text-sm text-gray-900"
+                  className="text-sm"
+                  displayClassName={trialStatusDisplayClass}
                 />
               </div>
 
@@ -1254,83 +2160,131 @@ export default function TrialDetail() {
               </div>
             </div>
 
-            <div className="mt-4 border-t border-gray-200 pt-4 space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Enrollment:</span>
-                <span className="font-medium text-gray-900">{enrolledPatients} / {targetPatients || 0}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Pending Tasks:</span>
-                <span className="font-medium text-gray-900">{pendingTasks} ({dueTodayTasks} due today)</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600">Scheduled Visits:</span>
-                <span className="font-medium text-gray-900">{scheduledVisits}</span>
+            <div className="mt-4 border-t border-gray-200 pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
+                  <p className="mt-1 text-xs text-gray-500">Target: {targetPatients || 0}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{enrollmentPercent}%</p>
+                  <p className="mt-1 text-xs text-gray-500">Current recruitment progress</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Pending Tasks</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{pendingTasks.toLocaleString()}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {dueTodayTasks} due today
+                    {overdueTasks > 0 ? ` · ${overdueTasks} overdue` : ""}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Task Completion</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{completionRate}%</p>
+                  <p className="mt-1 text-xs text-gray-500">{completedTasks.toLocaleString()} completed tasks</p>
+                </div>
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setManageTeamOpen(true)}>
-                Manage Team
-              </Button>
-              <Button variant="outline" size="sm" className="h-9" onClick={() => setActiveTab("document-hub")}>
-                View Protocol
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-3">
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" className="h-9 text-sm" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
-              <Sparkles className="h-4 w-4 mr-2" />
-              Themison AI
-            </Button>
-            {(trial?.status || "not-started") === "not-started" && launchReadyWithoutActivation ? (
+            <div className="mt-4">
               <Button
                 variant="outline"
-                className="h-9 text-sm"
-                onClick={async () => {
-                  await updateTrial.mutateAsync({
-                    id: trialId,
-                    demoMode: currentDataMode,
-                    status: "active",
-                  });
-                }}
+                size="sm"
+                className="h-9 w-full justify-center"
+                onClick={() => navigate(`/trial/${trialId}/assistant`)}
               >
-                Activate Trial
+                <Brain className="h-4 w-4 mr-2" />
+                Ask Themison AI
               </Button>
-            ) : null}
-            <Button variant="outline" className="h-9 text-sm">
-              <UserPlus2 className="h-4 w-4 mr-2" />
-              Sign a New Patient
-            </Button>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
-            <p className="mt-2 text-3xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-gray-500">Target: {targetPatients || 0}</p>
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-900">Themison AI Signals</h2>
+            <span className="text-xs text-gray-500">{contextSuggestions.length} signals</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {contextSuggestions.length > 0 ? (
+              contextSuggestions.slice(0, 3).map((signal) => (
+                <div key={signal.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-gray-900">{signal.title}</div>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        signal.priority === "high"
+                          ? "bg-red-100 text-red-700"
+                          : signal.priority === "medium"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-blue-100 text-blue-700"
+                      }`}
+                    >
+                      {signal.priority}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">{signal.description}</div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                No active signals for this page right now.
+              </div>
+            )}
+            {primarySuggestion ? (
+              <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                <Sparkles className="h-4 w-4 mr-2" />
+                {recommendedActionLabel}
+              </Button>
+            ) : null}
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>
-            <p className="mt-2 text-3xl font-semibold text-gray-900">{enrollmentPercent}%</p>
-            <p className="mt-1 text-xs text-gray-500">Current recruitment progress</p>
-          </div>
+          <div className="mt-5 border-t border-gray-200 pt-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">
+                {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
+              </h3>
+              {nextOperationalTasks.length > 0 ? (
+                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
+                  View plan
+                </button>
+              ) : null}
+            </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Pending Tasks</p>
-            <p className="mt-2 text-3xl font-semibold text-gray-900">{pendingTasks.toLocaleString()}</p>
-            <p className="mt-1 text-xs text-gray-500">Due today: {dueTodayTasks}</p>
-          </div>
-
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Task Completion</p>
-            <p className="mt-2 text-3xl font-semibold text-gray-900">{completionRate}%</p>
-            <p className="mt-1 text-xs text-gray-500">{completedTasks.toLocaleString()} completed tasks</p>
+            {nextOperationalTasks.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {nextOperationalTasks.map((task: any, index: number) => (
+                  <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {launchChecklist.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
+                      {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                      <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                    </div>
+                  </div>
+                ))}
+                {!primarySuggestion && firstIncompleteChecklistItem ? (
+                  <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    {recommendedActionLabel}
+                  </Button>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1441,92 +2395,6 @@ export default function TrialDetail() {
           <div className="space-y-5">
             <div className="bg-white rounded-xl border border-gray-200 p-6">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-gray-900">Themison AI Signals</h2>
-                <span className="text-xs text-gray-500">{contextSuggestions.length} signals</span>
-              </div>
-              <div className="mt-3 space-y-2">
-                {contextSuggestions.length > 0 ? (
-                  contextSuggestions.slice(0, 3).map((signal) => (
-                    <div key={signal.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="text-sm font-medium text-gray-900">{signal.title}</div>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                            signal.priority === "high"
-                              ? "bg-red-100 text-red-700"
-                              : signal.priority === "medium"
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-blue-100 text-blue-700"
-                          }`}
-                        >
-                          {signal.priority}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">{signal.description}</div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                    No active signals for this page right now.
-                  </div>
-                )}
-                {primarySuggestion ? (
-                  <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    {recommendedActionLabel}
-                  </Button>
-                ) : null}
-              </div>
-
-              <div className="mt-5 border-t border-gray-200 pt-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-900">
-                    {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
-                  </h3>
-                  {nextOperationalTasks.length > 0 ? (
-                    <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
-                      View plan
-                    </button>
-                  ) : null}
-                </div>
-
-                {nextOperationalTasks.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {nextOperationalTasks.map((task: any, index: number) => (
-                      <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                        <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 space-y-2">
-                    {launchChecklist.map((item) => (
-                      <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
-                        <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
-                          {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium text-gray-900">{item.title}</div>
-                          <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {!primarySuggestion && firstIncompleteChecklistItem ? (
-                      <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        {recommendedActionLabel}
-                      </Button>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="bg-white rounded-xl border border-gray-200 p-6">
-              <div className="flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
                 <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setManageTeamOpen(true)}>
                   Manage Team
@@ -1539,7 +2407,9 @@ export default function TrialDetail() {
                   {trialTeamMembers.map((member) => (
                     <div key={member.id} className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
-                        <AvatarFallback className="text-xs bg-blue-50 text-blue-700">{member.initials || "TM"}</AvatarFallback>
+                        <AvatarFallback className="bg-[#e6e7eb] text-gray-600">
+                          <User className="h-4 w-4" />
+                        </AvatarFallback>
                       </Avatar>
                       <div>
                         <p className="text-sm font-medium text-gray-900">{member.name}</p>
@@ -1556,7 +2426,7 @@ export default function TrialDetail() {
     );
   }
   return (
-    <div className="h-full bg-[#F9FAFB]">
+    <div className={`h-full bg-[#F9FAFB] flex flex-col ${lockPageScrollToScaffold ? "overflow-hidden" : ""}`}>
       <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
         <div className="bg-white rounded-lg border border-gray-200 px-5 py-2 flex items-center gap-6">
           <button
@@ -1604,7 +2474,306 @@ export default function TrialDetail() {
         </div>
       </div>
 
-      <div className="pt-4">{mainContent}</div>
+      <div className={lockPageScrollToScaffold ? "pt-4 flex-1 min-h-0 overflow-hidden" : "pt-4"}>
+        {mainContent}
+      </div>
+
+      <Dialog
+        open={setupTaskModalOpen}
+        onOpenChange={(open) => {
+          setSetupTaskModalOpen(open);
+          if (!open) {
+            setSetupEditingTaskId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-5 border-b border-gray-200">
+            <DialogTitle className="text-3xl font-bold text-gray-900">
+              {setupTaskModalMode === "create" ? "Create New Task" : "Edit Task"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Title *</label>
+              <Input
+                value={setupTaskForm.title}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, title: event.target.value }))}
+                placeholder="Enter task title"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Description</label>
+              <Textarea
+                rows={4}
+                value={setupTaskForm.description}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, description: event.target.value }))}
+                placeholder="Enter task description (optional)"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Trial *</label>
+                <Input
+                  value={`${trial?.investigationalProduct || trial?.title || trialId} · ${trial?.sponsor || "No sponsor"}`}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Phase / Visit *</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.phaseId}
+                  onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, phaseId: event.target.value }))}
+                >
+                  <option value="">Select phase</option>
+                  {setupPhases.map((phase) => (
+                    <option key={phase.id} value={phase.id}>
+                      {phase.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Category</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.category}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, category: event.target.value as TaskCategory }))
+                  }
+                >
+                  {SETUP_TASK_CATEGORY_OPTIONS.map((category) => (
+                    <option key={category} value={category}>
+                      {titleCase(category)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Status</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.status}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, status: event.target.value as TaskStatus }))
+                  }
+                >
+                  {SETUP_TASK_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {titleCase(status)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Priority</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.priority}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))
+                  }
+                >
+                  {SETUP_TASK_PRIORITY_OPTIONS.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {titleCase(priority)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Responsible Role</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.assignedRole}
+                  onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, assignedRole: event.target.value }))}
+                >
+                  <option value="">Unassigned</option>
+                  {SETUP_ASSIGNED_ROLE_OPTIONS.map((role) => (
+                    <option key={role} value={role}>
+                      {formatRoleLabel(role)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Assignee</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.assigneeMemberId}
+                  onChange={(event) => {
+                    const nextMemberId = event.target.value;
+                    const member = setupAssignedMembersForTaskForm.find(
+                      (candidate) => String(candidate.id) === nextMemberId
+                    );
+                    const inferredRole = member ? normalizeRoleToken(member.role || "") : "";
+                    setSetupTaskForm((prev) => ({
+                      ...prev,
+                      assigneeMemberId: nextMemberId,
+                      assignedRole:
+                        inferredRole && SETUP_ASSIGNED_ROLE_OPTIONS.includes(inferredRole as any)
+                          ? inferredRole
+                          : prev.assignedRole,
+                    }));
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  {setupAssignedMembersForTaskForm.map((member) => (
+                    <option key={member.id} value={String(member.id)}>
+                      {member.name} · {formatRoleLabel(member.role)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Due Date</label>
+              <Input
+                type="date"
+                value={setupTaskForm.dueDate}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+              />
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold text-gray-900">Protocol Source (optional)</h4>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  onClick={() => {
+                    const protocolDoc =
+                      protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
+                      protocols[0];
+                    const url = protocolDoc?.fileUrl as string | undefined;
+                    if (!url) {
+                      toast.error("No protocol PDF available to open");
+                      return;
+                    }
+                    const page = Number(setupTaskForm.sourcePage);
+                    const target = Number.isFinite(page) && page > 0 ? `${url}#page=${Math.round(page)}` : url;
+                    window.open(target, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Open protocol
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm text-gray-700">Section</label>
+                  <Input
+                    value={setupTaskForm.sourceSection}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceSection: event.target.value }))}
+                    placeholder="e.g. Schedule of Events"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm text-gray-700">Page</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={setupTaskForm.sourcePage}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourcePage: event.target.value }))}
+                    placeholder="e.g. 22"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm text-gray-700">Evidence Text</label>
+                  <Textarea
+                    rows={3}
+                    value={setupTaskForm.sourceText}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceText: event.target.value }))}
+                    placeholder="Optional excerpt for traceability"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">Dependencies (predecessor tasks)</h4>
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                {setupDependencyCandidates.length === 0 ? (
+                  <p className="text-sm text-gray-500">No dependency candidates in this trial map.</p>
+                ) : (
+                  setupDependencyCandidates.map((candidate) => {
+                    const phase = setupPhases.find((entry) => entry.id === candidate.phaseId);
+                    const checked = setupDependencyTaskIds.includes(candidate.id);
+                    return (
+                      <label key={candidate.id} className="flex items-start gap-2 rounded-md border border-gray-100 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const nextChecked = event.target.checked;
+                            setSetupDependencyTaskIds((prev) =>
+                              nextChecked ? Array.from(new Set([...prev, candidate.id])) : prev.filter((id) => id !== candidate.id)
+                            );
+                          }}
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-800">
+                          {candidate.name}
+                          <span className="block text-xs text-gray-500">{phase?.name || "Unassigned phase"}</span>
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+            <div>
+              {setupTaskModalMode === "edit" && setupEditingTaskId ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
+                  onClick={handleDeleteSetupTaskFromModal}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Task
+                </button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="h-9 rounded-md border border-gray-200 px-4 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => {
+                  setSetupTaskModalOpen(false);
+                  setSetupEditingTaskId(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="h-9 rounded-md bg-[#2F6FED] px-4 text-sm font-medium text-white hover:bg-[#255BD1]"
+                onClick={handleSaveSetupTaskModal}
+              >
+                {setupTaskModalMode === "create" ? "Create Task" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={manageTeamOpen} onOpenChange={setManageTeamOpen}>
         <DialogContent className="max-w-2xl">

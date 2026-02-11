@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Plus,
@@ -32,6 +32,25 @@ import { logEvent } from "@/lib/telemetry";
 import { useLocation } from "wouter";
 import { EditableField } from "@/components/EditableField";
 
+type WorksheetDraftStatus = "draft" | "published";
+
+type WorksheetGeneratedOutput = {
+  id: string;
+  trialId: string | null;
+  dataMode?: string;
+  chatSessionId?: string | null;
+  title: string;
+  status: WorksheetDraftStatus;
+  createdAt: string;
+  updatedAt: string;
+  savedAt?: string | null;
+  publishedAt?: string | null;
+  generatedBy?: string | null;
+};
+
+const WORKSHEET_STORAGE_KEY = "themison-worksheet-drafts:v1";
+const WORKSHEET_OPEN_REQUEST_KEY = "themison-open-worksheet-request:v1";
+
 export default function Documents({ trialId = '1' }: { trialId?: string } = {}) {
   const [, navigate] = useLocation();
   const { getCurrentDataMode } = useDemoState();
@@ -46,6 +65,89 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"latest" | "oldest" | "name-asc" | "name-desc">("latest");
+  const [generatedOutputs, setGeneratedOutputs] = useState<WorksheetGeneratedOutput[]>([]);
+
+  const loadGeneratedOutputs = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.localStorage.getItem(WORKSHEET_STORAGE_KEY);
+      if (!raw) {
+        setGeneratedOutputs([]);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        setGeneratedOutputs([]);
+        return;
+      }
+
+      const outputs = (parsed as any[])
+        .map((entry) => {
+          const status: WorksheetDraftStatus =
+            entry?.status === "published" ? "published" : "draft";
+          return {
+          id: String(entry?.id || ""),
+          trialId:
+            entry?.trialId === null || entry?.trialId === undefined
+              ? null
+              : String(entry.trialId),
+          dataMode: entry?.dataMode ? String(entry.dataMode) : undefined,
+          chatSessionId: entry?.chatSessionId ? String(entry.chatSessionId) : null,
+          title: String(entry?.title || "Untitled Worksheet"),
+          status,
+          createdAt: String(entry?.createdAt || ""),
+          updatedAt: String(entry?.updatedAt || entry?.createdAt || ""),
+          savedAt: entry?.savedAt ? String(entry.savedAt) : null,
+          publishedAt: entry?.publishedAt ? String(entry.publishedAt) : null,
+          generatedBy: entry?.generatedBy ? String(entry.generatedBy) : null,
+          };
+        })
+        .filter((entry) => entry.id.length > 0)
+        .filter((entry) => entry.status === "published" || Boolean(entry.savedAt))
+        .filter((entry) => {
+          if (!entry.dataMode) return true;
+          return entry.dataMode === currentDataMode;
+        })
+        .filter((entry) => {
+          if (!trialId) return true;
+          return entry.trialId === String(trialId);
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt || b.createdAt || 0).getTime() -
+            new Date(a.updatedAt || a.createdAt || 0).getTime()
+        );
+
+      setGeneratedOutputs(outputs);
+    } catch {
+      setGeneratedOutputs([]);
+    }
+  }, [currentDataMode, trialId]);
+
+  useEffect(() => {
+    loadGeneratedOutputs();
+  }, [loadGeneratedOutputs]);
+
+  useEffect(() => {
+    const refresh = () => loadGeneratedOutputs();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        loadGeneratedOutputs();
+      }
+    };
+
+    window.addEventListener("storage", refresh);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      window.removeEventListener("storage", refresh);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [loadGeneratedOutputs]);
 
   // Query documents
   const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery({
@@ -64,11 +166,16 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
       demoMode: currentDataMode,
       include: ["documents", "telemetry", "suggestions", "insights"],
       pageContext: "document-hub",
-      emitTelemetry: true,
+      emitTelemetry: false,
     },
     {
       enabled: Boolean(trialId),
-      staleTime: 30000,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: trialId ? 5000 : false,
+      refetchIntervalInBackground: true,
     }
   );
 
@@ -347,7 +454,9 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
     : null;
   const contextDocuments = trialContext?.documents;
   const contextTelemetry = trialContext?.telemetry;
-  const contextSignals = (trialContext?.suggestions || []).slice(0, 3);
+  const contextSignals = ((trialContext?.suggestions || []) as any[])
+    .filter((signal) => signal?.actionTarget !== "document-hub")
+    .slice(0, 3);
   const totalDocumentCount = contextDocuments?.total ?? documents?.length ?? 0;
   const indexedDocumentCount =
     contextDocuments?.indexed ??
@@ -355,6 +464,51 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const activeDocumentCount =
     contextDocuments?.active ??
     (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);
+  const personalGeneratedOutputs = useMemo(
+    () => generatedOutputs.filter((output) => output.status !== "published"),
+    [generatedOutputs]
+  );
+  const teamGeneratedOutputs = useMemo(
+    () => generatedOutputs.filter((output) => output.status === "published"),
+    [generatedOutputs]
+  );
+
+  const formatOutputDate = (value?: string | null) => {
+    if (!value) return "Unknown";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "Unknown";
+    return parsed.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const openGeneratedOutput = useCallback(
+    (output: WorksheetGeneratedOutput) => {
+      const targetTrialId = output.trialId || trialId;
+
+      try {
+        window.localStorage.setItem(
+          WORKSHEET_OPEN_REQUEST_KEY,
+            JSON.stringify({
+              worksheetId: output.id,
+              trialId: targetTrialId,
+              dataMode: currentDataMode,
+              chatSessionId: output.chatSessionId || null,
+              requestedAt: new Date().toISOString(),
+            })
+          );
+      } catch {
+        // Ignore storage errors and continue navigation.
+      }
+
+      navigate(`/trial/${targetTrialId}/assistant`);
+    },
+    [currentDataMode, navigate, trialId]
+  );
 
   return (
     <div className="space-y-4">
@@ -453,6 +607,10 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                     });
                     if (signal.actionTarget === "assistant") {
                       navigate(`/trial/${trialId}/assistant`);
+                      return;
+                    }
+                    if (signal.actionTarget === "study-setup-wizard") {
+                      navigate(`/trial/${trialId}?tab=study-setup-wizard`);
                       return;
                     }
                     navigate(`/trial/${trialId}`);
@@ -959,19 +1117,51 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
       <div className="bg-white rounded-lg border border-gray-200 p-6 space-y-4">
         <div className="flex items-center gap-3">
           <h2 className="text-xl font-semibold text-gray-900">Generated Outputs</h2>
-          <span className="px-2 py-1 rounded bg-amber-100 text-amber-700 text-xs font-medium">
-            Coming soon
+          <span className="px-2 py-1 rounded bg-blue-50 text-blue-700 text-xs font-medium">
+            {generatedOutputs.length} total
           </span>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded-lg border border-gray-200 p-4 bg-slate-50">
-            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <Lock className="h-4 w-4 text-gray-500" />
-              Personal Outputs
-            </h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <Lock className="h-4 w-4 text-gray-500" />
+                Personal Outputs
+              </h3>
+              <span className="text-xs font-medium text-gray-500">
+                {personalGeneratedOutputs.length}
+              </span>
+            </div>
             <p className="text-sm text-gray-600 mt-1">
               Draft source documents created by you. Private by default until shared.
             </p>
+            <div className="mt-4 space-y-2">
+              {personalGeneratedOutputs.length === 0 ? (
+                <p className="text-xs text-gray-500">
+                  No personal outputs yet. Save a worksheet draft to see it here.
+                </p>
+              ) : (
+                personalGeneratedOutputs.slice(0, 5).map((output) => (
+                  <button
+                    key={output.id}
+                    type="button"
+                    onClick={() => openGeneratedOutput(output)}
+                    className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-left transition-colors hover:bg-blue-50/40 hover:border-blue-200"
+                  >
+                    <p className="text-sm font-medium text-gray-900 truncate">{output.title}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Updated {formatOutputDate(output.updatedAt)}
+                      {output.generatedBy ? ` • ${output.generatedBy}` : ""}
+                    </p>
+                  </button>
+                ))
+              )}
+              {personalGeneratedOutputs.length > 5 ? (
+                <p className="text-xs text-gray-500">
+                  +{personalGeneratedOutputs.length - 5} more personal outputs
+                </p>
+              ) : null}
+            </div>
             <Button
               variant="outline"
               className="mt-4"
@@ -982,16 +1172,45 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
             </Button>
           </div>
           <div className="rounded-lg border border-gray-200 p-4 bg-slate-50">
-            <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
-              <Users className="h-4 w-4 text-blue-600" />
-              Team Outputs
-            </h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+                <Users className="h-4 w-4 text-blue-600" />
+                Team Outputs
+              </h3>
+              <span className="text-xs font-medium text-gray-500">
+                {teamGeneratedOutputs.length}
+              </span>
+            </div>
             <p className="text-sm text-gray-600 mt-1">
               Shared approved artifacts for the site team and audit-ready workflows.
             </p>
-            <p className="text-xs text-gray-500 mt-4">
-              Soon: approval flow, version locks, and organization sync integrations.
-            </p>
+            <div className="mt-4 space-y-2">
+              {teamGeneratedOutputs.length === 0 ? (
+                <p className="text-xs text-gray-500">
+                  No team outputs yet. Publish a worksheet to share it with your team.
+                </p>
+              ) : (
+                teamGeneratedOutputs.slice(0, 5).map((output) => (
+                  <button
+                    key={output.id}
+                    type="button"
+                    onClick={() => openGeneratedOutput(output)}
+                    className="w-full rounded-md border border-blue-100 bg-white px-3 py-2 text-left transition-colors hover:bg-blue-50/40 hover:border-blue-200"
+                  >
+                    <p className="text-sm font-medium text-gray-900 truncate">{output.title}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Published {formatOutputDate(output.publishedAt || output.updatedAt)}
+                      {output.generatedBy ? ` • ${output.generatedBy}` : ""}
+                    </p>
+                  </button>
+                ))
+              )}
+              {teamGeneratedOutputs.length > 5 ? (
+                <p className="text-xs text-gray-500">
+                  +{teamGeneratedOutputs.length - 5} more team outputs
+                </p>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>

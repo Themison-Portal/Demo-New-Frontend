@@ -21,6 +21,15 @@ type DocumentAISource = {
   page?: number | null;
 };
 
+type WorksheetBlockType = "text" | "heading1" | "heading2" | "heading3" | "checklist";
+
+type WorksheetBlock = {
+  id: string;
+  type: WorksheetBlockType;
+  content: string;
+  checked?: boolean;
+};
+
 function extractTextContent(rawContent: unknown): string {
   if (typeof rawContent === "string") return rawContent;
   if (!Array.isArray(rawContent)) return "";
@@ -29,6 +38,109 @@ function extractTextContent(rawContent: unknown): string {
     .map((item) => String((item as any).text ?? ""))
     .join("\n")
     .trim();
+}
+
+function extractJsonObject(raw: string) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizeWorksheetBlockType(value?: string): WorksheetBlockType {
+  const token = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (token === "heading1" || token === "h1") return "heading1";
+  if (token === "heading2" || token === "h2") return "heading2";
+  if (token === "heading3" || token === "h3") return "heading3";
+  if (token === "checklist" || token === "checkbox" || token === "todo") return "checklist";
+  return "text";
+}
+
+function normalizeWorksheetBlocks(rawBlocks: unknown): WorksheetBlock[] {
+  if (!Array.isArray(rawBlocks)) return [];
+  return rawBlocks
+    .map((entry, index) => {
+      const row = entry as any;
+      const content = String(row?.content || "").trim();
+      if (!content) return null;
+      const type = normalizeWorksheetBlockType(row?.type);
+      return {
+        id: `blk-${Date.now()}-${index}`,
+        type,
+        content,
+        ...(type === "checklist" ? { checked: Boolean(row?.checked) } : {}),
+      } as WorksheetBlock;
+    })
+    .filter((entry): entry is WorksheetBlock => Boolean(entry))
+    .slice(0, 120);
+}
+
+function createFallbackWorksheet(
+  question: string,
+  answer: string,
+  sources: DocumentAISource[]
+): { title: string; subtitle: string; blocks: WorksheetBlock[] } {
+  const visitMatch = question.match(/visit\s*([a-z0-9-]+)/i);
+  const visitLabel = visitMatch ? `Visit ${visitMatch[1].toUpperCase()}` : "Visit Worksheet";
+  const protocolLabel = sources.find((source) => source.filename)?.filename || "Protocol";
+  const summaryLines = answer
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s*/, "").trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 8);
+  const checklistItems = summaryLines.length
+    ? summaryLines
+    : [
+        "Confirm subject identity and visit window eligibility",
+        "Perform required safety assessments",
+        "Collect protocol-required labs",
+        "Document adverse events and concomitant medications",
+        "Complete source notes and required forms",
+      ];
+
+  const blocks: WorksheetBlock[] = [
+    {
+      id: "fallback-heading-1",
+      type: "heading2",
+      content: "Pre-Visit Checklist",
+    },
+    ...checklistItems.slice(0, 5).map((item, index) => ({
+      id: `fallback-check-${index + 1}`,
+      type: "checklist" as const,
+      content: item,
+      checked: false,
+    })),
+    {
+      id: "fallback-heading-2",
+      type: "heading2",
+      content: "Source Verification",
+    },
+    ...sources.slice(0, 4).map((source, index) => ({
+      id: `fallback-source-${index + 1}`,
+      type: "text" as const,
+      content: `${source.filename || "Document"}${source.section ? ` — ${source.section}` : ""}${
+        source.page ? ` (Page ${source.page})` : ""
+      }`,
+    })),
+  ];
+
+  return {
+    title: `${visitLabel} Worksheet`,
+    subtitle: protocolLabel,
+    blocks,
+  };
 }
 
 function isComprehensiveQuestion(query: string) {
@@ -267,9 +379,10 @@ export const documentAIRouter = router({
         aiInvolved: true,
       });
 
-      // If no documents specified, use basic LLM without grounding
+      // If no documents are explicitly selected, use unified retrieval for the active scope.
+      // Fall back to basic LLM only if unified retrieval fails.
       if (!input.documentIds || input.documentIds.length === 0) {
-        if (resolvedTrialId) {
+        try {
           const unified = await runUnifiedQuery({
             db,
             query: latestUserMessage.content,
@@ -290,6 +403,8 @@ export const documentAIRouter = router({
           });
 
           return unified;
+        } catch (error) {
+          console.warn("[Document AI] Unified query path failed in unfiltered mode; falling back to basic assistant.", error);
         }
 
         // Build conversation history for context
@@ -630,6 +745,176 @@ If the retrieved context is insufficient, clearly state what is missing instead 
           message: "Sorry, I encountered an error while searching the documents. Please try again.",
         };
       }
+    }),
+
+  generateWorksheet: publicProcedure
+    .input(
+      z.object({
+        question: z.string().min(1),
+        answer: z.string().optional(),
+        trialId: z.string().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        sources: z
+          .array(
+            z.object({
+              filename: z.string().optional(),
+              fileUrl: z.string().optional(),
+              protocolId: z.number().optional(),
+              excerpt: z.string().optional(),
+              section: z.string().optional(),
+              category: z.string().nullable().optional(),
+              page: z.number().nullable().optional(),
+            })
+          )
+          .optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      let resolvedTrialId: string | undefined;
+      if (input.trialId && input.trialId !== "all") {
+        resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      }
+
+      const sourceList = input.sources ?? [];
+      const sourceProtocolIds = Array.from(
+        new Set(
+          sourceList
+            .map((source) => source.protocolId)
+            .filter((id): id is number => Number.isFinite(id))
+        )
+      );
+
+      let worksheetSources: DocumentAISource[] = sourceList.map((source) => ({
+        filename: source.filename,
+        fileUrl: source.fileUrl,
+        protocolId: source.protocolId,
+        excerpt: source.excerpt,
+        section: source.section,
+        category: source.category ?? null,
+        page: source.page ?? null,
+      }));
+      let worksheetTitle = "";
+      let worksheetSubtitle = "";
+      let worksheetBlocks: WorksheetBlock[] = [];
+
+      let protocolRows: typeof protocols.$inferSelect[] = [];
+      if (sourceProtocolIds.length > 0) {
+        protocolRows = await db.select().from(protocols).where(inArray(protocols.id, sourceProtocolIds));
+      } else if (resolvedTrialId) {
+        protocolRows = await db.select().from(protocols).where(eq(protocols.trialId, resolvedTrialId));
+      }
+      const protocolById = new Map(protocolRows.map((row) => [row.id, row]));
+
+      try {
+        const chunkGroups = await Promise.all(
+          protocolRows.slice(0, 4).map(async (protocol) => {
+            try {
+              return await getProtocolContextChunks({
+                protocolId: protocol.id,
+                query: input.question,
+                comprehensive: true,
+                limit: 10,
+              });
+            } catch (error) {
+              console.warn("[Document AI] Failed to fetch worksheet context chunks", protocol.id, error);
+              return [];
+            }
+          })
+        );
+        const contextCandidates = chunkGroups.flat();
+        const { selectedChunks, contextText } = buildPromptContext(contextCandidates, {
+          maxChunks: 20,
+          maxChars: 36000,
+          perChunkChars: 1800,
+        });
+
+        if (selectedChunks.length > 0 && contextText.trim()) {
+          const response = await invokeLLM({
+            responseFormat: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: `You create operational clinical visit worksheets for site teams.
+Return strict JSON with this shape:
+{
+  "title": "string",
+  "subtitle": "string",
+  "blocks": [
+    { "type": "heading2|heading3|text|checklist", "content": "string", "checked": false }
+  ]
+}
+Rules:
+- Focus on actionable visit workflow.
+- Include concise checklist items nurses/PI can execute.
+- Keep 12-40 blocks max.
+- No markdown formatting in content.`,
+              },
+              {
+                role: "user",
+                content: `Question: ${input.question}
+Assistant summary: ${input.answer || ""}
+
+Evidence context:
+${contextText}
+`,
+              },
+            ],
+          });
+
+          const raw = extractTextContent(response.choices[0]?.message?.content);
+          const parsed = extractJsonObject(raw) as any;
+          const blocks = normalizeWorksheetBlocks(parsed?.blocks);
+          if (blocks.length > 0) {
+            worksheetTitle = String(parsed?.title || "").trim() || "Visit Worksheet";
+            worksheetSubtitle = String(parsed?.subtitle || "").trim();
+            worksheetBlocks = blocks;
+            worksheetSources = buildSourcesFromChunks(selectedChunks, protocolById);
+          }
+        }
+      } catch (error) {
+        console.warn("[Document AI] Worksheet generation via LLM failed, using fallback.", error);
+      }
+
+      if (worksheetBlocks.length === 0) {
+        const fallback = createFallbackWorksheet(input.question, input.answer || "", worksheetSources);
+        worksheetTitle = fallback.title;
+        worksheetSubtitle = fallback.subtitle;
+        worksheetBlocks = fallback.blocks;
+      }
+
+      if (!worksheetSubtitle) {
+        worksheetSubtitle =
+          worksheetSources.find((source) => source.filename)?.filename ||
+          protocolRows[0]?.filename ||
+          "Protocol worksheet draft";
+      }
+
+      await logTelemetryEvent({
+        eventType: "ai_response_generated",
+        action: "worksheet_generated",
+        sessionId: undefined,
+        entityType: "worksheet",
+        entityId: resolvedTrialId,
+        aiInvolved: true,
+        aiOutput: `${worksheetTitle}\n${worksheetBlocks.map((block) => block.content).join("\n")}`,
+        aiSources: worksheetSources,
+        payload: {
+          question: input.question,
+          trialId: resolvedTrialId,
+          blockCount: worksheetBlocks.length,
+        },
+      });
+
+      return {
+        title: worksheetTitle,
+        subtitle: worksheetSubtitle,
+        blocks: worksheetBlocks,
+        sources: worksheetSources,
+      };
     }),
 
   /**

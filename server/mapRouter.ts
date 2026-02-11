@@ -40,15 +40,39 @@ const TASK_STATUSES = [
 
 const VALID_STATUS_TRANSITIONS: Record<(typeof TASK_STATUSES)[number], Array<(typeof TASK_STATUSES)[number]>> = {
   suggested: ["confirmed", "cancelled"],
-  confirmed: ["todo"],
-  todo: ["in_progress", "blocked", "waiting", "skipped", "cancelled"],
-  in_progress: ["done", "blocked", "waiting", "cancelled"],
-  blocked: ["in_progress", "todo", "cancelled"],
-  waiting: ["in_progress", "todo", "cancelled"],
-  done: [],
-  skipped: [],
-  cancelled: [],
+  confirmed: ["todo", "cancelled"],
+  todo: ["in_progress", "blocked", "waiting", "done", "skipped", "cancelled"],
+  in_progress: ["todo", "done", "blocked", "waiting", "skipped", "cancelled"],
+  blocked: ["todo", "in_progress", "waiting", "done", "cancelled"],
+  waiting: ["todo", "in_progress", "blocked", "done", "cancelled"],
+  done: ["todo", "in_progress", "blocked", "waiting"],
+  skipped: ["todo", "in_progress", "cancelled"],
+  cancelled: ["todo", "in_progress"],
 };
+
+function pickPreferredExecutionMap(
+  rows: Array<typeof executionMaps.$inferSelect>,
+  includeArchived: boolean
+): typeof executionMaps.$inferSelect | null {
+  const filtered = includeArchived ? rows : rows.filter((row) => row.status !== "archived");
+  if (!filtered.length) return null;
+
+  const rank: Record<(typeof MAP_STATUSES)[number], number> = {
+    active: 0,
+    revised: 1,
+    draft: 2,
+    archived: 3,
+  };
+
+  const sorted = [...filtered].sort((a, b) => {
+    const statusRank = rank[a.status] - rank[b.status];
+    if (statusRank !== 0) return statusRank;
+    if (a.version !== b.version) return b.version - a.version;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  return sorted[0];
+}
 
 function sanitizeObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -485,6 +509,164 @@ function parseDateFromReference(reference: string | null | undefined): Date | nu
   const parsed = new Date(reference);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
+}
+
+function startOfDay(date: Date): Date {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function addDays(date: Date, offset: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + offset);
+  return next;
+}
+
+function parseMaybeDate(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return startOfDay(parsed);
+}
+
+function inferPhaseOffsetDays(phaseName: string, phaseIndex: number): number {
+  const text = String(phaseName || "").toLowerCase();
+
+  const cXdY = text.match(/c(?:ycle)?\s*(\d+)\s*d(?:ay)?\s*(\d+)/i);
+  if (cXdY) {
+    const cycle = Math.max(1, Number(cXdY[1]));
+    const day = Math.max(1, Number(cXdY[2]));
+    return (cycle - 1) * 28 + (day - 1);
+  }
+
+  const cycleDay = text.match(/cycle\s*(\d+).*day\s*(-?\d+)/i);
+  if (cycleDay) {
+    const cycle = Math.max(1, Number(cycleDay[1]));
+    const day = Number(cycleDay[2]);
+    return (cycle - 1) * 28 + (day >= 1 ? day - 1 : day);
+  }
+
+  const dayOnly = text.match(/day\s*(-?\d+)/i);
+  if (dayOnly) {
+    const day = Number(dayOnly[1]);
+    return day >= 1 ? day - 1 : day;
+  }
+
+  const week = text.match(/week\s*(\d+)/i);
+  if (week) {
+    return (Math.max(1, Number(week[1])) - 1) * 7;
+  }
+
+  if (text.includes("screen")) return -14;
+  if (text.includes("baseline")) return 0;
+  if (text.includes("end of treatment") || text.includes("eot")) return 56;
+  if (text.includes("follow")) {
+    const followDay = text.match(/(\d+)\s*day/i);
+    if (followDay) return Number(followDay[1]) - 1;
+    return 90 + phaseIndex * 7;
+  }
+
+  const cycle = text.match(/cycle\s*(\d+)/i);
+  if (cycle) return (Math.max(1, Number(cycle[1])) - 1) * 28;
+
+  return phaseIndex * 7;
+}
+
+function inferTimingWindow(phaseName: string, phaseIndex: number, contextText: string) {
+  const phaseText = String(phaseName || "").toLowerCase();
+  const text = `${phaseText} ${String(contextText || "").toLowerCase()}`;
+  const isFollowPhase = /(follow|end of treatment|eot|termination)/.test(phaseText);
+  const isScreenPhase = /(screen)/.test(phaseText);
+  const anchorOffset = inferPhaseOffsetDays(phaseName, phaseIndex);
+
+  const anchorDayToken = text.match(/\bday\s*(-?\d{1,3})\b/i);
+  const anchorDay = anchorDayToken ? Number(anchorDayToken[1]) : null;
+  const anchorFromText =
+    anchorDay !== null && Number.isFinite(anchorDay) ? (anchorDay >= 1 ? anchorDay - 1 : anchorDay) : null;
+  const resolvedAnchor = anchorFromText ?? anchorOffset;
+
+  const rangeMatch =
+    text.match(/(?:window[^a-z0-9-+]{0,12})?(?:day\s*)?(-?\d{1,3})\s*(?:to|[-–])\s*(?:day\s*)?(-?\d{1,3})\b/i) ||
+    text.match(/day\s*(-?\d{1,3})\s*(?:to|[-–])\s*day?\s*(-?\d{1,3})\b/i);
+  if (rangeMatch) {
+    const rawA = Number(rangeMatch[1]);
+    const rawB = Number(rangeMatch[2]);
+    const minRaw = Math.min(rawA, rawB);
+    const maxRaw = Math.max(rawA, rawB);
+    const startOffset = minRaw >= 1 ? minRaw - 1 : minRaw;
+    const endOffset = maxRaw >= 1 ? maxRaw - 1 : maxRaw;
+    return { anchorOffset: resolvedAnchor, startOffset, endOffset };
+  }
+
+  if (isFollowPhase) {
+    const followRange = text.match(/(\d{1,3})\s*(?:and|&)\s*(\d{1,3})\s*day/i);
+    if (followRange) {
+      const rawA = Number(followRange[1]);
+      const rawB = Number(followRange[2]);
+      const startOffset = Math.min(rawA, rawB) - 1;
+      const endOffset = Math.max(rawA, rawB) - 1;
+      return { anchorOffset: resolvedAnchor, startOffset, endOffset };
+    }
+  }
+
+  const plusMinus = text.match(/[±\u00b1]\s*(\d+)\s*day/i);
+  if (plusMinus) {
+    let delta = Math.max(0, Number(plusMinus[1]));
+    if (isScreenPhase) delta = Math.min(delta, 3);
+    else if (!isFollowPhase) delta = Math.min(delta, 7);
+    return {
+      anchorOffset: resolvedAnchor,
+      startOffset: resolvedAnchor - delta,
+      endOffset: resolvedAnchor + delta,
+    };
+  }
+
+  const plusOnly = text.match(/\+\s*(\d+)\s*day/i);
+  if (plusOnly) {
+    let delta = Math.max(0, Number(plusOnly[1]));
+    if (isScreenPhase) delta = Math.min(delta, 3);
+    else if (!isFollowPhase) delta = Math.min(delta, 7);
+    return {
+      anchorOffset: resolvedAnchor,
+      startOffset: resolvedAnchor,
+      endOffset: resolvedAnchor + delta,
+    };
+  }
+
+  const minusOnly = text.match(/-\s*(\d+)\s*day/i);
+  if (minusOnly) {
+    let delta = Math.max(0, Number(minusOnly[1]));
+    if (isScreenPhase) delta = Math.min(delta, 3);
+    else if (!isFollowPhase) delta = Math.min(delta, 7);
+    return {
+      anchorOffset: resolvedAnchor,
+      startOffset: resolvedAnchor - delta,
+      endOffset: resolvedAnchor,
+    };
+  }
+
+  return { anchorOffset: resolvedAnchor, startOffset: resolvedAnchor, endOffset: resolvedAnchor };
+}
+
+function deriveTaskSchedule(
+  trialStartDate: Date,
+  phaseName: string,
+  phaseIndex: number,
+  contextText: string,
+  explicitSuggestedDate: Date | string | null | undefined
+) {
+  const timing = inferTimingWindow(phaseName, phaseIndex, contextText);
+  const explicitAnchor = parseMaybeDate(explicitSuggestedDate);
+  const suggestedDate = explicitAnchor ?? addDays(trialStartDate, timing.anchorOffset);
+  const startDate = explicitAnchor
+    ? addDays(suggestedDate, timing.startOffset - timing.anchorOffset)
+    : addDays(trialStartDate, timing.startOffset);
+  const dueCandidate = explicitAnchor
+    ? addDays(suggestedDate, timing.endOffset - timing.anchorOffset)
+    : addDays(trialStartDate, timing.endOffset);
+  const dueDate = dueCandidate < startDate ? startDate : dueCandidate;
+  return { suggestedDate, startDate, dueDate };
 }
 
 const ACTION_VERBS = [
@@ -952,23 +1134,107 @@ export const mapRouter = router({
         .where(eq(executionMaps.trialId, input.trialId))
         .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version));
 
-      const filtered = input.includeArchived ? rows : rows.filter((row) => row.status !== "archived");
-      if (!filtered.length) return null;
+      return pickPreferredExecutionMap(rows, Boolean(input.includeArchived));
+    }),
 
-      const rank: Record<(typeof MAP_STATUSES)[number], number> = {
-        active: 0,
-        revised: 1,
-        draft: 2,
-        archived: 3,
-      };
-      const sorted = [...filtered].sort((a, b) => {
-        const statusRank = rank[a.status] - rank[b.status];
-        if (statusRank !== 0) return statusRank;
-        if (a.version !== b.version) return b.version - a.version;
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-      });
+  loadWorkspace: protectedProcedure
+    .input(
+      z.object({
+        trialIds: z.array(z.string()).default([]),
+        includeArchived: z.boolean().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
-      return sorted[0];
+      const uniqueTrialIds = Array.from(
+        new Set(input.trialIds.map((trialId) => trialId.trim()).filter((trialId) => trialId.length > 0))
+      );
+      if (!uniqueTrialIds.length) return [];
+
+      const rows = await db
+        .select()
+        .from(executionMaps)
+        .where(inArray(executionMaps.trialId, uniqueTrialIds))
+        .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version));
+
+      const selectedMaps = uniqueTrialIds
+        .map((trialId) => {
+          const perTrial = rows.filter((row) => row.trialId === trialId);
+          return pickPreferredExecutionMap(perTrial, Boolean(input.includeArchived));
+        })
+        .filter(Boolean) as Array<typeof executionMaps.$inferSelect>;
+
+      if (!selectedMaps.length) return [];
+
+      const mapIds = selectedMaps.map((map) => map.id);
+
+      const phases = await db
+        .select()
+        .from(mapPhases)
+        .where(inArray(mapPhases.mapId, mapIds))
+        .orderBy(asc(mapPhases.mapId), asc(mapPhases.displayOrder));
+
+      const tasks = await db
+        .select()
+        .from(mapTasks)
+        .where(inArray(mapTasks.mapId, mapIds))
+        .orderBy(asc(mapTasks.mapId), asc(mapTasks.phaseId), asc(mapTasks.orderInPhase));
+
+      const taskIds = tasks.map((task) => task.id);
+      const phaseIds = phases.map((phase) => phase.id);
+
+      const dependencies =
+        taskIds.length > 0
+          ? await db
+              .select()
+              .from(mapTaskDependencies)
+              .where(
+                or(
+                  inArray(mapTaskDependencies.sourceTaskId, taskIds),
+                  inArray(mapTaskDependencies.targetTaskId, taskIds)
+                )
+              )
+          : [];
+
+      const transitions =
+        phaseIds.length > 0
+          ? await db
+              .select()
+              .from(mapPhaseTransitions)
+              .where(
+                or(
+                  inArray(mapPhaseTransitions.fromPhaseId, phaseIds),
+                  inArray(mapPhaseTransitions.toPhaseId, phaseIds)
+                )
+              )
+          : [];
+
+      const protocolSections = await db
+        .select()
+        .from(protocolMapSections)
+        .where(inArray(protocolMapSections.mapId, mapIds))
+        .orderBy(asc(protocolMapSections.mapId), asc(protocolMapSections.displayOrder));
+
+      const mapIdByTaskId = new Map(tasks.map((task) => [task.id, task.mapId]));
+      const mapIdByPhaseId = new Map(phases.map((phase) => [phase.id, phase.mapId]));
+
+      return selectedMaps.map((map) => ({
+        map,
+        phases: phases.filter((phase) => phase.mapId === map.id),
+        tasks: tasks.filter((task) => task.mapId === map.id),
+        dependencies: dependencies.filter(
+          (dep) =>
+            mapIdByTaskId.get(dep.sourceTaskId) === map.id && mapIdByTaskId.get(dep.targetTaskId) === map.id
+        ),
+        transitions: transitions.filter(
+          (transition) =>
+            mapIdByPhaseId.get(transition.fromPhaseId) === map.id &&
+            mapIdByPhaseId.get(transition.toPhaseId) === map.id
+        ),
+        protocolMapSections: protocolSections.filter((section) => section.mapId === map.id),
+      }));
     }),
 
   importLegacyScaffold: protectedProcedure
@@ -1053,6 +1319,9 @@ export const mapRouter = router({
       if (!targetMap) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create map" });
       }
+
+      const trialTimelineAnchor =
+        parseMaybeDate(trial?.startDate) ?? parseMaybeDate(targetMap.createdAt) ?? startOfDay(new Date());
 
       const clearExisting = input.clearExisting ?? true;
       if (clearExisting) {
@@ -1177,7 +1446,8 @@ export const mapRouter = router({
         name: string;
       }> = [];
 
-      for (const legacyPhase of legacyPhaseRows) {
+      for (let legacyPhaseIndex = 0; legacyPhaseIndex < legacyPhaseRows.length; legacyPhaseIndex += 1) {
+        const legacyPhase = legacyPhaseRows[legacyPhaseIndex];
         const newPhaseId = randomUUID();
         legacyPhaseIdToMapPhaseId.set(legacyPhase.id, newPhaseId);
         await db.insert(mapPhases).values({
@@ -1239,6 +1509,22 @@ export const mapRouter = router({
             ? 0.9
             : 0.8;
           const conditionalNote = inferConditionalNote(normalizedName);
+          const schedulingContext = [
+            legacyPhase.name,
+            normalizedName,
+            legacyTask.protocolSection ?? "",
+            protocolContextRef?.section ?? "",
+            protocolContextRef?.extractedText ?? "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          const schedule = deriveTaskSchedule(
+            trialTimelineAnchor,
+            legacyPhase.name,
+            legacyPhaseIndex,
+            schedulingContext,
+            legacyTask.suggestedDate
+          );
 
           await insertMapTaskWithFallback(
             db,
@@ -1256,10 +1542,10 @@ export const mapRouter = router({
             assignedRole,
             assignedUserId: legacyTask.suggestedAssigneeId ?? null,
             suggestedAssignee: null,
-            suggestedDate: legacyTask.suggestedDate ?? null,
-            dueDate: null,
+            suggestedDate: schedule.suggestedDate,
+            dueDate: schedule.dueDate,
             estimatedDuration: inferEstimatedDuration(category, normalizedName, legacyTask.duration),
-            startDate: null,
+            startDate: schedule.startDate,
             completedDate: null,
             orderInPhase: legacyTask.orderIndex,
             canvasX: null,
@@ -1403,6 +1689,18 @@ export const mapRouter = router({
           },
         ];
         const id = randomUUID();
+        const phaseForTask = phaseRowsAfterImport.find((phase) => phase.id === inputTask.phaseId);
+        const shouldLeaveUnscheduled =
+          phaseForTask?.phaseType === "screen_fail" || phaseForTask?.phaseType === "early_termination";
+        const autoSchedule = shouldLeaveUnscheduled
+          ? { suggestedDate: null, startDate: null, dueDate: null }
+          : deriveTaskSchedule(
+              trialTimelineAnchor,
+              phaseForTask?.name ?? inputTask.section ?? "Visit",
+              phaseForTask?.displayOrder ?? 0,
+              `${phaseForTask?.name ?? ""} ${inputTask.section ?? ""} ${inputTask.name}`,
+              null
+            );
         await insertMapTaskWithFallback(
           db,
           {
@@ -1419,10 +1717,10 @@ export const mapRouter = router({
           assignedRole: inferAssignedRole(inputTask.category, inputTask.name),
           assignedUserId: null,
           suggestedAssignee: null,
-          suggestedDate: null,
-          dueDate: null,
+          suggestedDate: autoSchedule.suggestedDate,
+          dueDate: autoSchedule.dueDate,
           estimatedDuration: inferEstimatedDuration(inputTask.category, inputTask.name, null),
-          startDate: null,
+          startDate: autoSchedule.startDate,
           completedDate: null,
           orderInPhase: phaseTasksCount,
           canvasX: null,
@@ -1607,6 +1905,42 @@ export const mapRouter = router({
         aiConfidence: 0.85,
       });
 
+      const phaseTaskDateRows = await db
+        .select({
+          phaseId: mapTasks.phaseId,
+          startDate: mapTasks.startDate,
+          suggestedDate: mapTasks.suggestedDate,
+          dueDate: mapTasks.dueDate,
+        })
+        .from(mapTasks)
+        .where(eq(mapTasks.mapId, targetMap.id));
+
+      const phaseDateBounds = new Map<string, { start: Date; end: Date }>();
+      for (const row of phaseTaskDateRows) {
+        const startCandidate = parseMaybeDate(row.startDate) ?? parseMaybeDate(row.suggestedDate);
+        const endCandidate = parseMaybeDate(row.dueDate) ?? startCandidate;
+        if (!startCandidate || !endCandidate) continue;
+        const existing = phaseDateBounds.get(row.phaseId);
+        if (!existing) {
+          phaseDateBounds.set(row.phaseId, { start: startCandidate, end: endCandidate });
+          continue;
+        }
+        if (startCandidate < existing.start) existing.start = startCandidate;
+        if (endCandidate > existing.end) existing.end = endCandidate;
+      }
+
+      for (const [phaseId, bounds] of Array.from(phaseDateBounds.entries())) {
+        await db
+          .update(mapPhases)
+          .set({
+            estimatedDate: bounds.start,
+            windowStart: bounds.start,
+            windowEnd: bounds.end,
+            updatedAt: new Date(),
+          })
+          .where(eq(mapPhases.id, phaseId));
+      }
+
       const legacyTaskIds = Array.from(legacyTaskIdToMapTaskId.keys());
       if (legacyTaskIds.length > 0) {
         const legacyDepRows = await db
@@ -1673,7 +2007,7 @@ export const mapRouter = router({
         .where(eq(legacyProtocolSections.protocolId, input.protocolId))
         .orderBy(asc(legacyProtocolSections.orderIndex), asc(legacyProtocolSections.createdAt));
 
-      const sectionsForMap =
+      const rawSectionsForMap =
         legacySectionRows.length > 0
           ? [...legacySectionRows]
           : [
@@ -1688,6 +2022,17 @@ export const mapRouter = router({
                 createdAt: new Date(),
               },
             ];
+      const sectionsForMap: typeof rawSectionsForMap = [];
+      const seenSectionKeys = new Set<string>();
+      for (const section of rawSectionsForMap) {
+        const normalizedName = normalizeText(section.name);
+        if (!normalizedName) continue;
+        const sectionType = inferSectionTypeFromName(section.name);
+        const key = sectionType === "custom" ? normalizedName : `type:${sectionType}`;
+        if (seenSectionKeys.has(key)) continue;
+        seenSectionKeys.add(key);
+        sectionsForMap.push(section);
+      }
 
       const defaultSectionNames = [
         "Schedule of Events",
@@ -1699,11 +2044,18 @@ export const mapRouter = router({
         "Concomitant Medications",
       ];
 
-      const existingSectionNames = new Set(sectionsForMap.map((section) => normalizeText(section.name)));
+      const existingSectionKeys = new Set(
+        sectionsForMap.map((section) => {
+          const sectionType = inferSectionTypeFromName(section.name);
+          return sectionType === "custom" ? normalizeText(section.name) : `type:${sectionType}`;
+        })
+      );
       let maxSectionOrder =
         sectionsForMap.length > 0 ? Math.max(...sectionsForMap.map((section) => section.orderIndex)) : -1;
       for (const defaultName of defaultSectionNames) {
-        if (existingSectionNames.has(normalizeText(defaultName))) continue;
+        const sectionType = inferSectionTypeFromName(defaultName);
+        const sectionKey = sectionType === "custom" ? normalizeText(defaultName) : `type:${sectionType}`;
+        if (existingSectionKeys.has(sectionKey)) continue;
         maxSectionOrder += 1;
         sectionsForMap.push({
           id: -(maxSectionOrder + 1),
@@ -1715,6 +2067,7 @@ export const mapRouter = router({
           parentSectionId: null,
           createdAt: new Date(),
         });
+        existingSectionKeys.add(sectionKey);
       }
 
       const sectionIdMap = new Map<number, string>();
@@ -2065,6 +2418,42 @@ export const mapRouter = router({
 
       const [updated] = await db.select().from(executionMaps).where(eq(executionMaps.id, map.id)).limit(1);
       return updated;
+    }),
+
+  confirmSuggested: protectedProcedure
+    .input(z.object({ mapId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const { db, map } = await getMapByIdOrThrow(input.mapId);
+      if (map.status === "archived") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Archived maps cannot be modified.",
+        });
+      }
+
+      const suggestedRows = await db
+        .select({ id: mapTasks.id })
+        .from(mapTasks)
+        .where(and(eq(mapTasks.mapId, map.id), eq(mapTasks.status, "suggested")));
+
+      if (suggestedRows.length > 0) {
+        await db
+          .update(mapTasks)
+          .set({ status: "confirmed", updatedAt: new Date() })
+          .where(and(eq(mapTasks.mapId, map.id), eq(mapTasks.status, "suggested")));
+
+        await trackMapEvent({
+          mapId: map.id,
+          trialId: map.trialId,
+          eventType: "task.accepted",
+          userId: ctx.user.id,
+          targetId: map.id,
+          targetType: "map",
+          payload: { bulk: true, updated: suggestedRows.length },
+        });
+      }
+
+      return { success: true, updated: suggestedRows.length } as const;
     }),
 
   archive: protectedProcedure

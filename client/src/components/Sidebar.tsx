@@ -4,7 +4,7 @@
  * Features: Three-state navigation (main menu, trial list, trial detail) with smooth transitions
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
@@ -27,7 +27,9 @@ import {
   Plus,
   Calendar,
   MessageSquare,
-  Check
+  MoreHorizontal,
+  Check,
+  X
 } from "lucide-react";
 import { MessageChatSquare } from "@/components/icons/MessageChatSquare";
 import { TrialElements } from "@/components/icons/TrialElements";
@@ -59,6 +61,17 @@ import {
 import { toast } from "sonner";
 import { logEvent } from "@/lib/telemetry";
 import { useSidebarNav } from "@/contexts/SidebarNavContext";
+import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
+import {
+  CHAT_ACTIVE_UPDATED_EVENT,
+  CHAT_SESSIONS_UPDATED_EVENT,
+  deleteChatSession,
+  formatRelativeChatTime,
+  getActiveChatSessionId,
+  listChatSessions,
+  requestOpenChatSession,
+  requestNewChatSession,
+} from "@/lib/chatSessions";
 
 interface NavItem {
   label: string;
@@ -73,6 +86,13 @@ interface NavSection {
   items: NavItem[];
 }
 
+interface SidebarChatHistoryItem {
+  id: string;
+  title: string;
+  time: string;
+  searchableText: string;
+}
+
 export function Sidebar() {
   const [location, navigate] = useLocation();
   const isTrialAssistantRoute = location.startsWith("/trial/") && location.endsWith("/assistant");
@@ -84,6 +104,9 @@ export function Sidebar() {
       : null;
   const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+  const { profile, organizationInitial } = useOrganizationProfile();
+  const organizationName = String(profile.name || "").trim() || "Organization";
+  const organizationLocation = String(profile.location || "").trim();
   const utils = trpc.useUtils();
   const resetToEmptyMutation = trpc.demo.resetToEmpty.useMutation({
     onSuccess: async () => {
@@ -116,6 +139,7 @@ export function Sidebar() {
   const trials = dbTrials.map((trial, index) => ({
     id: trial.id,
     name: trial.title,
+    drug: trial.investigationalProduct || null,
     sponsor: trial.sponsor || 'No sponsor',
     status: trial.status,
     phase: trial.phase || 'Not set',
@@ -130,6 +154,14 @@ export function Sidebar() {
     return colors[index % colors.length];
   }
   const { isCollapsed, setIsCollapsed } = useSidebarNav();
+  const [chatHistoryItems, setChatHistoryItems] = useState<SidebarChatHistoryItem[]>([]);
+  const [crossTrialChatHistoryItems, setCrossTrialChatHistoryItems] = useState<SidebarChatHistoryItem[]>([]);
+  const [trialChatHistoryByTrial, setTrialChatHistoryByTrial] = useState<Record<string, SidebarChatHistoryItem[]>>({});
+  const [activeChatSessionByScope, setActiveChatSessionByScope] = useState<Record<string, string | null>>({});
+  const [chatHistorySearch, setChatHistorySearch] = useState("");
+  const [chatHistorySearchOpen, setChatHistorySearchOpen] = useState(false);
+  const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
+  const chatHistorySearchInputRef = useRef<HTMLInputElement>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     open: boolean;
     type: 'reset' | 'sample' | 'full' | 'building' | null;
@@ -139,6 +171,14 @@ export function Sidebar() {
     toast.dismiss("demo-reset");
   }, [currentDataMode]);
 
+  useEffect(() => {
+    if (chatHistorySearchOpen) {
+      window.requestAnimationFrame(() => {
+        chatHistorySearchInputRef.current?.focus();
+      });
+    }
+  }, [chatHistorySearchOpen]);
+
   const handleSearchClick = () => {
     toast.info("Search feature coming soon");
     logEvent({
@@ -147,6 +187,41 @@ export function Sidebar() {
       entityType: "search",
       payload: { location: "sidebar" },
     });
+  };
+
+  const handleDeleteConversation = ({
+    sessionId,
+    trialScopeId,
+    title,
+  }: {
+    sessionId: string;
+    trialScopeId: string | null;
+    title: string;
+  }) => {
+    const removed = deleteChatSession({ sessionId });
+    if (!removed) {
+      toast.error("Could not delete conversation.");
+      return;
+    }
+
+    const scopeKey = trialScopeId || "cross-trial";
+    setActiveChatSessionByScope((prev) => ({
+      ...prev,
+      [scopeKey]: prev[scopeKey] === sessionId ? null : prev[scopeKey],
+    }));
+    if (activeChatSessionId === sessionId) {
+      setActiveChatSessionId(null);
+      const currentScopeTrialId = trialIdFromQuery || null;
+      if (currentScopeTrialId === trialScopeId) {
+        requestNewChatSession({
+          trialId: currentScopeTrialId,
+          dataMode: currentDataMode,
+        });
+        navigate(currentScopeTrialId ? `/trial/${currentScopeTrialId}/assistant` : "/documents");
+      }
+    }
+
+    toast.success(`Deleted "${title}"`);
   };
 
 
@@ -341,23 +416,268 @@ export function Sidebar() {
             </div>
           </div>
         ))}
+
+        {isDocumentAssistant && !trialIdFromQuery && !isCollapsed && (
+          <div className="mt-6 border-t border-sidebar-border pt-4">
+            <div className="relative mb-2 h-7">
+              <div className="absolute inset-0 flex items-center justify-between">
+                <h3 className="text-xs font-semibold tracking-wider text-muted-foreground">
+                  CONVERSATIONS
+                </h3>
+                <button
+                  type="button"
+                  className={`h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors ${
+                    chatHistorySearchOpen || chatHistorySearch.trim()
+                      ? "bg-blue-50 text-blue-600"
+                      : "text-muted-foreground hover:bg-gray-100"
+                  }`}
+                  onClick={() => {
+                    if (!chatHistorySearchOpen) {
+                      setChatHistorySearchOpen(true);
+                      return;
+                    }
+                    if (chatHistorySearch.trim()) {
+                      setChatHistorySearch("");
+                    } else {
+                      setChatHistorySearchOpen(false);
+                    }
+                  }}
+                  aria-label="Search conversations"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div
+                className={`absolute right-0 top-0 h-7 overflow-hidden transition-all duration-200 ease-out ${
+                  chatHistorySearchOpen ? "w-full opacity-100" : "w-0 opacity-0 pointer-events-none"
+                }`}
+              >
+                <div className="relative h-7">
+                  <Search className="h-3.5 w-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <Input
+                    ref={chatHistorySearchInputRef}
+                    value={chatHistorySearch}
+                    onChange={(event) => setChatHistorySearch(event.target.value)}
+                    placeholder="Search conversations"
+                    className="h-7 pl-7 pr-8 text-xs bg-white border-gray-200 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-gray-200"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    onClick={() => {
+                      setChatHistorySearch("");
+                      setChatHistorySearchOpen(false);
+                    }}
+                    aria-label="Close search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start gap-2 h-8 mb-3 text-xs"
+              onClick={() => {
+                requestNewChatSession({
+                  trialId: null,
+                  dataMode: currentDataMode,
+                });
+                setActiveChatSessionId(null);
+                navigate("/documents");
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New cross-trial conversation
+            </Button>
+
+            {(() => {
+              const normalizedSearch = chatHistorySearch.trim().toLowerCase();
+              const filterItems = (items: SidebarChatHistoryItem[]) =>
+                normalizedSearch
+                  ? items.filter((chat) => chat.searchableText.includes(normalizedSearch))
+                  : items;
+
+              const sections: Array<{
+                key: string;
+                label: string;
+                trialId: string | null;
+                assistantRoute: string;
+                activeSessionId: string | null;
+                items: SidebarChatHistoryItem[];
+              }> = [];
+
+              const crossTrialItems = filterItems(crossTrialChatHistoryItems);
+              if (crossTrialItems.length > 0 || !normalizedSearch) {
+                sections.push({
+                  key: "cross-trial",
+                  label: "Cross-trial",
+                  trialId: null,
+                  assistantRoute: "/documents",
+                  activeSessionId: activeChatSessionByScope["cross-trial"] || null,
+                  items: crossTrialItems,
+                });
+              }
+
+              trials.forEach((trial) => {
+                const items = filterItems(trialChatHistoryByTrial[trial.id] || []);
+                if (items.length === 0) return;
+                sections.push({
+                  key: trial.id,
+                  label: trial.drug || trial.name,
+                  trialId: trial.id,
+                  assistantRoute: `/trial/${trial.id}/assistant`,
+                  activeSessionId: activeChatSessionByScope[trial.id] || null,
+                  items,
+                });
+              });
+
+              if (sections.length === 0) {
+                return (
+                  <div className="py-2 px-3 text-xs text-muted-foreground">
+                    {normalizedSearch ? "No matching conversations" : "No conversations yet"}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3">
+                  {sections.map((section) => (
+                    <div key={section.key}>
+                      <p className="px-3 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                        {section.label}
+                      </p>
+                      <div className="mt-1 space-y-1">
+                        {section.items.slice(0, normalizedSearch ? 20 : 4).map((chat) => (
+                          <button
+                            key={chat.id}
+                            type="button"
+                            className={`w-full flex items-start gap-2 py-1.5 pr-2 pl-3 rounded-md text-left transition-colors ${
+                              section.activeSessionId === chat.id
+                                ? "bg-[#E6E7EB]"
+                                : "hover:bg-[#E6E7EB]"
+                            }`}
+                            onClick={() => {
+                              requestOpenChatSession({
+                                trialId: section.trialId,
+                                dataMode: currentDataMode,
+                                sessionId: chat.id,
+                              });
+                              setActiveChatSessionByScope((prev) => ({
+                                ...prev,
+                                [section.key]: chat.id,
+                              }));
+                              navigate(section.assistantRoute);
+                            }}
+                          >
+                            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs text-sidebar-foreground truncate">{chat.title}</div>
+                              <div className="text-[11px] text-muted-foreground mt-0.5">{chat.time}</div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </nav>
     </>
   );
 
-  // Mock chat history data
-  const mockChatHistory = [
-    { id: 1, title: "Protocol amendment review", time: "2h ago" },
-    { id: 2, title: "Patient enrollment discussion", time: "Yesterday" },
-    { id: 3, title: "Site visit planning", time: "2 days ago" },
-  ];
+  useEffect(() => {
+    if (!isDocumentAssistant) {
+      setChatHistoryItems([]);
+      setCrossTrialChatHistoryItems([]);
+      setTrialChatHistoryByTrial({});
+      setActiveChatSessionId(null);
+      setActiveChatSessionByScope({});
+      return;
+    }
+
+    const mapSessionsToItems = (trialScopeId: string | null) =>
+      listChatSessions({
+        trialId: trialScopeId,
+        dataMode: currentDataMode,
+      }).map((session) => ({
+        id: session.id,
+        title: session.title,
+        time: formatRelativeChatTime(session.updatedAt),
+        searchableText: `${session.title} ${session.messages
+          .map((message) => message.content)
+          .join(" ")}`.toLowerCase(),
+      }));
+
+    const refreshHistory = () => {
+      const crossTrialItems = mapSessionsToItems(null);
+      const nextTrialChatHistoryByTrial: Record<string, SidebarChatHistoryItem[]> = {};
+      const nextActiveByScope: Record<string, string | null> = {
+        "cross-trial": getActiveChatSessionId({
+          trialId: null,
+          dataMode: currentDataMode,
+        }),
+      };
+
+      dbTrials.forEach((trial) => {
+        const trialItems = mapSessionsToItems(trial.id);
+        if (trialItems.length > 0) {
+          nextTrialChatHistoryByTrial[trial.id] = trialItems;
+        }
+        nextActiveByScope[trial.id] = getActiveChatSessionId({
+          trialId: trial.id,
+          dataMode: currentDataMode,
+        });
+      });
+
+      setCrossTrialChatHistoryItems(crossTrialItems);
+      setTrialChatHistoryByTrial(nextTrialChatHistoryByTrial);
+      setActiveChatSessionByScope(nextActiveByScope);
+
+      if (trialIdFromQuery) {
+        setChatHistoryItems(nextTrialChatHistoryByTrial[trialIdFromQuery] || []);
+        setActiveChatSessionId(nextActiveByScope[trialIdFromQuery] || null);
+      } else {
+        setChatHistoryItems(crossTrialItems);
+        setActiveChatSessionId(nextActiveByScope["cross-trial"] || null);
+      }
+    };
+
+    refreshHistory();
+
+    const handleStorage = () => refreshHistory();
+    const handleCustomUpdate = () => refreshHistory();
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(CHAT_SESSIONS_UPDATED_EVENT, handleCustomUpdate as EventListener);
+    window.addEventListener(CHAT_ACTIVE_UPDATED_EVENT, handleCustomUpdate as EventListener);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(CHAT_SESSIONS_UPDATED_EVENT, handleCustomUpdate as EventListener);
+      window.removeEventListener(CHAT_ACTIVE_UPDATED_EVENT, handleCustomUpdate as EventListener);
+    };
+  }, [isDocumentAssistant, trialIdFromQuery, currentDataMode, dbTrials]);
 
   // Render chat history panel (Themison AI only)
   const renderChatHistoryPanel = () => {
-    if (!isDocumentAssistant || !trialIdFromQuery) return null;
-    
-    const trial = trials.find(t => t.id === trialIdFromQuery);
-    if (!trial) return null;
+    if (!isDocumentAssistant) return null;
+
+    const trial = trialIdFromQuery ? trials.find((item) => item.id === trialIdFromQuery) : null;
+
+    const normalizedSearch = chatHistorySearch.trim().toLowerCase();
+    const filteredChatHistory = normalizedSearch
+      ? chatHistoryItems.filter((chat) => chat.searchableText.includes(normalizedSearch))
+      : chatHistoryItems;
+    const chatHistoryPreview = filteredChatHistory.slice(0, normalizedSearch ? 20 : 3);
+    const assistantRoute = trialIdFromQuery
+      ? isTrialAssistantRoute
+        ? `/trial/${trialIdFromQuery}/assistant`
+        : `/documents?trialId=${encodeURIComponent(trialIdFromQuery)}`
+      : "/documents";
 
     return (
       <>
@@ -376,7 +696,7 @@ export function Sidebar() {
         )}
 
         {/* Trial Header */}
-        {!isCollapsed && (
+        {!isCollapsed && trialIdFromQuery && trial && (
           <div className="px-4 pb-4">
             <div className="pl-3">
               <div className="flex items-center gap-3">
@@ -385,7 +705,7 @@ export function Sidebar() {
                   style={{ backgroundColor: trial.color }}
                 />
                 <div className="font-semibold text-sidebar-foreground truncate">
-                  {trial.name}
+                  {trial.drug || trial.name}
                 </div>
               </div>
               <div className="text-xs text-muted-foreground mt-1 pl-6">
@@ -404,35 +724,327 @@ export function Sidebar() {
           {!isCollapsed && (
             <div className="pb-4">
               <div className="border-t border-sidebar-border pt-4">
-                <h3 className="text-xs font-semibold tracking-wider text-muted-foreground mb-2">
-                  CHAT HISTORY
-                </h3>
-                <div className="space-y-2">
-                  {mockChatHistory.map((chat) => (
-                    <div
-                      key={chat.id}
-                      className="flex items-start gap-3 py-2 pr-2 pl-3 rounded-md cursor-pointer hover:bg-[#E6E7EB] transition-colors"
-                      onClick={() => toast.info("Chat history feature coming soon")}
+                <div className="relative mb-2 h-7">
+                  <div className="absolute inset-0 flex items-center justify-between">
+                    <h3 className="text-xs font-semibold tracking-wider text-muted-foreground">
+                      CHAT HISTORY
+                    </h3>
+                    <button
+                      type="button"
+                      className={`h-7 w-7 inline-flex items-center justify-center rounded-md transition-colors ${
+                        chatHistorySearchOpen || normalizedSearch
+                          ? "bg-blue-50 text-blue-600"
+                          : "text-muted-foreground hover:bg-gray-100"
+                      }`}
+                      onClick={() => {
+                        if (!chatHistorySearchOpen) {
+                          setChatHistorySearchOpen(true);
+                          return;
+                        }
+                        if (chatHistorySearch.trim()) {
+                          setChatHistorySearch("");
+                        } else {
+                          setChatHistorySearchOpen(false);
+                        }
+                      }}
+                      aria-label="Search chats"
                     >
-                      <MessageSquare className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs text-sidebar-foreground truncate">
-                          {chat.title}
-                        </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {chat.time}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-xs text-primary"
-                    onClick={() => toast.info("View all chats feature coming soon")}
+                      <Search className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div
+                    className={`absolute right-0 top-0 h-7 overflow-hidden transition-all duration-200 ease-out ${
+                      chatHistorySearchOpen ? "w-full opacity-100" : "w-0 opacity-0 pointer-events-none"
+                    }`}
                   >
-                    View all chats →
-                  </Button>
+                    <div className="relative h-7">
+                      <Search className="h-3.5 w-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <Input
+                        ref={chatHistorySearchInputRef}
+                        value={chatHistorySearch}
+                        onChange={(event) => setChatHistorySearch(event.target.value)}
+                        placeholder="Search chats"
+                        className="h-7 pl-7 pr-8 text-xs bg-white border-gray-200 focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-gray-200"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        onClick={() => {
+                          setChatHistorySearch("");
+                          setChatHistorySearchOpen(false);
+                        }}
+                        aria-label="Close search"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start gap-2 h-8 mb-2 text-xs"
+                  onClick={() => {
+                    const scopeTrialId = trialIdFromQuery || null;
+                    requestNewChatSession({
+                      trialId: scopeTrialId,
+                      dataMode: currentDataMode,
+                    });
+                    setActiveChatSessionId(null);
+                    setActiveChatSessionByScope((prev) => ({
+                      ...prev,
+                      [scopeTrialId || "cross-trial"]: null,
+                    }));
+                    setChatHistorySearch("");
+                    setChatHistorySearchOpen(false);
+                    navigate(assistantRoute);
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New conversation
+                </Button>
+                <div className="space-y-2">
+                  {trialIdFromQuery ? (
+                    <>
+                      {chatHistoryPreview.length === 0 ? (
+                        <div className="py-2 pr-2 pl-3 text-xs text-muted-foreground">
+                          {normalizedSearch ? "No matching chats" : "No chats yet"}
+                        </div>
+                      ) : (
+                        chatHistoryPreview.map((chat) => (
+                          <div
+                            key={chat.id}
+                            className={`group relative flex items-start gap-3 py-2 pr-8 pl-3 rounded-md cursor-pointer transition-colors ${
+                              activeChatSessionId === chat.id
+                                ? "bg-[#E6E7EB]"
+                                : "hover:bg-[#E6E7EB]"
+                            }`}
+                            onClick={() => {
+                              requestOpenChatSession({
+                                trialId: trialIdFromQuery,
+                                dataMode: currentDataMode,
+                                sessionId: chat.id,
+                              });
+                              setActiveChatSessionId(chat.id);
+                              setActiveChatSessionByScope((prev) => ({
+                                ...prev,
+                                [trialIdFromQuery]: chat.id,
+                              }));
+                              navigate(assistantRoute);
+                            }}
+                          >
+                            <MessageSquare className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs text-sidebar-foreground truncate">
+                                {chat.title}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {chat.time}
+                              </div>
+                            </div>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="absolute right-2 top-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-gray-700 group-hover:opacity-100"
+                                  onClick={(event) => event.stopPropagation()}
+                                  aria-label="Conversation options"
+                                  title="Conversation options"
+                                >
+                                  <MoreHorizontal className="h-3.5 w-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+                                <DropdownMenuItem
+                                  onSelect={() => {
+                                    requestOpenChatSession({
+                                      trialId: trialIdFromQuery,
+                                      dataMode: currentDataMode,
+                                      sessionId: chat.id,
+                                    });
+                                    setActiveChatSessionId(chat.id);
+                                    setActiveChatSessionByScope((prev) => ({
+                                      ...prev,
+                                      [trialIdFromQuery]: chat.id,
+                                    }));
+                                    navigate(assistantRoute);
+                                  }}
+                                >
+                                  Open conversation
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="text-red-600 focus:text-red-600"
+                                  onSelect={() => {
+                                    handleDeleteConversation({
+                                      sessionId: chat.id,
+                                      trialScopeId: trialIdFromQuery || null,
+                                      title: chat.title,
+                                    });
+                                  }}
+                                >
+                                  Delete conversation
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        ))
+                      )}
+                    </>
+                  ) : (
+                    (() => {
+                      const filterItems = (items: SidebarChatHistoryItem[]) =>
+                        normalizedSearch
+                          ? items.filter((chat) => chat.searchableText.includes(normalizedSearch))
+                          : items;
+
+                      const sections: Array<{
+                        key: string;
+                        label: string;
+                        trialId: string | null;
+                        assistantRoute: string;
+                        activeSessionId: string | null;
+                        items: SidebarChatHistoryItem[];
+                      }> = [];
+
+                      sections.push({
+                        key: "cross-trial",
+                        label: "Cross-trial",
+                        trialId: null,
+                        assistantRoute: "/documents",
+                        activeSessionId: activeChatSessionByScope["cross-trial"] || null,
+                        items: filterItems(crossTrialChatHistoryItems),
+                      });
+
+                      trials.forEach((entry) => {
+                        const items = filterItems(trialChatHistoryByTrial[entry.id] || []);
+                        if (items.length === 0) return;
+                        sections.push({
+                          key: entry.id,
+                          label: entry.drug || entry.name,
+                          trialId: entry.id,
+                          assistantRoute: `/trial/${entry.id}/assistant`,
+                          activeSessionId: activeChatSessionByScope[entry.id] || null,
+                          items,
+                        });
+                      });
+
+                      const hasItems = sections.some((section) => section.items.length > 0);
+                      if (!hasItems) {
+                        return (
+                          <div className="py-2 pr-2 pl-3 text-xs text-muted-foreground">
+                            {normalizedSearch ? "No matching chats" : "No chats yet"}
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="mt-4 space-y-3">
+                          {sections.map((section) => (
+                            <div key={section.key}>
+                              <p className="px-3 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                                {section.label}
+                              </p>
+                              <div className="mt-1 space-y-1">
+                                {section.items.slice(0, normalizedSearch ? 20 : 4).map((chat) => (
+                                  <div
+                                    key={chat.id}
+                                    className={`group relative w-full flex items-start gap-2 py-1.5 pr-8 pl-3 rounded-md text-left transition-colors cursor-pointer ${
+                                      section.activeSessionId === chat.id
+                                        ? "bg-[#E6E7EB]"
+                                        : "hover:bg-[#E6E7EB]"
+                                    }`}
+                                    onClick={() => {
+                                      requestOpenChatSession({
+                                        trialId: section.trialId,
+                                        dataMode: currentDataMode,
+                                        sessionId: chat.id,
+                                      });
+                                      setActiveChatSessionByScope((prev) => ({
+                                        ...prev,
+                                        [section.key]: chat.id,
+                                      }));
+                                      if (section.trialId === null) {
+                                        setActiveChatSessionId(chat.id);
+                                      }
+                                      navigate(section.assistantRoute);
+                                    }}
+                                  >
+                                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                                    <div className="min-w-0">
+                                      <div className="text-xs text-sidebar-foreground truncate">{chat.title}</div>
+                                      <div className="text-[11px] text-muted-foreground mt-0.5">{chat.time}</div>
+                                    </div>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <button
+                                          type="button"
+                                          className="absolute right-2 top-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-gray-400 opacity-0 transition-opacity hover:bg-gray-100 hover:text-gray-700 group-hover:opacity-100"
+                                          onClick={(event) => event.stopPropagation()}
+                                          aria-label="Conversation options"
+                                          title="Conversation options"
+                                        >
+                                          <MoreHorizontal className="h-3.5 w-3.5" />
+                                        </button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+                                        <DropdownMenuItem
+                                          onSelect={() => {
+                                            requestOpenChatSession({
+                                              trialId: section.trialId,
+                                              dataMode: currentDataMode,
+                                              sessionId: chat.id,
+                                            });
+                                            setActiveChatSessionByScope((prev) => ({
+                                              ...prev,
+                                              [section.key]: chat.id,
+                                            }));
+                                            if (section.trialId === null) {
+                                              setActiveChatSessionId(chat.id);
+                                            }
+                                            navigate(section.assistantRoute);
+                                          }}
+                                        >
+                                          Open conversation
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                          className="text-red-600 focus:text-red-600"
+                                          onSelect={() => {
+                                            handleDeleteConversation({
+                                              sessionId: chat.id,
+                                              trialScopeId: section.trialId,
+                                              title: chat.title,
+                                            });
+                                          }}
+                                        >
+                                          Delete conversation
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()
+                  )}
+                  {trialIdFromQuery ? (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs text-primary"
+                      onClick={() => {
+                        requestNewChatSession({
+                          trialId: trialIdFromQuery,
+                          dataMode: currentDataMode,
+                        });
+                        navigate(assistantRoute);
+                      }}
+                    >
+                      View all chats →
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -453,9 +1065,9 @@ export function Sidebar() {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="flex items-center gap-2 h-8 text-sm font-medium px-2">
                 <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
-                  T
+                  {organizationInitial}
                 </div>
-                <span className="text-sm">Themison Research</span>
+                <span className="text-sm">{organizationName}</span>
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
@@ -465,11 +1077,13 @@ export function Sidebar() {
               <DropdownMenuItem>
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded bg-primary flex items-center justify-center text-primary-foreground text-xs font-semibold">
-                    T
+                    {organizationInitial}
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm font-medium">Themison Research</span>
-                    <span className="text-xs text-muted-foreground">Current Organization</span>
+                    <span className="text-sm font-medium">{organizationName}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {organizationLocation || "Current Organization"}
+                    </span>
                   </div>
                 </div>
               </DropdownMenuItem>
@@ -512,12 +1126,12 @@ export function Sidebar() {
 
       {/* Dynamic Content Based on Route */}
       <div className="flex-1 flex flex-col min-h-0 transition-opacity duration-500 ease-in-out">
-        {(!isDocumentAssistant || !trialIdFromQuery) && (
+        {!isDocumentAssistant && (
           <div className="flex-1 flex flex-col min-h-0 animate-in fade-in slide-in-from-left-4 duration-500">
             {renderMainMenu()}
           </div>
         )}
-        {isDocumentAssistant && trialIdFromQuery && (
+        {isDocumentAssistant && (
           <div className="flex-1 flex flex-col min-h-0 animate-in fade-in slide-in-from-right-4 duration-500">
             {renderChatHistoryPanel()}
           </div>

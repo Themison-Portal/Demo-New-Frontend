@@ -26,6 +26,15 @@ const loadEnvOnce = () => {
 loadEnvOnce();
 
 const openaiApiKey = process.env.OPENAI_API_KEY ?? "";
+const ragProviderRaw = (process.env.RAG_PROVIDER ?? "internal").trim().toLowerCase();
+const ragProvider = ragProviderRaw === "external" ? "external" : "internal";
+const externalRagTimeoutMsRaw = Number.parseInt(
+  process.env.EXTERNAL_RAG_TIMEOUT_MS ?? "15000",
+  10
+);
+const externalRagTimeoutMs = Number.isFinite(externalRagTimeoutMsRaw)
+  ? externalRagTimeoutMsRaw
+  : 15000;
 
 if (process.env.NODE_ENV === "development") {
   console.log(
@@ -34,6 +43,7 @@ if (process.env.NODE_ENV === "development") {
   console.log(
     `[Env] OPENAI_MODEL ${process.env.OPENAI_MODEL ?? "gpt-4o-mini"}`
   );
+  console.log(`[Env] RAG_PROVIDER ${ragProvider}`);
 }
 
 export const ENV = {
@@ -48,4 +58,9 @@ export const ENV = {
   geminiApiKey: process.env.GEMINI_API_KEY ?? "",
   openaiApiKey,
   openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+  forceOpenAIDirect: /^(1|true|yes)$/i.test(process.env.FORCE_OPENAI_DIRECT ?? ""),
+  ragProvider,
+  externalRagApiUrl: process.env.EXTERNAL_RAG_API_URL ?? "",
+  externalRagApiKey: process.env.EXTERNAL_RAG_API_KEY ?? "",
+  externalRagTimeoutMs,
 };

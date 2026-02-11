@@ -24,6 +24,7 @@ import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
+import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,9 +38,10 @@ import {
 import { Check } from "lucide-react";
 
 export function TopNav() {
-  const [location] = useLocation();
+  const [location, navigate] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
   const { state, resetDemo, loadSampleData, loadFullDataset, fullResetLocal, setBuildingMode, getCurrentDataMode } = useDemoState();
+  const { profile } = useOrganizationProfile();
   const currentDataMode = getCurrentDataMode();
   const utils = trpc.useUtils();
   
@@ -102,13 +104,14 @@ export function TopNav() {
         toast.success("Full dataset loaded");
       } else if (confirmDialog.type === 'full-reset') {
         await fullResetMutation.mutateAsync();
-        fullResetLocal(currentDataMode);
+        fullResetLocal('building');
         toast.success("All demo modes reset to defaults");
       } else if (confirmDialog.type === 'building') {
         setBuildingMode();
         toast.success("Building mode enabled");
       }
       setConfirmDialog({ open: false, type: null });
+      navigate("/trial-workspace");
     } catch (error) {
       console.error(error);
       toast.error("Demo reset failed. Please try again.");
@@ -124,7 +127,7 @@ export function TopNav() {
     // Always show organization name, not trial
     return {
       type: 'organization' as const,
-      name: 'Themison Research',
+      name: String(profile.name || "").trim() || "Organization",
       id: 'org-1',
     };
   };

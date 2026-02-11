@@ -8,11 +8,18 @@ export type PdfPageText = {
 };
 
 function normalizePdfPageText(value: string): string {
-  return value
+  const normalized = value
     .replace(/\u00a0/g, " ")
     .replace(/\r/g, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\t/g, " ")
+    // Keep column spacing for tables (SOA/SOE) instead of flattening all runs to a single space.
+    .replace(/[ ]{12,}/g, "          ")
+    .replace(/\n{3,}/g, "\n\n");
+
+  return normalized
+    .split("\n")
+    .map((line) => line.replace(/[ ]+$/g, ""))
+    .join("\n")
     .trim();
 }
 

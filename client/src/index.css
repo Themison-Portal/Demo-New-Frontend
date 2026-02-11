@@ -141,6 +141,13 @@
   }
 }
 
+@layer utilities {
+  .text-gray-900,
+  .text-slate-900 {
+    color: #0E0017 !important;
+  }
+}
+
 /* Scrollbars: remove track borders/lines */
 * {
   scrollbar-width: thin;

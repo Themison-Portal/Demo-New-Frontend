@@ -10,7 +10,18 @@ import {
   persistTrialSnapshot,
   syncTrialKnowledgeGraph,
 } from "./_core/aiIntelligence";
-import { evaluateUnifiedRetrievalQuality, runUnifiedQuery } from "./_core/unifiedQuery";
+import {
+  evaluateUnifiedRetrievalQuality,
+  runUnifiedQuery,
+  runUnifiedQueryDiagnostics,
+} from "./_core/unifiedQuery";
+import { runUnifiedEvalHarness } from "./_core/evalHarness";
+import {
+  getTelemetryDrivenSignals,
+  listPendingApprovals,
+  resolveApproval,
+  runOrchestratedAgent,
+} from "./_core/agentOrchestrator";
 import { aiTrainingExamples, knowledgeGraphEdges, knowledgeGraphNodes } from "../drizzle/schema";
 import { desc, eq } from "drizzle-orm";
 
@@ -107,6 +118,336 @@ export const aiIntelligenceRouter = router({
         query: input.query,
         protocolIds: input.documentIds,
       });
+    }),
+
+  queryDiagnostics: protectedProcedure
+    .input(
+      z.object({
+        query: z.string().min(2).max(5000),
+        trialId: z.string().optional(),
+        documentIds: z.array(z.number().int().positive()).optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        messages: z
+          .array(
+            z.object({
+              role: z.enum(["user", "assistant"]),
+              content: z.string(),
+            })
+          )
+          .optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId =
+        input.trialId && input.trialId !== "all"
+          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          : undefined;
+
+      const diagnostics = await runUnifiedQueryDiagnostics({
+        db,
+        query: input.query,
+        messages: input.messages,
+        protocolIds: input.documentIds,
+        trialId: resolvedTrialId,
+        userId: ctx.user.id,
+      });
+
+      await logTelemetryEvent({
+        eventType: "ai_query_diagnostics_requested",
+        action: "requested",
+        userId: String(ctx.user.id),
+        entityType: "query",
+        entityId: resolvedTrialId ?? null,
+        payload: {
+          demoMode: mode,
+          route: diagnostics.route,
+          focus: diagnostics.plan.focus,
+          candidateCount: diagnostics.retrieval.candidateCount,
+          selectedCount: diagnostics.retrieval.selectedCount,
+          protocolCount: diagnostics.protocols.length,
+        },
+        aiInvolved: true,
+      });
+
+      return {
+        ...diagnostics,
+        trialId: resolvedTrialId ? stripDemoId(resolvedTrialId) : null,
+      };
+    }),
+
+  runEvalHarness: protectedProcedure
+    .input(
+      z.object({
+        trialId: z.string().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        documentIds: z.array(z.number().int().positive()).min(1),
+        cases: z
+          .array(
+            z.object({
+              id: z.string().min(1).max(120),
+              query: z.string().min(2).max(2000),
+              kind: z.enum([
+                "criteria",
+                "schedule",
+                "general",
+                "visit_procedures",
+                "scheduling",
+                "special_requirements",
+                "eligibility",
+                "safety",
+                "dosing",
+                "cross_document",
+                "abstention",
+              ]),
+              category: z.string().max(120).optional(),
+              mustContain: z.array(z.string().min(1).max(200)).optional(),
+              mustNotContain: z.array(z.string().min(1).max(200)).optional(),
+              mustCite: z.union([z.boolean(), z.array(z.string().min(1).max(200))]).optional(),
+              mustReference: z.string().min(1).max(200).optional(),
+              mustStartWithYesOrNo: z.boolean().optional(),
+              mustContainNumber: z.boolean().optional(),
+              mustContainTimeframe: z.boolean().optional(),
+              expectedCount: z.number().int().positive().max(200).optional(),
+              useStructuredExpectedCount: z.boolean().optional(),
+              mustListAll: z.boolean().optional(),
+              retrievalMustContain: z.array(z.string().min(1).max(200)).optional(),
+              mustNotHallucinate: z.boolean().optional(),
+              shouldAbstain: z.boolean().optional(),
+            })
+          )
+          .optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId =
+        input.trialId && input.trialId !== "all"
+          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          : undefined;
+
+      const report = await runUnifiedEvalHarness({
+        db,
+        trialId: resolvedTrialId,
+        protocolIds: input.documentIds,
+        cases: input.cases,
+      });
+
+      await logTelemetryEvent({
+        eventType: "ai_eval_harness_run",
+        action: "completed",
+        userId: String(ctx.user.id),
+        entityType: "analytics",
+        entityId: resolvedTrialId ?? null,
+        payload: {
+          demoMode: mode,
+          cases: report.totals.cases,
+          passed: report.totals.passed,
+          failed: report.totals.failed,
+          abstained: report.totals.abstained,
+          retrievalPrecisionAtKProxy: report.metrics.retrievalPrecisionAtKProxy,
+          citationCorrectness: report.metrics.citationCorrectness,
+        },
+        aiInvolved: true,
+      });
+
+      return report;
+    }),
+
+  getTelemetrySignals: protectedProcedure
+    .input(
+      z.object({
+        trialId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      const signalResult = await getTelemetryDrivenSignals({
+        db,
+        trialId: resolvedTrialId,
+      });
+      if (!signalResult) return null;
+
+      await logTelemetryEvent({
+        eventType: "ai_signals_requested",
+        action: "viewed",
+        userId: String(ctx.user.id),
+        entityType: "trial",
+        entityId: resolvedTrialId,
+        payload: {
+          demoMode: mode,
+          signalCount: signalResult.signals.length,
+          readinessScore: signalResult.snapshot.scores.readinessScore,
+          riskScore: signalResult.snapshot.scores.riskScore,
+        },
+        aiInvolved: true,
+      });
+
+      return {
+        ...signalResult,
+        trialId: stripDemoId(signalResult.trialId),
+      };
+    }),
+
+  runAgent: protectedProcedure
+    .input(
+      z.object({
+        trialId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        agentType: z.enum([
+          "study_setup",
+          "visit_prep",
+          "deviation_prevention",
+          "amendment_impact",
+          "coordination",
+          "query_resolution",
+        ]),
+        query: z.string().max(5000).optional(),
+        documentIds: z.array(z.number().int().positive()).optional(),
+        payload: z.record(z.string(), z.unknown()).optional(),
+        requireApproval: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      const result = await runOrchestratedAgent({
+        db,
+        trialId: resolvedTrialId,
+        agentType: input.agentType,
+        requestedBy: String(ctx.user.id),
+        requireApproval: input.requireApproval ?? input.agentType !== "query_resolution",
+        query: input.query ?? null,
+        documentIds: input.documentIds ?? [],
+        payload: input.payload ?? {},
+      });
+
+      await logTelemetryEvent({
+        eventType: "ai_agent_run_requested",
+        action: result.status === "pending_approval" ? "pending_approval" : "completed",
+        userId: String(ctx.user.id),
+        entityType: "trial",
+        entityId: resolvedTrialId,
+        payload: {
+          demoMode: mode,
+          agentType: input.agentType,
+          confidence: result.confidence,
+          requiresApproval: result.requiresApproval,
+          approvalId: result.approvalId,
+        },
+        aiInvolved: true,
+      });
+
+      return {
+        ...result,
+        trialId: stripDemoId(result.trialId),
+      };
+    }),
+
+  getPendingAgentApprovals: protectedProcedure
+    .input(
+      z.object({
+        trialId: z.string().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
+    .query(async ({ input, ctx }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const resolvedTrialId =
+        input.trialId && input.trialId !== "all"
+          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          : undefined;
+
+      const rows = listPendingApprovals({
+        trialId: resolvedTrialId,
+        requestedBy: undefined,
+      });
+
+      await logTelemetryEvent({
+        eventType: "ai_agent_approvals_viewed",
+        action: "viewed",
+        userId: String(ctx.user.id),
+        entityType: "analytics",
+        entityId: resolvedTrialId ?? null,
+        payload: {
+          pendingCount: rows.length,
+          demoMode: mode,
+        },
+        aiInvolved: true,
+      });
+
+      return rows.map((row) => ({
+        ...row,
+        trialId: stripDemoId(row.trialId),
+        result: {
+          ...row.result,
+          trialId: stripDemoId(row.result.trialId),
+        },
+      }));
+    }),
+
+  resolveAgentApproval: protectedProcedure
+    .input(
+      z.object({
+        approvalId: z.string().uuid(),
+        approved: z.boolean(),
+        modifications: z.record(z.string(), z.unknown()).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const resolved = resolveApproval({
+        approvalId: input.approvalId,
+        approved: input.approved,
+        modifications: input.modifications ?? null,
+      });
+
+      await logTelemetryEvent({
+        eventType: input.approved ? "ai_agent_approved" : "ai_agent_rejected",
+        action: input.approved ? "approved" : "rejected",
+        userId: String(ctx.user.id),
+        entityType: "trial",
+        entityId: resolved.approval.trialId,
+        payload: {
+          agentType: resolved.approval.agentType,
+          approvalId: input.approvalId,
+          modifications: input.modifications ?? null,
+        },
+        aiInvolved: true,
+        userCorrection: input.approved ? null : JSON.stringify(input.modifications ?? {}),
+      });
+
+      return {
+        ...resolved,
+        approval: {
+          ...resolved.approval,
+          trialId: stripDemoId(resolved.approval.trialId),
+          result: {
+            ...resolved.approval.result,
+            trialId: stripDemoId(resolved.approval.result.trialId),
+          },
+        },
+        result: {
+          ...resolved.result,
+          trialId: stripDemoId(resolved.result.trialId),
+        },
+      };
     }),
 
   getTrialSnapshot: protectedProcedure

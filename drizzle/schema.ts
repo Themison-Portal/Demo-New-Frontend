@@ -670,3 +670,341 @@ export const knowledgeGraphEdges = mysqlTable("knowledge_graph_edges", {
 
 export type KnowledgeGraphEdge = typeof knowledgeGraphEdges.$inferSelect;
 export type InsertKnowledgeGraphEdge = typeof knowledgeGraphEdges.$inferInsert;
+
+/**
+ * ============================================================
+ * Collaboration Hub (Messages, Threads, Inbox)
+ * ============================================================
+ */
+
+export const collabConversationTypeEnum = mysqlEnum("collab_conversation_type", ["direct", "group"]);
+export const collabSenderTypeEnum = mysqlEnum("collab_sender_type", [
+  "user",
+  "ai",
+  "system",
+  "email_external",
+]);
+export const collabMessageContentTypeEnum = mysqlEnum("collab_message_content_type", [
+  "text",
+  "protocol_snippet",
+  "task_card",
+  "ai_response",
+  "email",
+]);
+export const collabThreadCategoryEnum = mysqlEnum("collab_thread_category", [
+  "question",
+  "decision",
+  "issue",
+  "action_required",
+  "approval",
+  "clarification",
+]);
+export const collabThreadStatusEnum = mysqlEnum("collab_thread_status", [
+  "open",
+  "pending",
+  "resolved",
+  "closed",
+]);
+export const collabThreadAnchorTypeEnum = mysqlEnum("collab_thread_anchor_type", [
+  "document_section",
+  "task",
+  "visit",
+  "trial_wide",
+  "therapeutic_area",
+  "team_member",
+]);
+export const collabEmailFolderEnum = mysqlEnum("collab_email_folder", [
+  "inbox",
+  "sent",
+  "drafts",
+  "archived",
+]);
+export const collabEmailPriorityEnum = mysqlEnum("collab_email_priority", ["high", "medium", "low"]);
+export const collabCrossRefSourceEntityTypeEnum = mysqlEnum("collab_cross_ref_source_entity_type", [
+  "message",
+  "thread",
+  "email_chain",
+  "task",
+]);
+export const collabCrossRefTargetEntityTypeEnum = mysqlEnum("collab_cross_ref_target_entity_type", [
+  "message",
+  "thread",
+  "email_chain",
+  "task",
+]);
+export const collabCrossRefTypeEnum = mysqlEnum("collab_cross_ref_type", [
+  "manual",
+  "ai_suggested",
+  "spawned_from",
+]);
+export const collabLayerEnum = mysqlEnum("collab_layer", ["messages", "threads", "inbox"]);
+
+/**
+ * Conversations for direct/group collaboration.
+ */
+export const conversations = mysqlTable(
+  "conversations",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    type: collabConversationTypeEnum.notNull(),
+    name: varchar("name", { length: 255 }),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    trialIdx: index("idx_collab_conversations_trial").on(table.trialId),
+    typeIdx: index("idx_collab_conversations_type").on(table.type),
+    updatedIdx: index("idx_collab_conversations_updated").on(table.updatedAt),
+  })
+);
+
+/**
+ * Conversation participants.
+ */
+export const conversationParticipants = mysqlTable(
+  "conversation_participants",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    conversationId: varchar("conversationId", { length: 36 }).notNull(),
+    userId: int("userId").notNull(),
+    joinedAt: timestamp("joinedAt").defaultNow().notNull(),
+    lastReadAt: timestamp("lastReadAt"),
+  },
+  (table) => ({
+    userIdx: index("idx_collab_conv_participants_user").on(table.userId),
+    conversationIdx: index("idx_collab_conv_participants_conversation").on(table.conversationId),
+    uniquePair: uniqueIndex("uidx_collab_conv_participant").on(table.conversationId, table.userId),
+  })
+);
+
+/**
+ * Structured threads for decisions/issues.
+ */
+export const threads = mysqlTable(
+  "threads",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    title: varchar("title", { length: 500 }).notNull(),
+    category: collabThreadCategoryEnum.notNull(),
+    status: collabThreadStatusEnum.default("open").notNull(),
+    resolvedBy: int("resolvedBy"),
+    resolvedAt: timestamp("resolvedAt"),
+    resolutionSummary: text("resolutionSummary"),
+    aiContributed: boolean("aiContributed").default(false).notNull(),
+    aiResolutionSuggested: boolean("aiResolutionSuggested").default(false).notNull(),
+    createdBy: int("createdBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    trialIdx: index("idx_collab_threads_trial").on(table.trialId),
+    statusIdx: index("idx_collab_threads_status").on(table.status),
+    categoryIdx: index("idx_collab_threads_category").on(table.category),
+    trialStatusIdx: index("idx_collab_threads_trial_status").on(table.trialId, table.status),
+    updatedIdx: index("idx_collab_threads_updated").on(table.updatedAt),
+  })
+);
+
+/**
+ * Thread anchors for traceable context.
+ */
+export const threadAnchors = mysqlTable(
+  "thread_anchors",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    threadId: varchar("threadId", { length: 36 }).notNull(),
+    anchorType: collabThreadAnchorTypeEnum.notNull(),
+    anchorLabel: varchar("anchorLabel", { length: 255 }).notNull(),
+    anchorRefId: varchar("anchorRefId", { length: 64 }),
+    anchorRefType: varchar("anchorRefType", { length: 64 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    threadIdx: index("idx_collab_thread_anchors_thread").on(table.threadId),
+    refIdx: index("idx_collab_thread_anchors_ref").on(table.anchorRefId),
+  })
+);
+
+/**
+ * Thread participants.
+ */
+export const threadParticipants = mysqlTable(
+  "thread_participants",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    threadId: varchar("threadId", { length: 36 }).notNull(),
+    userId: int("userId").notNull(),
+    joinedAt: timestamp("joinedAt").defaultNow().notNull(),
+    lastReadAt: timestamp("lastReadAt"),
+  },
+  (table) => ({
+    userIdx: index("idx_collab_thread_participants_user").on(table.userId),
+    threadIdx: index("idx_collab_thread_participants_thread").on(table.threadId),
+    uniquePair: uniqueIndex("uidx_collab_thread_participant").on(table.threadId, table.userId),
+  })
+);
+
+/**
+ * Trial-scoped inbox configuration.
+ */
+export const trialInboxes = mysqlTable(
+  "trial_inboxes",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    emailAddress: varchar("emailAddress", { length: 320 }).notNull(),
+    isActive: boolean("isActive").default(true).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    trialUnique: uniqueIndex("uidx_collab_trial_inboxes_trial").on(table.trialId),
+    emailUnique: uniqueIndex("uidx_collab_trial_inboxes_email").on(table.emailAddress),
+  })
+);
+
+/**
+ * Email chains in trial inboxes.
+ */
+export const emailChains = mysqlTable(
+  "email_chains",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    inboxId: varchar("inboxId", { length: 36 }).notNull(),
+    subject: varchar("subject", { length: 500 }).notNull(),
+    folder: collabEmailFolderEnum.default("inbox").notNull(),
+    aiLabels: json("aiLabels"),
+    aiPriority: collabEmailPriorityEnum,
+    aiSummary: text("aiSummary"),
+    aiSuggestedThreadId: varchar("aiSuggestedThreadId", { length: 36 }),
+    linkedThreadId: varchar("linkedThreadId", { length: 36 }),
+    fromAddress: varchar("fromAddress", { length: 320 }),
+    fromName: varchar("fromName", { length: 255 }),
+    toAddresses: json("toAddresses"),
+    ccAddresses: json("ccAddresses"),
+    messageCount: int("messageCount").default(0).notNull(),
+    isRead: boolean("isRead").default(false).notNull(),
+    isStarred: boolean("isStarred").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => ({
+    inboxIdx: index("idx_collab_email_chains_inbox").on(table.inboxId),
+    folderIdx: index("idx_collab_email_chains_folder").on(table.folder),
+    inboxFolderIdx: index("idx_collab_email_chains_inbox_folder").on(table.inboxId, table.folder),
+    linkedThreadIdx: index("idx_collab_email_chains_linked_thread").on(table.linkedThreadId),
+    priorityIdx: index("idx_collab_email_chains_priority").on(table.aiPriority),
+    updatedIdx: index("idx_collab_email_chains_updated").on(table.updatedAt),
+  })
+);
+
+/**
+ * Unified message object for messages, threads, and inbox chains.
+ */
+export const messages = mysqlTable(
+  "messages",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    conversationId: varchar("conversationId", { length: 36 }),
+    threadId: varchar("threadId", { length: 36 }),
+    emailChainId: varchar("emailChainId", { length: 36 }),
+    senderId: int("senderId"),
+    senderType: collabSenderTypeEnum.default("user").notNull(),
+    senderName: varchar("senderName", { length: 255 }),
+    senderEmail: varchar("senderEmail", { length: 320 }),
+    content: text("content").notNull(),
+    contentType: collabMessageContentTypeEnum.default("text").notNull(),
+    embeddedContent: json("embeddedContent"),
+    isAiGenerated: boolean("isAiGenerated").default(false).notNull(),
+    aiModel: varchar("aiModel", { length: 100 }),
+    aiLatencyMs: int("aiLatencyMs"),
+    editedAt: timestamp("editedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    conversationIdx: index("idx_collab_messages_conversation").on(table.conversationId, table.createdAt),
+    threadIdx: index("idx_collab_messages_thread").on(table.threadId, table.createdAt),
+    emailIdx: index("idx_collab_messages_email_chain").on(table.emailChainId, table.createdAt),
+    senderIdx: index("idx_collab_messages_sender").on(table.senderId),
+    aiIdx: index("idx_collab_messages_ai").on(table.isAiGenerated, table.createdAt),
+  })
+);
+
+/**
+ * Cross-layer references among collaboration entities.
+ */
+export const crossReferences = mysqlTable(
+  "cross_references",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    sourceType: collabCrossRefSourceEntityTypeEnum.notNull(),
+    sourceId: varchar("sourceId", { length: 36 }).notNull(),
+    targetType: collabCrossRefTargetEntityTypeEnum.notNull(),
+    targetId: varchar("targetId", { length: 36 }).notNull(),
+    refType: collabCrossRefTypeEnum.default("manual").notNull(),
+    createdBy: int("createdBy"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    sourceIdx: index("idx_collab_cross_refs_source").on(table.sourceType, table.sourceId),
+    targetIdx: index("idx_collab_cross_refs_target").on(table.targetType, table.targetId),
+  })
+);
+
+/**
+ * Collaboration telemetry events.
+ */
+export const collabTelemetryEvents = mysqlTable(
+  "collab_telemetry_events",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    userId: int("userId"),
+    eventType: varchar("eventType", { length: 120 }).notNull(),
+    eventData: json("eventData").notNull(),
+    layer: collabLayerEnum.notNull(),
+    aiInvolved: boolean("aiInvolved").default(false).notNull(),
+    aiModel: varchar("aiModel", { length: 100 }),
+    aiLatencyMs: int("aiLatencyMs"),
+    aiAccepted: boolean("aiAccepted"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    trialIdx: index("idx_collab_telemetry_trial").on(table.trialId),
+    typeIdx: index("idx_collab_telemetry_type").on(table.eventType),
+    aiIdx: index("idx_collab_telemetry_ai").on(table.aiInvolved, table.createdAt),
+    createdIdx: index("idx_collab_telemetry_created").on(table.createdAt),
+  })
+);
+
+export type Conversation = typeof conversations.$inferSelect;
+export type InsertConversation = typeof conversations.$inferInsert;
+
+export type ConversationParticipant = typeof conversationParticipants.$inferSelect;
+export type InsertConversationParticipant = typeof conversationParticipants.$inferInsert;
+
+export type Message = typeof messages.$inferSelect;
+export type InsertMessage = typeof messages.$inferInsert;
+
+export type Thread = typeof threads.$inferSelect;
+export type InsertThread = typeof threads.$inferInsert;
+
+export type ThreadAnchor = typeof threadAnchors.$inferSelect;
+export type InsertThreadAnchor = typeof threadAnchors.$inferInsert;
+
+export type ThreadParticipant = typeof threadParticipants.$inferSelect;
+export type InsertThreadParticipant = typeof threadParticipants.$inferInsert;
+
+export type TrialInbox = typeof trialInboxes.$inferSelect;
+export type InsertTrialInbox = typeof trialInboxes.$inferInsert;
+
+export type EmailChain = typeof emailChains.$inferSelect;
+export type InsertEmailChain = typeof emailChains.$inferInsert;
+
+export type CrossReference = typeof crossReferences.$inferSelect;
+export type InsertCrossReference = typeof crossReferences.$inferInsert;
+
+export type CollabTelemetryEvent = typeof collabTelemetryEvents.$inferSelect;
+export type InsertCollabTelemetryEvent = typeof collabTelemetryEvents.$inferInsert;

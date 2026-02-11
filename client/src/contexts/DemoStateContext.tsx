@@ -378,6 +378,11 @@ const STORAGE_KEY = "themison-demo-state";
 const STORAGE_KEY_SAMPLE = `${STORAGE_KEY}-sample`;
 const STORAGE_KEY_FULL = `${STORAGE_KEY}-full`;
 const STORAGE_KEY_BUILDING = `${STORAGE_KEY}-building`;
+const STORAGE_KEY_ACTIVE_MODE = `${STORAGE_KEY}-active-mode`;
+
+const isDemoDataMode = (value: string | null): value is DemoState["dataMode"] => {
+  return value === "sample" || value === "full" || value === "building";
+};
 
 const getStorageKeyForMode = (mode: DemoState["dataMode"]) => {
   switch (mode) {
@@ -398,11 +403,13 @@ const withMode = (state: DemoState, mode: DemoState["dataMode"]) => ({
 
 export function DemoStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<DemoState>(() => {
-    // Load from localStorage on initial mount (sample mode by default)
-    const stored = localStorage.getItem(STORAGE_KEY_SAMPLE);
+    // Load active mode from localStorage on initial mount (sample mode by default)
+    const storedModeRaw = localStorage.getItem(STORAGE_KEY_ACTIVE_MODE);
+    const activeMode: DemoState["dataMode"] = isDemoDataMode(storedModeRaw) ? storedModeRaw : "sample";
+    const stored = localStorage.getItem(getStorageKeyForMode(activeMode));
     if (stored) {
       try {
-        return withMode(JSON.parse(stored), "sample");
+        return withMode(JSON.parse(stored), activeMode);
       } catch (e) {
         console.error("Failed to parse stored state:", e);
         return withMode(initialDemoState, "sample");
@@ -415,6 +422,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const key = getStorageKeyForMode(state.dataMode);
     localStorage.setItem(key, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
   }, [state]);
 
   useEffect(() => {

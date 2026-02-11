@@ -10,6 +10,8 @@ import { demoRouter } from "./demoRouter";
 import { telemetryRouter } from "./telemetryRouter";
 import { aiIntelligenceRouter } from "./aiIntelligenceRouter";
 import { mapRouter } from "./mapRouter";
+import { organizationRouter } from "./organizationRouter";
+import { collaborationRouter } from "./collaborationRouter";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -48,6 +50,12 @@ export const appRouter = router({
 
   // Execution Map Foundation
   map: mapRouter,
+
+  // Organization Profile
+  organization: organizationRouter,
+
+  // Collaboration Hub
+  collaboration: collaborationRouter,
 });
 
 export type AppRouter = typeof appRouter;

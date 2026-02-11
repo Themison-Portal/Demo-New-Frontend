@@ -107,6 +107,7 @@ type EmbeddingResult = {
 };
 
 let embeddingsEndpointUnsupported = false;
+let loggedProviderMode = false;
 
 export type JsonSchema = {
   name: string;
@@ -222,17 +223,24 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
+const shouldUseForgeProvider = () =>
+  !ENV.forceOpenAIDirect &&
+  Boolean((ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0) || (ENV.forgeApiKey && ENV.forgeApiKey.trim().length > 0));
+
 const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
+  shouldUseForgeProvider() && ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
     ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
     : "https://api.openai.com/v1/chat/completions";
 
 const resolveEmbeddingsApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
+  shouldUseForgeProvider() && ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
     ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/embeddings`
     : "https://api.openai.com/v1/embeddings";
 
-const resolveApiKey = () => ENV.forgeApiKey || ENV.openaiApiKey;
+const resolveApiKey = () => {
+  if (shouldUseForgeProvider() && ENV.forgeApiKey) return ENV.forgeApiKey;
+  return ENV.openaiApiKey;
+};
 
 const assertApiKey = () => {
   if (!resolveApiKey()) {
@@ -285,10 +293,28 @@ const normalizeResponseFormat = ({
   };
 };
 
+function looksLikeQuotaError(status: number, body: string) {
+  if (status === 429 || status === 402) return true;
+  const normalized = String(body || "").toLowerCase();
+  return (
+    status === 412 ||
+    normalized.includes("usage exhausted") ||
+    normalized.includes("insufficient_quota") ||
+    normalized.includes("quota") ||
+    normalized.includes("\"code\":9")
+  );
+}
+
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   assertApiKey();
 
-  const usingForge = Boolean(ENV.forgeApiKey || ENV.forgeApiUrl);
+  const usingForge = shouldUseForgeProvider();
+  const modelName = String(ENV.openaiModel || "").toLowerCase();
+  const isGpt5Model = modelName.startsWith("gpt-5");
+  if (process.env.NODE_ENV === "development" && !loggedProviderMode) {
+    loggedProviderMode = true;
+    console.log(`[llm] provider=${usingForge ? "forge" : "openai"} model=${ENV.openaiModel}`);
+  }
   const {
     messages,
     tools,
@@ -298,6 +324,8 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     output_schema,
     responseFormat,
     response_format,
+    maxTokens,
+    max_tokens,
   } = params;
 
   const payload: Record<string, unknown> = {
@@ -317,7 +345,17 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     payload.tool_choice = normalizedToolChoice;
   }
 
-  payload.max_tokens = usingForge ? 32768 : 2048;
+  const requestedMaxTokens =
+    (typeof maxTokens === "number" ? maxTokens : undefined) ??
+    (typeof max_tokens === "number" ? max_tokens : undefined) ??
+    (usingForge ? 32768 : 2048);
+
+  // OpenAI GPT-5 models require `max_completion_tokens` instead of `max_tokens`.
+  if (!usingForge && isGpt5Model) {
+    payload.max_completion_tokens = requestedMaxTokens;
+  } else {
+    payload.max_tokens = requestedMaxTokens;
+  }
   if (usingForge) {
     payload.thinking = {
       budget_tokens: 128,
@@ -353,6 +391,11 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
       if (!response.ok) {
         const errorText = await response.text();
+        if (looksLikeQuotaError(response.status, errorText)) {
+          throw new Error(
+            "Themison AI is temporarily unavailable because the configured LLM account has reached its usage limit. Update billing/quota or switch API key."
+          );
+        }
         const error = new Error(
           `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
         );

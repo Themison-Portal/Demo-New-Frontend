@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 type EditableFieldProps = {
   value: string | null | undefined;
+  displayValue?: string | null | undefined;
   onSave: (newValue: string) => Promise<void>;
   type?: "text" | "textarea" | "select" | "date";
   options?: { value: string; label: string }[]; // For select type
@@ -31,6 +32,7 @@ type EditableFieldProps = {
 
 export function EditableField({
   value,
+  displayValue,
   onSave,
   type = "text",
   options = [],
@@ -46,6 +48,7 @@ export function EditableField({
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
 
   const isEmpty = !value || value.trim() === "";
+  const renderedValue = displayValue ?? value;
 
   // Update editValue when value prop changes
   useEffect(() => {
@@ -193,7 +196,7 @@ export function EditableField({
           displayClassName
         )}
       >
-        {isEmpty ? emptyText : value}
+        {isEmpty ? emptyText : renderedValue}
       </span>
       {isHovered && (
         <Pencil className="h-3.5 w-3.5 text-gray-400 group-hover:text-gray-600 flex-shrink-0" />

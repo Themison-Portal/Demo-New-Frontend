@@ -213,14 +213,14 @@ export interface TelemetryEvent {
 
 export const VALID_STATUS_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   suggested: ["confirmed", "cancelled"],
-  confirmed: ["todo"],
-  todo: ["in_progress", "blocked", "waiting", "skipped", "cancelled"],
-  in_progress: ["done", "blocked", "waiting", "cancelled"],
-  blocked: ["in_progress", "todo", "cancelled"],
-  waiting: ["in_progress", "todo", "cancelled"],
-  done: [],
-  skipped: [],
-  cancelled: [],
+  confirmed: ["todo", "cancelled"],
+  todo: ["in_progress", "blocked", "waiting", "done", "skipped", "cancelled"],
+  in_progress: ["todo", "done", "blocked", "waiting", "skipped", "cancelled"],
+  blocked: ["todo", "in_progress", "waiting", "done", "cancelled"],
+  waiting: ["todo", "in_progress", "blocked", "done", "cancelled"],
+  done: ["todo", "in_progress", "blocked", "waiting"],
+  skipped: ["todo", "in_progress", "cancelled"],
+  cancelled: ["todo", "in_progress"],
 };
 
 export type MapViewType = "scaffold" | "timeline" | "canvas" | "kanban";
