@@ -228,6 +228,7 @@ const SAMPLE_TRIAL_DETAILS: Record<string, Partial<TrialSeed>> = {
     endDate: new Date("2028-01-20"),
   },
   "ghi-789": {
+    status: "not-started",
     investigationalProduct: "Apixaban-LX",
     indication: "Atrial Fibrillation",
     nctNumber: "NCT05799174",
@@ -240,10 +241,13 @@ const SAMPLE_TRIAL_DETAILS: Record<string, Partial<TrialSeed>> = {
     studyDesignType: "Randomized, event-driven, parallel-group",
     primaryObjective: "Compare stroke/systemic embolism prevention.",
     primaryEndpoint: "Time to first stroke or systemic embolism.",
+    enrolledPatients: 0,
+    completionPercentage: 0,
     startDate: new Date("2025-05-01"),
     endDate: new Date("2030-05-01"),
   },
   "jkl-012": {
+    status: "completed",
     investigationalProduct: "B-112",
     indication: "Early Alzheimer’s Disease",
     nctNumber: "NCT05814422",
@@ -256,6 +260,8 @@ const SAMPLE_TRIAL_DETAILS: Record<string, Partial<TrialSeed>> = {
     studyDesignType: "First-in-human, dose-escalation",
     primaryObjective: "Assess safety and tolerability of B-112.",
     primaryEndpoint: "Incidence of treatment-emergent adverse events.",
+    enrolledPatients: 15,
+    completionPercentage: 100,
     startDate: new Date("2025-12-01"),
     endDate: new Date("2027-06-01"),
   },
@@ -276,6 +282,7 @@ const SAMPLE_TRIAL_DETAILS: Record<string, Partial<TrialSeed>> = {
     endDate: new Date("2027-02-01"),
   },
   "pqr-678": {
+    status: "terminated",
     investigationalProduct: "J&J-RA1",
     indication: "Rheumatoid Arthritis",
     nctNumber: "NCT05899544",
@@ -288,10 +295,12 @@ const SAMPLE_TRIAL_DETAILS: Record<string, Partial<TrialSeed>> = {
     studyDesignType: "Randomized, double-blind, placebo-controlled",
     primaryObjective: "Demonstrate improvement in ACR20 at Week 24.",
     primaryEndpoint: "Proportion of patients achieving ACR20 at Week 24.",
+    completionPercentage: 54,
     startDate: new Date("2025-04-01"),
     endDate: new Date("2028-04-01"),
   },
   "stu-901": {
+    status: "on-hold",
     investigationalProduct: "GAL-Topica",
     indication: "Atopic Dermatitis",
     nctNumber: "NCT05911203",
@@ -542,6 +551,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     endDate: new Date("2027-11-01"),
   },
   "bcd-890": {
+    status: "on-hold",
     investigationalProduct: "San-201",
     indication: "Chronic Rhinosinusitis",
     nctNumber: "NCT05921044",
@@ -554,6 +564,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, double-blind, placebo-controlled",
     primaryObjective: "Evaluate symptom score reduction.",
     primaryEndpoint: "Change in SNOT-22 score at Week 24.",
+    completionPercentage: 41,
     startDate: new Date("2025-06-15"),
     endDate: new Date("2027-01-15"),
   },
@@ -670,6 +681,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     endDate: new Date("2026-09-15"),
   },
   "zab-234": {
+    status: "on-hold",
     investigationalProduct: "BNT-349",
     indication: "HPV-Associated Cancer",
     nctNumber: "NCT05929021",
@@ -682,6 +694,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, open-label, active-controlled",
     primaryObjective: "Evaluate overall response rate.",
     primaryEndpoint: "Overall response rate (RECIST 1.1).",
+    completionPercentage: 47,
     startDate: new Date("2025-07-01"),
     endDate: new Date("2027-05-01"),
   },
@@ -702,6 +715,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     endDate: new Date("2027-01-10"),
   },
   "fgh-890": {
+    status: "completed",
     investigationalProduct: "BIO-212",
     indication: "Multiple Sclerosis",
     nctNumber: "NCT05931091",
@@ -714,6 +728,8 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, double-blind, placebo-controlled",
     primaryObjective: "Assess ARR reduction.",
     primaryEndpoint: "Annualized relapse rate at Week 48.",
+    enrolledPatients: 50,
+    completionPercentage: 100,
     startDate: new Date("2025-06-01"),
     endDate: new Date("2027-06-01"),
   },
@@ -750,6 +766,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     endDate: new Date("2027-04-15"),
   },
   "opq-789": {
+    status: "not-started",
     investigationalProduct: "GEN-778",
     indication: "HER2+ Breast Cancer",
     nctNumber: "NCT05934012",
@@ -762,10 +779,13 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, open-label, active-controlled",
     primaryObjective: "Assess pathologic complete response.",
     primaryEndpoint: "pCR rate at surgery.",
+    enrolledPatients: 0,
+    completionPercentage: 0,
     startDate: new Date("2025-10-10"),
     endDate: new Date("2027-10-10"),
   },
   "rst-012": {
+    status: "completed",
     investigationalProduct: "ABB-401",
     indication: "Psoriasis",
     nctNumber: "NCT05935022",
@@ -778,6 +798,8 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, double-blind, placebo-controlled",
     primaryObjective: "Evaluate PASI 75 response at Week 16.",
     primaryEndpoint: "PASI 75 response at Week 16.",
+    enrolledPatients: 100,
+    completionPercentage: 100,
     startDate: new Date("2025-02-01"),
     endDate: new Date("2027-08-01"),
   },
@@ -798,6 +820,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     endDate: new Date("2027-09-10"),
   },
   "xyz-678": {
+    status: "terminated",
     investigationalProduct: "GSK-555",
     indication: "Seasonal Allergic Rhinitis",
     nctNumber: "NCT05937009",
@@ -810,6 +833,7 @@ const FULL_TRIAL_DETAILS: Record<string, Partial<(typeof FULL_TRIALS_BASE)[numbe
     studyDesignType: "Randomized, double-blind, placebo-controlled",
     primaryObjective: "Assess symptom score reduction.",
     primaryEndpoint: "Change in TNSS at Week 4.",
+    completionPercentage: 36,
     startDate: new Date("2025-09-01"),
     endDate: new Date("2026-09-01"),
   },
@@ -1902,6 +1926,838 @@ async function seedTrials(
   );
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const SEED_ASSIGNEE_IDS = [1, 2, 3, 4, 5, 6] as const;
+const SEED_ASSIGNEE_NAMES: Record<number, string> = {
+  1: "Kaleb Sanders",
+  2: "Ava Patel",
+  3: "Liam Chen",
+  4: "Maya Rodriguez",
+  5: "Noah Brooks",
+  6: "Olivia Hart",
+};
+const LEGACY_PHASE_BLUEPRINT = [
+  { name: "Screening", color: "#6366F1" },
+  { name: "Treatment", color: "#3B82F6" },
+  { name: "Follow-up", color: "#10B981" },
+] as const;
+const LEGACY_TASK_BLUEPRINT = [
+  ["Finalize site package", "Confirm inclusion/exclusion checklist"],
+  ["Run visit schedule training", "Dispense investigational product"],
+  ["Reconcile open data queries", "Perform close-out readiness review"],
+] as const;
+const MAP_PHASE_BLUEPRINT = [
+  { label: "Screening", phaseType: "screening" as const, color: "#6366F1" },
+  { label: "Visit Cycle", phaseType: "treatment_visit" as const, color: "#3B82F6" },
+  { label: "Follow-up", phaseType: "follow_up" as const, color: "#10B981" },
+] as const;
+const MAP_TASK_BLUEPRINT = [
+  {
+    name: "Validate eligibility criteria",
+    description: "Confirm inclusion/exclusion criteria and upload source confirmations.",
+    category: "eligibility" as const,
+    section: "Eligibility",
+  },
+  {
+    name: "Schedule site readiness call",
+    description: "Coordinate PI + CRC + support roles and confirm launch timeline.",
+    category: "coordination" as const,
+    section: "Study Coordination",
+  },
+  {
+    name: "Submit safety package",
+    description: "Prepare safety documents and submit to sponsor/monitor.",
+    category: "safety_reporting" as const,
+    section: "Safety Reporting",
+  },
+] as const;
+const MAP_PRIORITY_ROTATION = ["high", "medium", "critical", "medium", "low"] as const;
+const MAP_ROLE_ROTATION = [
+  "pi",
+  "crc",
+  "nurse",
+  "lab_tech",
+  "data_manager",
+  "regulatory_coordinator",
+] as const;
+
+function addDays(base: Date, days: number) {
+  return new Date(base.getTime() + days * MS_PER_DAY);
+}
+
+function toYyyyMmDd(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function stableHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function resolveScaffoldStatus(status: TrialSeed["status"]): "draft" | "confirmed" | "active" {
+  if (status === "not-started") return "draft";
+  if (status === "on-hold" || status === "terminated") return "confirmed";
+  return "active";
+}
+
+function resolveMapStatus(status: TrialSeed["status"]): "draft" | "active" | "revised" | "archived" {
+  if (status === "not-started") return "draft";
+  if (status === "terminated") return "archived";
+  if (status === "on-hold") return "revised";
+  return "active";
+}
+
+function resolveLegacyTaskStatus(
+  trialStatus: TrialSeed["status"],
+  phaseIndex: number,
+  taskIndex: number
+): "pending" | "completed" | "blocked" {
+  if (trialStatus === "completed") return "completed";
+  if (trialStatus === "not-started") return "pending";
+  if (trialStatus === "terminated") return taskIndex === 0 ? "completed" : "blocked";
+  if (trialStatus === "on-hold") return taskIndex === 0 ? "blocked" : "pending";
+  if (trialStatus === "active" || trialStatus === "recruiting") {
+    if (phaseIndex === 0 && taskIndex === 0) return "completed";
+    if (phaseIndex === 2 && taskIndex === 1) return "blocked";
+    return "pending";
+  }
+  return "pending";
+}
+
+function resolveMapTaskStatus(
+  trialStatus: TrialSeed["status"],
+  phaseIndex: number,
+  taskIndex: number
+):
+  | "suggested"
+  | "confirmed"
+  | "todo"
+  | "in_progress"
+  | "blocked"
+  | "waiting"
+  | "done"
+  | "skipped"
+  | "cancelled" {
+  if (trialStatus === "completed") return phaseIndex === 2 && taskIndex === 2 ? "skipped" : "done";
+  if (trialStatus === "terminated") return taskIndex === 0 ? "cancelled" : "blocked";
+  if (trialStatus === "not-started") return phaseIndex === 0 ? "suggested" : "confirmed";
+  if (trialStatus === "on-hold") return taskIndex === 0 ? "waiting" : "blocked";
+  if (phaseIndex === 0 && taskIndex === 0) return "done";
+  if (phaseIndex === 1 && taskIndex === 1) return "in_progress";
+  if (phaseIndex === 2 && taskIndex === 2) return "blocked";
+  return "todo";
+}
+
+async function seedModeOperationalData(
+  data: typeof SAMPLE_TRIALS,
+  createdBy: number,
+  mode: DemoMode,
+  dbClient?: DbClient
+) {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const now = new Date();
+  const seededTrials = data.map((trial, index) => ({
+    seed: trial,
+    trialId: toDemoId(mode, trial.id),
+    index,
+    startDate: trial.startDate ?? addDays(new Date("2025-01-01T12:00:00.000Z"), index * 9),
+  }));
+  const seededTrialIds = seededTrials.map((entry) => entry.trialId);
+
+  if (seededTrialIds.length === 0) return;
+
+  const protocolInserts: Array<typeof protocols.$inferInsert> = [];
+  const protocolSeedMeta: Array<{
+    trialId: string;
+    fileKey: string;
+    category: string;
+    shouldIndex: boolean;
+    primary: boolean;
+  }> = [];
+
+  for (const trial of seededTrials) {
+    const currentVersion = (trial.seed.currentVersion || "1.0").trim() || "1.0";
+    const amendmentVersion = (trial.seed.amendmentVersion || "0.1").trim() || "0.1";
+    const releaseDate = trial.seed.releaseDate || toYyyyMmDd(addDays(now, -(trial.index % 45)));
+    const shouldIndexPrimary = trial.seed.status !== "not-started" && trial.index % 5 !== 0;
+    const primaryFileKey = `seed/${mode}/${trial.seed.id}/protocol-${currentVersion}.pdf`;
+
+    protocolInserts.push({
+      trialId: trial.trialId,
+      filename: `${trial.seed.id.toUpperCase()}_Protocol_${currentVersion}.pdf`,
+      fileUrl: `https://demo.themison.ai/${primaryFileKey}`,
+      fileKey: primaryFileKey,
+      fileSize: 1_100_000 + trial.index * 8_000,
+      category: "Protocol",
+      documentVersion: currentVersion,
+      amendmentVersion,
+      releaseDate,
+      isCurrent: true,
+      archivedAt: null,
+      sourceType: "manual",
+      sourceReference: `seed-${mode}-${trial.seed.id}-protocol`,
+      uploadedBy: createdBy,
+      createdAt: addDays(now, -(15 + trial.index)),
+      updatedAt: addDays(now, -(15 + trial.index)),
+    });
+    protocolSeedMeta.push({
+      trialId: trial.trialId,
+      fileKey: primaryFileKey,
+      category: "Protocol",
+      shouldIndex: shouldIndexPrimary,
+      primary: true,
+    });
+
+    if (trial.index % 2 === 0 || trial.seed.status !== "not-started") {
+      const amendmentFileKey = `seed/${mode}/${trial.seed.id}/amendment-${amendmentVersion}.pdf`;
+      protocolInserts.push({
+        trialId: trial.trialId,
+        filename: `${trial.seed.id.toUpperCase()}_Amendment_${amendmentVersion}.pdf`,
+        fileUrl: `https://demo.themison.ai/${amendmentFileKey}`,
+        fileKey: amendmentFileKey,
+        fileSize: 540_000 + trial.index * 4_000,
+        category: "Amendment",
+        documentVersion: currentVersion,
+        amendmentVersion,
+        releaseDate,
+        isCurrent: false,
+        archivedAt: trial.index % 6 === 0 ? addDays(now, -(3 + (trial.index % 4))) : null,
+        sourceType: trial.index % 3 === 0 ? "integration" : "manual",
+        sourceReference: `seed-${mode}-${trial.seed.id}-amendment`,
+        uploadedBy: createdBy,
+        createdAt: addDays(now, -(9 + trial.index)),
+        updatedAt: addDays(now, -(9 + trial.index)),
+      });
+      protocolSeedMeta.push({
+        trialId: trial.trialId,
+        fileKey: amendmentFileKey,
+        category: "Amendment",
+        shouldIndex: trial.index % 3 === 0,
+        primary: false,
+      });
+    }
+  }
+
+  if (protocolInserts.length > 0) {
+    await db.insert(protocols).values(protocolInserts);
+  }
+
+  const insertedProtocols = await db
+    .select()
+    .from(protocols)
+    .where(inArray(protocols.trialId, seededTrialIds));
+  const protocolByFileKey = new Map(insertedProtocols.map((row) => [row.fileKey, row]));
+  const primaryProtocolByTrialId = new Map<string, (typeof insertedProtocols)[number]>();
+  const documentTotalsByTrialId = new Map<string, number>();
+
+  for (const protocolRow of insertedProtocols) {
+    documentTotalsByTrialId.set(
+      protocolRow.trialId,
+      (documentTotalsByTrialId.get(protocolRow.trialId) ?? 0) + 1
+    );
+    if (
+      String(protocolRow.category || "").toLowerCase() === "protocol" &&
+      !primaryProtocolByTrialId.has(protocolRow.trialId)
+    ) {
+      primaryProtocolByTrialId.set(protocolRow.trialId, protocolRow);
+    }
+  }
+
+  const storeInserts: Array<typeof fileSearchStores.$inferInsert> = seededTrials.map((trial) => ({
+    trialId: trial.trialId,
+    storeName: `seed-${mode}-store-${String(trial.index + 1).padStart(3, "0")}`,
+    displayName: `${trial.seed.title} (${mode}) File Search`,
+    createdAt: addDays(now, -(20 + trial.index)),
+    updatedAt: addDays(now, -(4 + (trial.index % 5))),
+  }));
+  if (storeInserts.length > 0) {
+    await db.insert(fileSearchStores).values(storeInserts);
+  }
+
+  const storeRows = await db
+    .select()
+    .from(fileSearchStores)
+    .where(inArray(fileSearchStores.trialId, seededTrialIds));
+  const storeByTrialId = new Map(storeRows.map((row) => [row.trialId, row]));
+
+  const fileDocInserts: Array<typeof fileSearchDocuments.$inferInsert> = [];
+  const indexedDocumentTotalsByTrialId = new Map<string, number>();
+  for (const protocolMeta of protocolSeedMeta) {
+    if (!protocolMeta.shouldIndex) continue;
+    const protocolRow = protocolByFileKey.get(protocolMeta.fileKey);
+    const storeRow = storeByTrialId.get(protocolMeta.trialId);
+    if (!protocolRow || !storeRow) continue;
+    fileDocInserts.push({
+      storeId: storeRow.id,
+      protocolId: protocolRow.id,
+      documentName: `seed-file-${mode}-${protocolRow.id}`,
+      displayName: protocolRow.filename,
+      uploadedAt: addDays(now, -(2 + (protocolRow.id % 4))),
+    });
+    indexedDocumentTotalsByTrialId.set(
+      protocolMeta.trialId,
+      (indexedDocumentTotalsByTrialId.get(protocolMeta.trialId) ?? 0) + 1
+    );
+  }
+  if (fileDocInserts.length > 0) {
+    await db.insert(fileSearchDocuments).values(fileDocInserts);
+  }
+
+  const protocolSectionInserts: Array<typeof protocolSections.$inferInsert> = [];
+  const protocolChunkInserts: Array<typeof protocolChunks.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const primaryProtocol = primaryProtocolByTrialId.get(trial.trialId);
+    if (!primaryProtocol) continue;
+    const basePage = 6 + (trial.index % 4) * 3;
+    const sectionSeed = [
+      { name: "Synopsis", pageReference: `p. ${basePage}-${basePage + 2}` },
+      { name: "Eligibility", pageReference: `p. ${basePage + 3}-${basePage + 5}` },
+      { name: "Schedule of Activities", pageReference: `p. ${basePage + 6}-${basePage + 10}` },
+      { name: "Safety", pageReference: `p. ${basePage + 11}-${basePage + 14}` },
+    ];
+    sectionSeed.forEach((section, sectionIndex) => {
+      protocolSectionInserts.push({
+        protocolId: primaryProtocol.id,
+        name: section.name,
+        pageReference: section.pageReference,
+        dateReference: null,
+        orderIndex: sectionIndex,
+        parentSectionId: null,
+        createdAt: addDays(now, -(10 + sectionIndex + trial.index)),
+      });
+    });
+
+    const shouldCreateChunks = (indexedDocumentTotalsByTrialId.get(trial.trialId) ?? 0) > 0;
+    if (!shouldCreateChunks) continue;
+
+    const chunkSeed = [
+      { sectionType: "synopsis", sectionTitle: "Synopsis" },
+      { sectionType: "criteria", sectionTitle: "Eligibility Criteria" },
+      { sectionType: "visit", sectionTitle: "Schedule of Activities" },
+    ];
+    chunkSeed.forEach((chunk, chunkIndex) => {
+      protocolChunkInserts.push({
+        protocolId: primaryProtocol.id,
+        trialId: trial.trialId,
+        chunkIndex,
+        sectionType: chunk.sectionType,
+        sectionTitle: chunk.sectionTitle,
+        pageStart: basePage + chunkIndex * 3,
+        pageEnd: basePage + chunkIndex * 3 + 1,
+        tokenEstimate: 240 + chunkIndex * 40,
+        contentHash: `${mode}-${trial.seed.id}-${chunk.sectionType}-${chunkIndex}`.slice(0, 64),
+        chunkText: `${chunk.sectionTitle} guidance for ${trial.seed.title}: coordinator-facing protocol instructions and source-grounded evidence.`,
+        metadata: {
+          chunkType: chunk.sectionType,
+          seeded: true,
+          mode,
+          trialId: trial.seed.id,
+        },
+        createdAt: addDays(now, -(8 + chunkIndex + trial.index)),
+        updatedAt: addDays(now, -(8 + chunkIndex + trial.index)),
+      });
+    });
+  }
+  if (protocolSectionInserts.length > 0) {
+    await db.insert(protocolSections).values(protocolSectionInserts);
+  }
+  if (protocolChunkInserts.length > 0) {
+    await db.insert(protocolChunks).values(protocolChunkInserts);
+  }
+
+  const scaffoldInserts: Array<typeof taskScaffolds.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const primaryProtocol = primaryProtocolByTrialId.get(trial.trialId);
+    if (!primaryProtocol) continue;
+    const scaffoldStatus = resolveScaffoldStatus(trial.seed.status);
+    const confirmedAt = scaffoldStatus === "draft" ? null : addDays(now, -(6 + (trial.index % 7)));
+    scaffoldInserts.push({
+      protocolId: primaryProtocol.id,
+      trialId: trial.trialId,
+      status: scaffoldStatus,
+      confirmedAt,
+      confirmedBy: confirmedAt ? createdBy : null,
+      createdAt: addDays(now, -(14 + trial.index)),
+      updatedAt: addDays(now, -(2 + (trial.index % 4))),
+    });
+  }
+  if (scaffoldInserts.length > 0) {
+    await db.insert(taskScaffolds).values(scaffoldInserts);
+  }
+
+  const scaffoldRows = await db
+    .select()
+    .from(taskScaffolds)
+    .where(inArray(taskScaffolds.trialId, seededTrialIds));
+  const scaffoldByTrialId = new Map(scaffoldRows.map((row) => [row.trialId, row]));
+
+  const phaseInserts: Array<typeof phases.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const scaffold = scaffoldByTrialId.get(trial.trialId);
+    if (!scaffold) continue;
+    LEGACY_PHASE_BLUEPRINT.forEach((phaseBlueprint, phaseIndex) => {
+      phaseInserts.push({
+        scaffoldId: scaffold.id,
+        name: phaseBlueprint.name,
+        color: phaseBlueprint.color,
+        orderIndex: phaseIndex,
+        createdAt: addDays(now, -(12 + phaseIndex + trial.index)),
+        updatedAt: addDays(now, -(6 + phaseIndex + trial.index)),
+      });
+    });
+  }
+  if (phaseInserts.length > 0) {
+    await db.insert(phases).values(phaseInserts);
+  }
+
+  const phaseRows = await db
+    .select()
+    .from(phases)
+    .where(inArray(phases.scaffoldId, scaffoldRows.map((row) => row.id)));
+  const phasesByScaffoldId = new Map<number, Array<(typeof phaseRows)[number]>>();
+  for (const phaseRow of phaseRows) {
+    const list = phasesByScaffoldId.get(phaseRow.scaffoldId) ?? [];
+    list.push(phaseRow);
+    phasesByScaffoldId.set(phaseRow.scaffoldId, list);
+  }
+  Array.from(phasesByScaffoldId.values()).forEach((list) => {
+    list.sort((a, b) => a.orderIndex - b.orderIndex);
+  });
+
+  const legacyTaskInserts: Array<typeof tasks.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const scaffold = scaffoldByTrialId.get(trial.trialId);
+    if (!scaffold) continue;
+    const scaffoldPhases = phasesByScaffoldId.get(scaffold.id) ?? [];
+    for (let phaseIndex = 0; phaseIndex < scaffoldPhases.length; phaseIndex += 1) {
+      const phaseRow = scaffoldPhases[phaseIndex];
+      const taskNames = LEGACY_TASK_BLUEPRINT[Math.min(phaseIndex, LEGACY_TASK_BLUEPRINT.length - 1)];
+      taskNames.forEach((taskName, taskIndex) => {
+        legacyTaskInserts.push({
+          phaseId: phaseRow.id,
+          name: taskName,
+          suggestedAssigneeId: SEED_ASSIGNEE_IDS[(trial.index + phaseIndex + taskIndex) % SEED_ASSIGNEE_IDS.length],
+          suggestedDate: addDays(trial.startDate, phaseIndex * 14 + taskIndex * 3),
+          duration: 2 + ((phaseIndex + taskIndex) % 3),
+          protocolSection: phaseIndex === 0 ? "Eligibility" : phaseIndex === 1 ? "SoA" : "Close-out",
+          protocolPage: 9 + phaseIndex * 6 + taskIndex * 2,
+          status: resolveLegacyTaskStatus(trial.seed.status, phaseIndex, taskIndex),
+          orderIndex: taskIndex,
+          createdAt: addDays(now, -(10 + phaseIndex + taskIndex + trial.index)),
+          updatedAt: addDays(now, -(2 + (trial.index % 5))),
+        });
+      });
+    }
+  }
+  if (legacyTaskInserts.length > 0) {
+    await db.insert(tasks).values(legacyTaskInserts);
+  }
+
+  const legacyTaskRows = phaseRows.length > 0
+    ? await db.select().from(tasks).where(inArray(tasks.phaseId, phaseRows.map((row) => row.id)))
+    : [];
+  const tasksByPhaseId = new Map<number, Array<(typeof legacyTaskRows)[number]>>();
+  for (const taskRow of legacyTaskRows) {
+    const list = tasksByPhaseId.get(taskRow.phaseId) ?? [];
+    list.push(taskRow);
+    tasksByPhaseId.set(taskRow.phaseId, list);
+  }
+  Array.from(tasksByPhaseId.values()).forEach((list) => {
+    list.sort((a, b) => a.orderIndex - b.orderIndex);
+  });
+
+  const taskDependencyInserts: Array<typeof taskDependencies.$inferInsert> = [];
+  const phaseTransitionInserts: Array<typeof phaseTransitions.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const scaffold = scaffoldByTrialId.get(trial.trialId);
+    if (!scaffold) continue;
+    const scaffoldPhases = phasesByScaffoldId.get(scaffold.id) ?? [];
+    for (let phaseIndex = 0; phaseIndex < scaffoldPhases.length; phaseIndex += 1) {
+      const phaseRow = scaffoldPhases[phaseIndex];
+      const phaseTasks = tasksByPhaseId.get(phaseRow.id) ?? [];
+      for (let taskIndex = 1; taskIndex < phaseTasks.length; taskIndex += 1) {
+        taskDependencyInserts.push({
+          taskId: phaseTasks[taskIndex].id,
+          dependsOnTaskId: phaseTasks[taskIndex - 1].id,
+          type: "after",
+          createdAt: addDays(now, -(4 + trial.index)),
+        });
+      }
+      if (phaseIndex > 0) {
+        phaseTransitionInserts.push({
+          fromPhaseId: scaffoldPhases[phaseIndex - 1].id,
+          toPhaseId: phaseRow.id,
+          condition: null,
+          createdAt: addDays(now, -(3 + phaseIndex + trial.index)),
+        });
+      }
+    }
+  }
+  if (taskDependencyInserts.length > 0) {
+    await db.insert(taskDependencies).values(taskDependencyInserts);
+  }
+  if (phaseTransitionInserts.length > 0) {
+    await db.insert(phaseTransitions).values(phaseTransitionInserts);
+  }
+
+  const mapInserts: Array<typeof executionMaps.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const primaryProtocol = primaryProtocolByTrialId.get(trial.trialId);
+    if (!primaryProtocol) continue;
+    const mapId = `${mode}-map-${String(trial.index + 1).padStart(3, "0")}`;
+    const mapStatus = resolveMapStatus(trial.seed.status);
+    mapInserts.push({
+      id: mapId,
+      trialId: trial.trialId,
+      protocolId: primaryProtocol.id,
+      status: mapStatus,
+      version: 1,
+      metadata: {
+        seeded: true,
+        mode,
+        trialStatus: trial.seed.status,
+        trialTitle: trial.seed.title,
+      },
+      createdBy,
+      createdAt: addDays(now, -(21 + trial.index)),
+      launchedAt: mapStatus === "active" || mapStatus === "revised" ? addDays(now, -(11 + trial.index)) : null,
+      updatedAt: addDays(now, -(1 + (trial.index % 6))),
+    });
+  }
+  if (mapInserts.length > 0) {
+    await db.insert(executionMaps).values(mapInserts);
+  }
+
+  const mapPhaseInserts: Array<typeof mapPhases.$inferInsert> = [];
+  const mapPhasesByMapId = new Map<string, string[]>();
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const phaseIds: string[] = [];
+    MAP_PHASE_BLUEPRINT.forEach((phaseBlueprint, phaseIndex) => {
+      const phaseId = `${map.id}-ph${phaseIndex + 1}`;
+      phaseIds.push(phaseId);
+      mapPhaseInserts.push({
+        id: phaseId,
+        mapId: map.id,
+        name: phaseBlueprint.label,
+        phaseType: phaseBlueprint.phaseType,
+        displayOrder: phaseIndex,
+        color: phaseBlueprint.color,
+        estimatedDate: addDays(trial.startDate, phaseIndex * 14 + 2),
+        windowStart: addDays(trial.startDate, phaseIndex * 14),
+        windowEnd: addDays(trial.startDate, phaseIndex * 14 + 5),
+        protocolRef: {
+          section: phaseBlueprint.label,
+          page: 12 + phaseIndex * 4,
+          seeded: true,
+        },
+        canvasX: 110 + phaseIndex * 340,
+        canvasY: 120,
+        createdAt: addDays(now, -(16 + phaseIndex + trial.index)),
+        updatedAt: addDays(now, -(2 + phaseIndex + (trial.index % 4))),
+      });
+    });
+    mapPhasesByMapId.set(map.id, phaseIds);
+  }
+  if (mapPhaseInserts.length > 0) {
+    await db.insert(mapPhases).values(mapPhaseInserts);
+  }
+
+  const mapTaskInserts: Array<typeof mapTasks.$inferInsert> = [];
+  const mapTaskIdsByMapId = new Map<string, string[]>();
+  const mapTaskStatsByTrialId = new Map<
+    string,
+    { total: number; pending: number; blocked: number; completed: number }
+  >();
+
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const phaseIds = mapPhasesByMapId.get(map.id) ?? [];
+    const taskIds: string[] = [];
+    let runningIndex = 0;
+    const trialTaskStats = { total: 0, pending: 0, blocked: 0, completed: 0 };
+
+    for (let phaseIndex = 0; phaseIndex < phaseIds.length; phaseIndex += 1) {
+      const phaseId = phaseIds[phaseIndex];
+      for (let taskIndex = 0; taskIndex < MAP_TASK_BLUEPRINT.length; taskIndex += 1) {
+        const taskBlueprint = MAP_TASK_BLUEPRINT[taskIndex];
+        const status = resolveMapTaskStatus(trial.seed.status, phaseIndex, taskIndex);
+        const taskId = `${map.id}-t${String(runningIndex + 1).padStart(2, "0")}`;
+        runningIndex += 1;
+        taskIds.push(taskId);
+
+        const isCompleted = status === "done" || status === "skipped" || status === "cancelled";
+        const isBlocked = status === "blocked" || status === "waiting";
+        if (isCompleted) trialTaskStats.completed += 1;
+        else if (isBlocked) trialTaskStats.blocked += 1;
+        else trialTaskStats.pending += 1;
+        trialTaskStats.total += 1;
+
+        const dueDate = addDays(trial.startDate, phaseIndex * 14 + taskIndex * 4 + 5);
+        const suggestedDate = addDays(trial.startDate, phaseIndex * 14 + taskIndex * 4);
+        const assigneeId =
+          (runningIndex + trial.index) % 6 === 0
+            ? null
+            : SEED_ASSIGNEE_IDS[(trial.index + runningIndex) % SEED_ASSIGNEE_IDS.length];
+        const assignedRole = MAP_ROLE_ROTATION[(trial.index + runningIndex) % MAP_ROLE_ROTATION.length];
+        const createdByMode = (runningIndex + trial.index) % 5 === 0 ? "user" : "ai";
+
+        mapTaskInserts.push({
+          id: taskId,
+          phaseId,
+          mapId: map.id,
+          name: taskBlueprint.name,
+          description: taskBlueprint.description,
+          category: taskBlueprint.category,
+          priority: MAP_PRIORITY_ROTATION[(trial.index + runningIndex) % MAP_PRIORITY_ROTATION.length],
+          status,
+          blockedReason: status === "blocked" ? "Waiting on sponsor approval package." : null,
+          blockedSince: status === "blocked" ? addDays(now, -(2 + (trial.index % 3))) : null,
+          assignedRole,
+          assignedUserId: assigneeId,
+          suggestedAssignee: assigneeId ? SEED_ASSIGNEE_NAMES[assigneeId] : null,
+          suggestedDate,
+          dueDate,
+          estimatedDuration: 1 + ((phaseIndex + taskIndex) % 3),
+          startDate: status === "in_progress" || isCompleted ? suggestedDate : null,
+          completedDate: isCompleted ? addDays(suggestedDate, 2) : null,
+          orderInPhase: taskIndex,
+          canvasX: 130 + phaseIndex * 340,
+          canvasY: 130 + taskIndex * 130,
+          createdBy: createdByMode,
+          aiConfidence: createdByMode === "ai" ? 0.72 + ((stableHash(taskId) % 20) / 100) : null,
+          conditionalNote: status === "waiting" ? "Pending final site confirmation." : null,
+          isCustom: createdByMode === "user",
+          tags: ["seed", mode, taskBlueprint.category],
+          protocolRefs: [
+            {
+              protocolId: map.protocolId,
+              section: taskBlueprint.section,
+              page: 12 + phaseIndex * 4 + taskIndex,
+              confidence: 0.84,
+            },
+          ],
+          createdAt: addDays(now, -(11 + trial.index + phaseIndex)),
+          updatedAt: addDays(now, -(1 + (trial.index % 3))),
+        });
+      }
+    }
+
+    mapTaskIdsByMapId.set(map.id, taskIds);
+    mapTaskStatsByTrialId.set(trial.trialId, trialTaskStats);
+  }
+  if (mapTaskInserts.length > 0) {
+    await db.insert(mapTasks).values(mapTaskInserts);
+  }
+
+  const mapDependencyInserts: Array<typeof mapTaskDependencies.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const taskIds = mapTaskIdsByMapId.get(map.id) ?? [];
+    for (let index = 1; index < taskIds.length; index += 1) {
+      mapDependencyInserts.push({
+        id: `${map.id}-dep${String(index).padStart(2, "0")}`,
+        sourceTaskId: taskIds[index - 1],
+        targetTaskId: taskIds[index],
+        dependencyType: "finish_to_start",
+        conditionLabel: null,
+        isCrossPhase: index % MAP_TASK_BLUEPRINT.length === 0,
+        createdAt: addDays(now, -(5 + (index % 3))),
+      });
+    }
+  }
+  if (mapDependencyInserts.length > 0) {
+    await db.insert(mapTaskDependencies).values(mapDependencyInserts);
+  }
+
+  const mapTransitionInserts: Array<typeof mapPhaseTransitions.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const phaseIds = mapPhasesByMapId.get(map.id) ?? [];
+    for (let phaseIndex = 1; phaseIndex < phaseIds.length; phaseIndex += 1) {
+      mapTransitionInserts.push({
+        id: `${map.id}-tr${phaseIndex}`,
+        fromPhaseId: phaseIds[phaseIndex - 1],
+        toPhaseId: phaseIds[phaseIndex],
+        conditionLabel: null,
+        isDefault: true,
+        createdAt: addDays(now, -(7 + phaseIndex + trial.index)),
+      });
+    }
+  }
+  if (mapTransitionInserts.length > 0) {
+    await db.insert(mapPhaseTransitions).values(mapTransitionInserts);
+  }
+
+  const protocolMapSectionInserts: Array<typeof protocolMapSections.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const phaseIds = mapPhasesByMapId.get(map.id) ?? [];
+    const taskIds = mapTaskIdsByMapId.get(map.id) ?? [];
+    const sectionSeed = [
+      { idSuffix: "soa", name: "Schedule of Activities", type: "schedule" as const, page: 14 },
+      { idSuffix: "elig", name: "Eligibility", type: "eligibility" as const, page: 8 },
+      { idSuffix: "safety", name: "Safety Reporting", type: "safety" as const, page: 36 },
+      { idSuffix: "proc", name: "Procedure Workflow", type: "procedure" as const, page: 22 },
+    ];
+    sectionSeed.forEach((section, sectionIndex) => {
+      protocolMapSectionInserts.push({
+        id: `${map.id}-sec-${section.idSuffix}`,
+        protocolId: map.protocolId,
+        mapId: map.id,
+        name: section.name,
+        sectionType: section.type,
+        pageStart: section.page,
+        pageEnd: section.page + 2,
+        dateReference: addDays(trial.startDate, sectionIndex * 6),
+        parentSectionId: null,
+        linkedPhaseIds: phaseIds.slice(Math.max(0, sectionIndex - 1), Math.min(phaseIds.length, sectionIndex + 1)),
+        linkedTaskIds: taskIds.slice(sectionIndex * 2, sectionIndex * 2 + 3),
+        displayOrder: sectionIndex,
+        isChecked: sectionIndex !== 2 || trial.seed.status !== "not-started",
+        createdAt: addDays(now, -(8 + sectionIndex + trial.index)),
+      });
+    });
+  }
+  if (protocolMapSectionInserts.length > 0) {
+    await db.insert(protocolMapSections).values(protocolMapSectionInserts);
+  }
+
+  const mapTelemetryInserts: Array<typeof mapTelemetryEvents.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const map = mapInserts[trial.index];
+    if (!map) continue;
+    const taskIds = mapTaskIdsByMapId.get(map.id) ?? [];
+    const telemetrySeed = [
+      "map.generated",
+      "task.accepted",
+      "task.modified",
+      "task.modified",
+      "map.launched",
+    ];
+    telemetrySeed.forEach((eventType, eventIndex) => {
+      mapTelemetryInserts.push({
+        id: `${map.id}-ev${eventIndex + 1}`,
+        mapId: map.id,
+        trialId: trial.trialId,
+        eventType,
+        userId: createdBy,
+        targetId: taskIds[eventIndex] ?? null,
+        targetType: taskIds[eventIndex] ? "task" : "map",
+        payload: {
+          seeded: true,
+          mode,
+          trialId: trial.seed.id,
+          eventIndex,
+        },
+        createdAt: addDays(now, -(13 - eventIndex + trial.index)),
+      });
+    });
+  }
+  if (mapTelemetryInserts.length > 0) {
+    await db.insert(mapTelemetryEvents).values(mapTelemetryInserts);
+  }
+
+  const featureSnapshotInserts: Array<typeof aiFeatureSnapshots.$inferInsert> = [];
+  const rollupInserts: Array<typeof aiAnalyticsRollups.$inferInsert> = [];
+  for (const trial of seededTrials) {
+    const taskStats = mapTaskStatsByTrialId.get(trial.trialId) ?? {
+      total: 0,
+      pending: 0,
+      blocked: 0,
+      completed: 0,
+    };
+    const documentTotal = documentTotalsByTrialId.get(trial.trialId) ?? 0;
+    const documentIndexed = indexedDocumentTotalsByTrialId.get(trial.trialId) ?? 0;
+    const docCoverage = documentTotal > 0 ? Math.round((documentIndexed / documentTotal) * 100) : 0;
+    const statusBoost =
+      trial.seed.status === "active" || trial.seed.status === "recruiting"
+        ? 16
+        : trial.seed.status === "completed"
+        ? 24
+        : trial.seed.status === "on-hold"
+        ? -10
+        : trial.seed.status === "terminated"
+        ? -18
+        : -6;
+    const readinessScore = Math.max(
+      8,
+      Math.min(98, 46 + statusBoost + Math.round(docCoverage * 0.35) + taskStats.completed * 2 - taskStats.blocked * 3)
+    );
+    const riskScore = Math.max(
+      5,
+      Math.min(99, 18 + taskStats.blocked * 14 + (trial.seed.status === "terminated" ? 18 : 0) + (100 - docCoverage) / 3)
+    );
+    const aiCoverageScore = Math.max(0, Math.min(100, Math.round(docCoverage * 0.8 + readinessScore * 0.2)));
+
+    featureSnapshotInserts.push({
+      trialId: trial.trialId,
+      snapshotDate: toYyyyMmDd(addDays(now, -1)),
+      snapshotVersion: "v1",
+      featureVector: {
+        seeded: true,
+        mode,
+        documentTotal,
+        documentIndexed,
+        taskStats,
+        trialStatus: trial.seed.status,
+      },
+      readinessScore,
+      riskScore,
+      aiCoverageScore,
+      createdAt: addDays(now, -1),
+    });
+
+    const trialHash = stableHash(trial.seed.id);
+    for (let dayOffset = 13; dayOffset >= 0; dayOffset -= 1) {
+      const dayDate = addDays(now, -dayOffset);
+      const wave = ((trialHash + dayOffset * 13) % 7) - 3;
+      const telemetryEvents7d = Math.max(4, 14 + (trialHash % 17) + wave);
+      const aiInvolvedEvents7d = Math.max(1, Math.round(telemetryEvents7d * (0.42 + ((trialHash % 11) / 100))));
+      const aiUsageRateBps =
+        telemetryEvents7d > 0 ? Math.max(0, Math.min(10000, Math.round((aiInvolvedEvents7d / telemetryEvents7d) * 10000))) : 0;
+      const taskPending = Math.max(0, taskStats.pending + ((trialHash + dayOffset) % 3) - 1);
+      const taskBlocked = Math.max(0, taskStats.blocked + ((trialHash + dayOffset * 2) % 2));
+      const taskCompleted = Math.max(0, Math.min(taskStats.total, taskStats.completed + (13 - dayOffset)));
+      const rollingRisk = Math.max(0, Math.min(100, riskScore + taskBlocked * 3 - Math.floor(taskCompleted / 2)));
+
+      rollupInserts.push({
+        trialId: trial.trialId,
+        rollupDate: toYyyyMmDd(dayDate),
+        documentTotal,
+        documentIndexed,
+        taskTotal: taskStats.total,
+        taskPending,
+        taskBlocked,
+        taskCompleted,
+        telemetryEvents7d,
+        aiInvolvedEvents7d,
+        aiUsageRateBps,
+        riskScore: rollingRisk,
+        createdAt: dayDate,
+        updatedAt: dayDate,
+      });
+    }
+  }
+
+  if (featureSnapshotInserts.length > 0) {
+    await db.insert(aiFeatureSnapshots).values(featureSnapshotInserts);
+  }
+  if (rollupInserts.length > 0) {
+    await db.insert(aiAnalyticsRollups).values(rollupInserts);
+  }
+}
+
 async function seedBaseModeData(
   mode: DemoMode,
   createdBy: number,
@@ -1913,14 +2769,57 @@ async function seedBaseModeData(
   if (mode === "sample") {
     await seedCategories(db);
     await seedTrials(SAMPLE_TRIALS, createdBy, "sample", db);
+    try {
+      await seedModeOperationalData(SAMPLE_TRIALS, createdBy, "sample", db);
+    } catch (error) {
+      console.warn("[demo] Sample mode operational seed skipped due to schema compatibility issue.", error);
+    }
     return;
   }
   if (mode === "full") {
     await seedCategories(db);
     await seedTrials(FULL_TRIALS, createdBy, "full", db);
+    try {
+      await seedModeOperationalData(FULL_TRIALS, createdBy, "full", db);
+    } catch (error) {
+      console.warn("[demo] Full mode operational seed skipped due to schema compatibility issue.", error);
+    }
     return;
   }
   // Building mode baseline is intentionally empty.
+}
+
+async function ensureModeOperationalSeed(
+  mode: "sample" | "full",
+  data: typeof SAMPLE_TRIALS,
+  createdBy: number,
+  dbClient?: DbClient
+) {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const trialRows = await db
+    .select({ id: trials.id })
+    .from(trials)
+    .where(like(trials.id, `${mode}:%`));
+  if (trialRows.length === 0) return false;
+
+  const trialIds = trialRows.map((row) => row.id);
+  const existingMap = await db
+    .select({ id: executionMaps.id })
+    .from(executionMaps)
+    .where(inArray(executionMaps.trialId, trialIds))
+    .limit(1);
+
+  if (existingMap.length > 0) return false;
+
+  try {
+    await seedModeOperationalData(data, createdBy, mode, db);
+    return true;
+  } catch (error) {
+    console.warn(`[demo] ${mode} mode operational backfill skipped due to schema compatibility issue.`, error);
+    return false;
+  }
 }
 
 async function resetModeToDefault(
@@ -1983,7 +2882,13 @@ export const demoRouter = router({
       const shouldResetToDefault = input?.resetToDefault === true;
       if (shouldResetToDefault) {
         const result = await resetModeToDefault("sample", ctx.user.id, db);
-        return { ok: true, mode: "sample" as const, ...result };
+        const backfilledOperationalData = await ensureModeOperationalSeed(
+          "sample",
+          SAMPLE_TRIALS,
+          ctx.user.id,
+          db
+        );
+        return { ok: true, mode: "sample" as const, ...result, backfilledOperationalData };
       }
 
       const existing = await db
@@ -1994,10 +2899,27 @@ export const demoRouter = router({
 
       if (existing.length === 0) {
         const result = await resetModeToDefault("sample", ctx.user.id, db);
-        return { ok: true, mode: "sample" as const, ...result };
+        const backfilledOperationalData = await ensureModeOperationalSeed(
+          "sample",
+          SAMPLE_TRIALS,
+          ctx.user.id,
+          db
+        );
+        return { ok: true, mode: "sample" as const, ...result, backfilledOperationalData };
       }
 
-      return { ok: true, mode: "sample" as const, restoredFromSavedDefault: false };
+      const backfilledOperationalData = await ensureModeOperationalSeed(
+        "sample",
+        SAMPLE_TRIALS,
+        ctx.user.id,
+        db
+      );
+      return {
+        ok: true,
+        mode: "sample" as const,
+        restoredFromSavedDefault: false,
+        backfilledOperationalData,
+      };
     }),
 
   loadFullDataset: protectedProcedure
@@ -2009,7 +2931,13 @@ export const demoRouter = router({
       const shouldResetToDefault = input?.resetToDefault === true;
       if (shouldResetToDefault) {
         const result = await resetModeToDefault("full", ctx.user.id, db);
-        return { ok: true, mode: "full" as const, ...result };
+        const backfilledOperationalData = await ensureModeOperationalSeed(
+          "full",
+          FULL_TRIALS,
+          ctx.user.id,
+          db
+        );
+        return { ok: true, mode: "full" as const, ...result, backfilledOperationalData };
       }
 
       const existing = await db
@@ -2020,10 +2948,27 @@ export const demoRouter = router({
 
       if (existing.length === 0) {
         const result = await resetModeToDefault("full", ctx.user.id, db);
-        return { ok: true, mode: "full" as const, ...result };
+        const backfilledOperationalData = await ensureModeOperationalSeed(
+          "full",
+          FULL_TRIALS,
+          ctx.user.id,
+          db
+        );
+        return { ok: true, mode: "full" as const, ...result, backfilledOperationalData };
       }
 
-      return { ok: true, mode: "full" as const, restoredFromSavedDefault: false };
+      const backfilledOperationalData = await ensureModeOperationalSeed(
+        "full",
+        FULL_TRIALS,
+        ctx.user.id,
+        db
+      );
+      return {
+        ok: true,
+        mode: "full" as const,
+        restoredFromSavedDefault: false,
+        backfilledOperationalData,
+      };
     }),
 
   loadBuildingMode: protectedProcedure

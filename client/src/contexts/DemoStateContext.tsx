@@ -473,6 +473,83 @@ const migrateDemoStateMemberEmails = (value: DemoState): DemoState => {
   };
 };
 
+const normalizeMemberLookup = (value: string | null | undefined) => String(value || "").trim().toLowerCase();
+
+const mergeTeamMemberAvatars = (target: DemoState, sourceMembers: TeamMember[]) => {
+  if (!Array.isArray(target.teamMembers) || target.teamMembers.length === 0) return target;
+  if (!Array.isArray(sourceMembers) || sourceMembers.length === 0) return target;
+
+  const avatarById = new Map<string, string>();
+  const avatarByEmail = new Map<string, string>();
+  const avatarByName = new Map<string, string>();
+
+  sourceMembers.forEach((member) => {
+    const avatar = String(member.avatar || "").trim();
+    if (!avatar) return;
+
+    const id = String(member.id || "").trim();
+    const email = normalizeMemberLookup(member.email);
+    const name = normalizeMemberLookup(member.name);
+
+    if (id) avatarById.set(id, avatar);
+    if (email) avatarByEmail.set(email, avatar);
+    if (name) avatarByName.set(name, avatar);
+  });
+
+  let changed = false;
+  const mergedMembers = target.teamMembers.map((member) => {
+    const existingAvatar = String(member.avatar || "").trim();
+    if (existingAvatar) return member;
+
+    const id = String(member.id || "").trim();
+    const email = normalizeMemberLookup(member.email);
+    const name = normalizeMemberLookup(member.name);
+
+    const nextAvatar =
+      (id ? avatarById.get(id) : undefined) ||
+      (email ? avatarByEmail.get(email) : undefined) ||
+      (name ? avatarByName.get(name) : undefined);
+
+    if (!nextAvatar) return member;
+    changed = true;
+    return { ...member, avatar: nextAvatar };
+  });
+
+  if (!changed) return target;
+  return {
+    ...target,
+    teamMembers: mergedMembers,
+  };
+};
+
+const readStateFromStorage = (storageKey: string, mode: DemoState["dataMode"]): DemoState | null => {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DemoState;
+    return withMode(migrateDemoStateMemberEmails(parsed), mode);
+  } catch {
+    return null;
+  }
+};
+
+const syncModeAvatarsFromStoredSources = (targetState: DemoState): DemoState => {
+  if (typeof window === "undefined") return targetState;
+
+  const sampleCurrent = readStateFromStorage(STORAGE_KEY_SAMPLE, "sample");
+  const sampleDefault = readStateFromStorage(STORAGE_KEY_DEFAULT_SAMPLE, "sample");
+  const fullCurrent = readStateFromStorage(STORAGE_KEY_FULL, "full");
+  const fullDefault = readStateFromStorage(STORAGE_KEY_DEFAULT_FULL, "full");
+  const avatarSourceMembers = [
+    ...(sampleCurrent?.teamMembers || []),
+    ...(sampleDefault?.teamMembers || []),
+    ...(fullCurrent?.teamMembers || []),
+    ...(fullDefault?.teamMembers || []),
+  ];
+
+  return mergeTeamMemberAvatars(targetState, avatarSourceMembers);
+};
+
 export function DemoStateProvider({ children }: { children: ReactNode }) {
   const quotaToastShownRef = useRef(false);
   const [state, setState] = useState<DemoState>(() => {
@@ -483,7 +560,10 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as DemoState;
-        return withMode(migrateDemoStateMemberEmails(parsed), activeMode);
+        const hydrated = withMode(migrateDemoStateMemberEmails(parsed), activeMode);
+        return activeMode === "full" || activeMode === "building"
+          ? syncModeAvatarsFromStoredSources(hydrated)
+          : hydrated;
       } catch (e) {
         console.error("Failed to parse stored state:", e);
         return withMode(initialDemoState, "sample");
@@ -598,7 +678,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       blockedTasks: 0,
       dataMode: 'building',
     };
-    const nextState = withMode(emptyState, "building");
+    const nextState = syncModeAvatarsFromStoredSources(withMode(emptyState, "building"));
     setState(nextState);
     localStorage.setItem(STORAGE_KEY_BUILDING, JSON.stringify(nextState));
   };
@@ -671,48 +751,53 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as DemoState;
-        setState(withMode(migrateDemoStateMemberEmails(parsed), "full"));
+        const hydrated = withMode(migrateDemoStateMemberEmails(parsed), "full");
+        const withSampleAvatars = syncModeAvatarsFromStoredSources(hydrated);
+        setState(withSampleAvatars);
+        localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(withSampleAvatars));
         return;
       } catch (e) {
         console.error("Failed to parse stored full state:", e);
       }
     }
-    const nextState = withMode(fullDataset, "full");
+    const nextState = syncModeAvatarsFromStoredSources(withMode(fullDataset, "full"));
     setState(nextState);
     localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(nextState));
   };
 
   const getFallbackDefaultStateForMode = (mode: DemoState["dataMode"]): DemoState => {
     if (mode === "building") {
-      return withMode(
-        {
-          tasks: [],
-          documents: [],
-          milestones: [],
-          teamMembers: [
-            {
-              id: "member-1",
-              name: "Kaleb Sanders",
-              email: "kaleb.s@azorg.be",
-              role: "Principal Investigator",
-              clinicalRole: "Principal Investigator",
-              appRole: "Superadmin",
-              team: "Clinical",
-              site: "Copenhagen",
-              status: "Active",
-              initials: "KS",
-            },
-          ],
-          trials: [],
-          activeTrials: 0,
-          blockedTasks: 0,
-          dataMode: "building",
-        },
-        "building"
+      return syncModeAvatarsFromStoredSources(
+        withMode(
+          {
+            tasks: [],
+            documents: [],
+            milestones: [],
+            teamMembers: [
+              {
+                id: "member-1",
+                name: "Kaleb Sanders",
+                email: "kaleb.s@azorg.be",
+                role: "Principal Investigator",
+                clinicalRole: "Principal Investigator",
+                appRole: "Superadmin",
+                team: "Clinical",
+                site: "Copenhagen",
+                status: "Active",
+                initials: "KS",
+              },
+            ],
+            trials: [],
+            activeTrials: 0,
+            blockedTasks: 0,
+            dataMode: "building",
+          },
+          "building"
+        )
       );
     }
     if (mode === "full") {
-      return withMode(buildFullDataset(), "full");
+      return syncModeAvatarsFromStoredSources(withMode(buildFullDataset(), "full"));
     }
     return withMode(initialDemoState, "sample");
   };
@@ -723,7 +808,10 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     if (!stored) return fallbackState;
     try {
       const parsed = JSON.parse(stored) as DemoState;
-      return withMode(migrateDemoStateMemberEmails(parsed), mode);
+      const hydrated = withMode(migrateDemoStateMemberEmails(parsed), mode);
+      return mode === "full" || mode === "building"
+        ? syncModeAvatarsFromStoredSources(hydrated)
+        : hydrated;
     } catch (error) {
       console.error(`Failed to parse stored default state for ${mode}:`, error);
       return fallbackState;
@@ -765,7 +853,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     if (stored) {
       try {
         const parsed = JSON.parse(stored) as DemoState;
-        setState(withMode(migrateDemoStateMemberEmails(parsed), "building"));
+        const hydrated = withMode(migrateDemoStateMemberEmails(parsed), "building");
+        setState(syncModeAvatarsFromStoredSources(hydrated));
         return;
       } catch (e) {
         console.error("Failed to parse stored building state:", e);

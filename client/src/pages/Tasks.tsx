@@ -570,7 +570,7 @@ export default function Tasks() {
     sampleSeedSyncAttemptedRef.current = true;
     void (async () => {
       try {
-        await syncSampleSeedMutation.mutateAsync();
+        const syncResult = await syncSampleSeedMutation.mutateAsync();
         await Promise.all([
           utils.trials.list.invalidate({ demoMode: currentDataMode }),
           utils.documents.list.invalidate(),
@@ -578,7 +578,11 @@ export default function Tasks() {
           utils.map.getByTrial.invalidate(),
           utils.map.load.invalidate(),
         ]);
-        toast.success("Sample execution plans synced");
+        if (syncResult.backfilledOperationalData || syncResult.restoredFromSavedDefault) {
+          toast.success("Sample execution plans synced");
+        } else {
+          toast.message("Sample data already loaded");
+        }
       } catch (error) {
         sampleSeedSyncAttemptedRef.current = false;
         console.warn("Failed to sync sample execution plans:", error);

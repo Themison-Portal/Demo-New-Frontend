@@ -13,20 +13,29 @@ export default function Collaboration() {
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search).get("trialId")
       : null;
-  const trialId = trialIdFromQuery || trials[0]?.id || "";
+  const fallbackTrialIdByMode: Record<"sample" | "full" | "building", string> = {
+    sample: "sample-workspace",
+    full: "full-workspace",
+    building: "building-workspace",
+  };
+  const trialId = trialIdFromQuery || trials[0]?.id || fallbackTrialIdByMode[currentDataMode];
 
   useEffect(() => {
     logEvent({
       eventType: "feature_used",
-      action: trialId ? "open_collaboration_context" : "open_collaboration_without_trial",
+      action: "open_collaboration_context",
       entityType: "trial",
-      entityId: trialId || undefined,
+      entityId: trialId,
       payload: {
         demoMode: currentDataMode,
-        source: trialIdFromQuery ? "query_param" : "default_first_trial",
+        source: trialIdFromQuery
+          ? "query_param"
+          : trials[0]?.id
+            ? "default_first_trial"
+            : `${currentDataMode}_workspace_fallback`,
       },
     });
-  }, [currentDataMode, trialId, trialIdFromQuery]);
+  }, [currentDataMode, trialId, trialIdFromQuery, trials]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden px-8 pb-1 pt-4">
@@ -37,15 +46,9 @@ export default function Collaboration() {
         </p>
       </div>
 
-      {trialId ? (
-        <div className="min-h-0 flex-1">
-          <CollaborationHub trialId={trialId} dataMode={currentDataMode} />
-        </div>
-      ) : (
-        <div className="rounded-lg border border-border bg-background p-6 text-sm text-muted-foreground">
-          No trial found. Create a trial first to open Collaboration Hub.
-        </div>
-      )}
+      <div className="min-h-0 flex-1">
+        <CollaborationHub trialId={trialId} dataMode={currentDataMode} />
+      </div>
     </div>
   );
 }

@@ -21,6 +21,7 @@ interface TrialCardProps {
 
 export function TrialCard({ trial }: TrialCardProps) {
   const [, setLocation] = useLocation();
+  const STATUS_BADGE_CLASS = "bg-blue-600 text-white";
 
   // Calculate enrollment progress
   const enrolledNum = trial.enrolledPatients || 0;
@@ -32,28 +33,38 @@ export function TrialCard({ trial }: TrialCardProps) {
     switch (status) {
       case "active":
         return {
-          label: "Enrollment",
-          className: "bg-blue-500 text-white",
+          label: "Active",
+          className: STATUS_BADGE_CLASS,
         };
       case "recruiting":
         return {
-          label: "Treatment",
-          className: "bg-blue-600 text-white",
+          label: "Enrollment",
+          className: STATUS_BADGE_CLASS,
         };
       case "on-hold":
         return {
-          label: "Paused",
-          className: "bg-gray-400 text-white",
+          label: "On hold",
+          className: STATUS_BADGE_CLASS,
         };
       case "not-started":
         return {
           label: "Not started",
-          className: "bg-gray-200 text-gray-700",
+          className: STATUS_BADGE_CLASS,
+        };
+      case "completed":
+        return {
+          label: "Completed",
+          className: STATUS_BADGE_CLASS,
+        };
+      case "terminated":
+        return {
+          label: "Terminated",
+          className: STATUS_BADGE_CLASS,
         };
       default:
         return {
-          label: "Follow-up",
-          className: "bg-purple-500 text-white",
+          label: "In progress",
+          className: STATUS_BADGE_CLASS,
         };
     }
   };

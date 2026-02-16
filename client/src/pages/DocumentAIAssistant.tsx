@@ -608,6 +608,17 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modalTrialIds = trialId ? [trialId] : selectedTrials;
 
+  const toggleSourceModalTrial = useCallback((targetTrialId: string) => {
+    if (trialId) return;
+    setSelectedTrials((previousTrials) =>
+      previousTrials.includes(targetTrialId)
+        ? previousTrials.filter((id) => id !== targetTrialId)
+        : [...previousTrials, targetTrialId]
+    );
+    // Reset selected documents when trial selection changes to avoid stale cross-trial scope.
+    setSelectedDocuments([]);
+  }, [trialId]);
+
   const renderSourceModal = () => (
     <Dialog
       open={sourceModalOpen}
@@ -662,13 +673,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                       <button
                         key={trial.id}
                         type="button"
-                        onClick={() => {
-                          if (selected) {
-                            setSelectedTrials(selectedTrials.filter(t => t !== trial.id));
-                          } else {
-                            setSelectedTrials([...selectedTrials, trial.id]);
-                          }
-                        }}
+                        onClick={() => toggleSourceModalTrial(trial.id)}
                         className={`w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded transition-colors text-left ${
                           selected
                             ? "bg-blue-50 text-blue-700"
@@ -678,13 +683,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                         <input
                           type="checkbox"
                           checked={selected}
-                          onChange={() => {
-                            if (selected) {
-                              setSelectedTrials(selectedTrials.filter(t => t !== trial.id));
-                            } else {
-                              setSelectedTrials([...selectedTrials, trial.id]);
-                            }
-                          }}
+                          onChange={() => toggleSourceModalTrial(trial.id)}
                           onClick={(e) => e.stopPropagation()}
                           className="h-4 w-4 rounded border-gray-300 text-blue-600"
                         />
@@ -792,7 +791,21 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           <Button
             onClick={() => {
               if (selectedDocuments.length === 0) {
-                toast.error('Please select at least one document');
+                setIsAllDocumentsMode(true);
+                if (trialId) {
+                  setSelectedTrials([trialId]);
+                  setActiveTrials([trialId]);
+                } else {
+                  setSelectedTrials([]);
+                  setActiveTrials([]);
+                }
+                setSelectedDocuments([]);
+                setSourceModalOpen(false);
+                toast.success(
+                  trialId
+                    ? "Now searching all documents"
+                    : "Now searching cross-trial documents and operational data"
+                );
                 return;
               }
               setIsAllDocumentsMode(false);
@@ -800,7 +813,6 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
               setSourceModalOpen(false);
               toast.success(`Now querying ${selectedDocuments.length} selected document(s)`);
             }}
-            disabled={selectedDocuments.length === 0}
           >
             Select
           </Button>
@@ -1373,6 +1385,22 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     setSelectedTrials([trialId]);
     setActiveTrials([trialId]);
   }, [trialId]);
+
+  useEffect(() => {
+    if (isAllDocumentsMode) return;
+    const hasValidScopedSelection = selectedDocuments.length > 0 && (trialId ? true : activeTrials.length > 0);
+    if (hasValidScopedSelection) return;
+
+    setIsAllDocumentsMode(true);
+    setSelectedDocuments([]);
+    if (trialId) {
+      setSelectedTrials([trialId]);
+      setActiveTrials([trialId]);
+    } else {
+      setSelectedTrials([]);
+      setActiveTrials([]);
+    }
+  }, [activeTrials.length, isAllDocumentsMode, selectedDocuments.length, trialId]);
 
   const handleSend = async () => {
     if (!message.trim() || isLoading) return;
@@ -3569,6 +3597,10 @@ Output rules:
   const allScopeSearchLabel = isCrossTrialMode
     ? "Cross-trial documents + operational data"
     : "All Documents";
+  const selectedScopeSearchLabel =
+    !isAllDocumentsMode && selectedDocuments.length > 0 && (trialId ? true : activeTrials.length > 0)
+      ? `${selectedDocuments.length} selected document(s) from ${trialId ? 1 : activeTrials.length} trial(s)`
+      : allScopeSearchLabel;
   const assistantSubtitle = isCrossTrialMode
     ? "Ask questions across trials using documents and operational data"
     : "Ask questions about your trial documents and generate operational outputs";
@@ -3701,81 +3733,84 @@ Output rules:
                   </div>
 
                   <div className="w-full space-y-4">
-                    <div className="flex items-center gap-2 text-xs text-gray-600">
-                      <FileSearch className="w-4 h-4" />
-                      <span>Searching: <span className="font-medium text-gray-900">{allScopeSearchLabel}</span></span>
-                    </div>
-                    <div className="bg-white rounded-2xl px-4 pt-6 pb-3 space-y-4" style={{borderWidth: '1.5px', borderColor: '#f2f2f2', borderStyle: 'solid'}}>
-                      <Textarea
-                        ref={textareaRef}
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        placeholder={starterPromptPlaceholder}
-                        className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
-                      />
-                      <div className="flex items-center mt-3 justify-between">
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5"
-                            onClick={() =>
-                              logEvent({
-                                eventType: "feature_used",
-                                action: "attach",
-                                entityType: "chat_input",
-                              })
-                            }
-                          >
-                            <Paperclip className="w-4 h-4" />
-                          </button>
-                          <button
-                            className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors"
-                            onClick={() =>
-                              logEvent({
-                                eventType: "feature_used",
-                                action: "add_context",
-                                entityType: "chat_input",
-                              })
-                            }
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Add context
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-300 rounded-full px-3 py-1.5 transition-colors"
-                            onClick={() =>
-                              logEvent({
-                                eventType: "feature_used",
-                                action: "auto_mode",
-                                entityType: "chat_input",
-                              })
-                            }
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            Auto
-                          </button>
-                          <button
-                            className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-300 rounded-full p-1.5"
-                            onClick={() =>
-                              logEvent({
-                                eventType: "feature_used",
-                                action: "voice_input",
-                                entityType: "chat_input",
-                              })
-                            }
-                          >
-                            <Mic className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleSend}
-                            className="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
-                            disabled={isLoading || !message.trim()}
-                          >
-                            <ArrowUp className="w-4 h-4 text-white" />
-                          </button>
+                    <div className="rounded-[16px] bg-[#f3f4f6] pt-2 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_24px_rgba(15,23,42,0.06)] lg:rounded-[20px]">
+                      <div className="flex items-center gap-1 px-2 pb-2 pt-1 text-xs text-gray-600">
+                        <FileSearch className="h-4 w-4 flex-shrink-0" />
+                        <span className="flex-shrink-0">Searching:</span>
+                        <span className="truncate font-medium text-gray-900">{selectedScopeSearchLabel}</span>
+                      </div>
+                      <div className="space-y-4 rounded-[15px] border border-[#eceef2] bg-white px-4 pb-3 pt-6 lg:rounded-[19px]">
+                        <Textarea
+                          ref={textareaRef}
+                          value={message}
+                          onChange={(e) => setMessage(e.target.value)}
+                          onKeyDown={handleKeyDown}
+                          placeholder={starterPromptPlaceholder}
+                          className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
+                        />
+                        <div className="mt-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700"
+                              onClick={() =>
+                                logEvent({
+                                  eventType: "feature_used",
+                                  action: "attach",
+                                  entityType: "chat_input",
+                                })
+                              }
+                            >
+                              <Paperclip className="h-4 w-4" />
+                            </button>
+                            <button
+                              className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]"
+                              onClick={() =>
+                                logEvent({
+                                  eventType: "feature_used",
+                                  action: "add_context",
+                                  entityType: "chat_input",
+                                })
+                              }
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Add context
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]"
+                              onClick={() =>
+                                logEvent({
+                                  eventType: "feature_used",
+                                  action: "auto_mode",
+                                  entityType: "chat_input",
+                                })
+                              }
+                            >
+                              <Sparkles className="h-3.5 w-3.5" />
+                              Auto
+                            </button>
+                            <button
+                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700"
+                              onClick={() =>
+                                logEvent({
+                                  eventType: "feature_used",
+                                  action: "voice_input",
+                                  entityType: "chat_input",
+                                })
+                              }
+                            >
+                              <Mic className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSend}
+                              className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                              disabled={isLoading || !message.trim()}
+                            >
+                              <ArrowUp className="h-4 w-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3835,7 +3870,7 @@ Output rules:
                             });
                             handlePromptClick(prompt.text);
                           }}
-                          className="bg-white rounded-lg p-4 text-left hover:scale-[1.02] transition-all group"
+                          className="bg-white rounded-lg p-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_24px_rgba(15,23,42,0.06)] hover:scale-[1.02] transition-all group"
                           style={{borderWidth: '1.5px', borderColor: '#f2f2f2', borderStyle: 'solid'}}
                         >
                           <prompt.icon className={`w-6 h-6 mb-3 ${prompt.color} group-hover:text-blue-600`} />
@@ -4277,81 +4312,80 @@ Output rules:
           {chatHistory.length > 0 && (
           <div className="flex-shrink-0 py-4 bg-gray-50">
             <div className="max-w-5xl mx-auto px-6">
-              {/* Active Documents Indicator */}
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="flex items-center gap-1 text-xs text-gray-600 min-w-0 flex-1 overflow-hidden">
-                  <FileSearch className="w-4 h-4 flex-shrink-0" />
-                  <span className="flex-shrink-0">Searching:</span>
-                  {isAllDocumentsMode ? (
-                    <span className="font-medium text-gray-900 flex-shrink-0">{allScopeSearchLabel}</span>
-                  ) : (
-                    <span className="font-medium text-gray-900 truncate">{selectedDocuments.length} selected document(s) from {activeTrials.length} trial(s)</span>
+              {/* Input Box */}
+              <div className="rounded-[16px] bg-[#f3f4f6] pt-2 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_24px_rgba(15,23,42,0.06)] lg:rounded-[20px]">
+                <div className="mb-2 flex items-center justify-between gap-3 px-2 pt-1 text-xs text-gray-600">
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <div className="flex items-center gap-1">
+                      <FileSearch className="h-4 w-4 flex-shrink-0" />
+                      <span className="flex-shrink-0">Searching:</span>
+                      <span className="truncate font-medium text-gray-900">{selectedScopeSearchLabel}</span>
+                    </div>
+                  </div>
+                  {!isAllDocumentsMode && (
+                    <button
+                      onClick={() => {
+                        setIsAllDocumentsMode(true);
+                        setSelectedDocuments([]);
+                        setSelectedTrials([]);
+                        setActiveTrials([]);
+                        toast.success(
+                          isCrossTrialMode
+                            ? "Now searching cross-trial documents and operational data"
+                            : "Now searching all documents"
+                        );
+                        logEvent({
+                          eventType: "feature_used",
+                          action: "clear_filter",
+                          entityType: "document_filter",
+                          payload: { trialId, demoMode: currentDataMode },
+                        });
+                      }}
+                      className="flex-shrink-0 whitespace-nowrap text-xs text-blue-600 hover:text-blue-700 hover:underline"
+                    >
+                      Clear filter
+                    </button>
                   )}
                 </div>
-                  {!isAllDocumentsMode && (
-                  <button
-                    onClick={() => {
-                      setIsAllDocumentsMode(true);
-                      setSelectedDocuments([]);
-                      setSelectedTrials([]);
-                      setActiveTrials([]);
-                      toast.success(
-                        isCrossTrialMode
-                          ? "Now searching cross-trial documents and operational data"
-                          : "Now searching all documents"
-                      );
-                      logEvent({
-                        eventType: "feature_used",
-                        action: "clear_filter",
-                        entityType: "document_filter",
-                        payload: { trialId, demoMode: currentDataMode },
-                      });
-                    }}
-                    className="text-xs text-blue-600 hover:text-blue-700 hover:underline flex-shrink-0 whitespace-nowrap"
-                  >
-                    Clear filter
-                  </button>
-                )}
-              </div>
-              {/* Input Box */}
-              <div className="bg-white rounded-2xl px-4 pt-3 pb-3 space-y-3" style={{borderWidth: '1.5px', borderColor: '#f2f2f2', borderStyle: 'solid'}}>
-                <Textarea
-                  ref={textareaRef}
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask a follow-up question..."
-                  className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
-                />
-                
-                <div className="flex items-center mt-3 justify-between">
-                  <div className="flex items-center gap-2">
-                    <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-1.5">
-                      <Paperclip className="w-4 h-4" />
-                    </button>
-                    <button className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors">
-                      <Plus className="w-3.5 h-3.5" />
-                      Add context
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button className="flex items-center gap-2 text-sm text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-full px-3 py-1.5 transition-colors">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Auto
-                      <ChevronDown className="w-3.5 h-3.5" />
-                    </button>
-                    <button className="text-gray-500 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full p-1.5">
-                      <Mic className="w-4 h-4" />
-                    </button>
-                    <Button
-                      onClick={handleSend}
-                      disabled={!message.trim() || isLoading}
-                      size="icon"
-                      variant="ghost"
-                      className="rounded-full text-white bg-blue-600 hover:bg-blue-700"
-                    >
-                      <ArrowUp className="w-4 h-4" />
-                    </Button>
+                <div className="space-y-3 rounded-[15px] border border-[#eceef2] bg-white px-4 pb-3 pt-3 lg:rounded-[19px]">
+                  <Textarea
+                    ref={textareaRef}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask a follow-up question..."
+                    className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
+                  />
+
+                  <div className="mt-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700">
+                        <Paperclip className="h-4 w-4" />
+                      </button>
+                      <button className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]">
+                        <Plus className="h-3.5 w-3.5" />
+                        Add context
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]">
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Auto
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700">
+                        <Mic className="h-4 w-4" />
+                      </button>
+                      <Button
+                        onClick={handleSend}
+                        disabled={!message.trim() || isLoading}
+                        size="icon"
+                        variant="ghost"
+                        className="rounded-full bg-blue-600 text-white hover:bg-blue-700"
+                      >
+                        <ArrowUp className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>

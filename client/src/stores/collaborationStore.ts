@@ -122,7 +122,7 @@ const LOCAL_DEMO_INBOX_PREFIX = "themison-collab-demo-inbox-v3";
 const LOCAL_DEMO_CONVERSATION_PREFIX = "themison-collab-demo-conversations-v3";
 const LOCAL_DEMO_THREAD_PREFIX = "themison-collab-demo-threads-v1";
 const DEMO_SELF_USER_ID = 7101;
-const CONVERSATION_DEMO_SEED_VERSION = 3;
+const CONVERSATION_DEMO_SEED_VERSION = 4;
 const THREAD_DEMO_SEED_VERSION = 4;
 const DEMO_STATE_STORAGE_PREFIX = "themison-demo-state";
 const DEMO_STATE_ACTIVE_MODE_KEY = `${DEMO_STATE_STORAGE_PREFIX}-active-mode`;
@@ -684,6 +684,105 @@ function buildConversationScript(
   };
 }
 
+function buildConversationProtocolSnippet(member: DemoTeamMemberSeed, trialId: string) {
+  const role = member.role.toLowerCase();
+
+  if (role.includes("regulatory")) {
+    return {
+      document_name: "Protocol Amendment Guide",
+      section_ref: "Section 2.4 — IRB & Regulatory Distribution",
+      quoted_text:
+        "Circulate approved amendment packets to all participating sites within one business day and retain receipt acknowledgment.",
+      document_link: `#${trialId}-regulatory-distribution`,
+    };
+  }
+
+  if (role.includes("data")) {
+    return {
+      document_name: "EDC Completion Guide",
+      section_ref: "Section 5.2 — Query Turnaround",
+      quoted_text:
+        "Resolve routine data queries within 48 hours and document rationale for any delays beyond the window.",
+      document_link: `#${trialId}-query-turnaround`,
+    };
+  }
+
+  if (role.includes("nurse") || role.includes("lab")) {
+    return {
+      document_name: "Schedule of Activities (SoA)",
+      section_ref: "Visit 3 — Labs & Safety",
+      quoted_text:
+        "Visit 3 blood and safety assessments must be completed within the protocol-defined operational window and timestamped in source notes.",
+      document_link: `#${trialId}-visit3-labs`,
+    };
+  }
+
+  if (role.includes("safety") || role.includes("pharmacovigilance")) {
+    return {
+      document_name: "Safety Reporting Manual",
+      section_ref: "Section 3.1 — SAE Follow-up",
+      quoted_text:
+        "Submit SAE follow-up narratives to sponsor within 24 hours of receiving clinically relevant updates.",
+      document_link: `#${trialId}-sae-followup`,
+    };
+  }
+
+  return {
+    document_name: "Protocol DN-2024-01",
+    section_ref: "Section 5.5.3",
+    quoted_text:
+      "At Visit 3, blood sampling must be completed within a strict +/-2 hour window from scheduled time.",
+    document_link: `#${trialId}-protocol-5-5-3`,
+  };
+}
+
+function buildConversationTaskCard(member: DemoTeamMemberSeed, memberFirstName: string) {
+  const role = member.role.toLowerCase();
+
+  if (role.includes("regulatory")) {
+    return {
+      title: "Publish amendment receipt log to all active sites",
+      assignee_name: member.name,
+      due_date: "Today 17:00",
+      status: "Open",
+    };
+  }
+
+  if (role.includes("data")) {
+    return {
+      title: "Close remaining EDC queries for Site 14",
+      assignee_name: member.name,
+      due_date: "Tomorrow 12:00",
+      status: "Open",
+    };
+  }
+
+  if (role.includes("nurse") || role.includes("site") || role.includes("coordinator") || role.includes("operations")) {
+    return {
+      title: `Confirm Visit 3 operational window with ${memberFirstName}'s site team`,
+      assignee_name: member.name,
+      due_date: "Tomorrow",
+      status: "Open",
+    };
+  }
+
+  if (role.includes("lab")) {
+    return {
+      title: "Post courier tracking for replacement kits in ops thread",
+      assignee_name: member.name,
+      due_date: "Today 16:00",
+      status: "Open",
+    };
+  }
+
+  return {
+    title: `Send trial status recap and open risks with ${memberFirstName}`,
+    assignee_name: member.name,
+    due_date: "Today",
+    status: "Open",
+  };
+}
+
 function buildDefaultConversationDataset(trialId: string): LocalDemoConversationDataset {
   const runtimeUser = getRuntimeUserIdentity();
   const selfId = runtimeUser.id;
@@ -719,6 +818,7 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
     senderId,
     senderType,
     senderName,
+    senderEmail = null,
     content,
     createdAt,
     contentType = "text",
@@ -732,6 +832,7 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
     senderId: number | null;
     senderType: CollaborationMessage["senderType"];
     senderName: string;
+    senderEmail?: string | null;
     content: string;
     createdAt: string;
     contentType?: CollaborationMessage["contentType"];
@@ -747,7 +848,7 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
     senderId,
     senderType,
     senderName,
-    senderEmail: null,
+    senderEmail,
     content,
     contentType,
     embeddedContent,
@@ -766,15 +867,22 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
     const conversationId = `${trialId}-dm-${toSlug(member.name)}-${index + 1}`;
     const memberUserId = getStableMemberUserId(member.id, index + 1, selfId);
     const script = buildConversationScript(member, selfFirstName, memberFirstName);
+    const protocolSnippet = buildConversationProtocolSnippet(member, trialId);
+    const taskCard = buildConversationTaskCard(member, memberFirstName);
     const latestOffset = 6 + index * 9;
+    let messageCounter = 4;
+    let nextOffset = Math.max(0, latestOffset - 1);
+    const shouldShareProtocol = index % 2 === 0;
+    const shouldCreateTask = index === 0 || index % 3 === 1;
 
-    const messages = [
+    const messages: CollaborationMessage[] = [
       makeMessage({
         id: `${conversationId}-m1`,
         conversationId,
         senderId: memberUserId,
         senderType: "user",
         senderName: member.name,
+        senderEmail: member.email,
         content: script.memberOpen,
         createdAt: asIso(latestOffset + 11),
       }),
@@ -784,6 +892,7 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
         senderId: selfId,
         senderType: "user",
         senderName: selfName,
+        senderEmail: selfEmail,
         content: script.selfReply,
         createdAt: asIso(latestOffset + 6),
       }),
@@ -793,10 +902,72 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
         senderId: memberUserId,
         senderType: "user",
         senderName: member.name,
+        senderEmail: member.email,
         content: script.memberClose,
         createdAt: asIso(latestOffset),
       }),
     ];
+
+    if (shouldShareProtocol) {
+      messages.push(
+        makeMessage({
+          id: `${conversationId}-m${messageCounter++}`,
+          conversationId,
+          senderId: selfId,
+          senderType: "user",
+          senderName: selfName,
+          senderEmail: selfEmail,
+          content: "Sharing the protocol reference here so we stay aligned:",
+          createdAt: asIso(nextOffset),
+          contentType: "protocol_snippet",
+          embeddedContent: protocolSnippet,
+        })
+      );
+      nextOffset = Math.max(0, nextOffset - 1);
+      messages.push(
+        makeMessage({
+          id: `${conversationId}-m${messageCounter++}`,
+          conversationId,
+          senderId: memberUserId,
+          senderType: "user",
+          senderName: member.name,
+          senderEmail: member.email,
+          content: "Confirmed. I will apply this wording in the site update now.",
+          createdAt: asIso(nextOffset),
+        })
+      );
+      nextOffset = Math.max(0, nextOffset - 1);
+    }
+
+    if (shouldCreateTask) {
+      messages.push(
+        makeMessage({
+          id: `${conversationId}-m${messageCounter++}`,
+          conversationId,
+          senderId: selfId,
+          senderType: "user",
+          senderName: selfName,
+          senderEmail: selfEmail,
+          content: "Added an action item so this does not get missed:",
+          createdAt: asIso(nextOffset),
+          contentType: "task_card",
+          embeddedContent: taskCard,
+        })
+      );
+      nextOffset = Math.max(0, nextOffset - 1);
+      messages.push(
+        makeMessage({
+          id: `${conversationId}-m${messageCounter++}`,
+          conversationId,
+          senderId: memberUserId,
+          senderType: "user",
+          senderName: member.name,
+          senderEmail: member.email,
+          content: "Perfect, I will complete it and post confirmation in this thread.",
+          createdAt: asIso(nextOffset),
+        })
+      );
+    }
 
     messagesByConversation[conversationId] = messages;
 
@@ -1735,7 +1906,7 @@ const state: CollaborationStore = {
       emit();
       return;
     }
-    if (state.dataMode === "sample") {
+    if (state.dataMode === "sample" || state.dataMode === "full") {
       state.conversations = loadOrInitConversationDataset(trialId).conversations;
       if (
         state.activeConversationId &&
@@ -1794,7 +1965,7 @@ const state: CollaborationStore = {
       emit();
       return;
     }
-    if (state.dataMode === "sample") {
+    if (state.dataMode === "sample" || state.dataMode === "full") {
       const trialId =
         state.conversations.find((conversation) => conversation.id === conversationId)?.trialId ||
         subscribedTrialId;
@@ -1879,7 +2050,7 @@ const state: CollaborationStore = {
     const trialId = targetConversation?.trialId || subscribedTrialId;
     const isLocalConversation = Boolean(targetConversation && isLocalConversationId(targetConversation.id));
 
-    if (state.dataMode === "sample" || isLocalConversation) {
+    if (state.dataMode === "sample" || state.dataMode === "full" || isLocalConversation) {
       const persisted: CollaborationMessage = {
         ...optimistic,
         id: `demo-${Date.now()}`,

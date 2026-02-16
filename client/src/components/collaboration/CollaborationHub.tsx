@@ -73,6 +73,34 @@ function normalizeLookupKey(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
 
+const SAMPLE_STATE_STORAGE_KEY = "themison-demo-state-sample";
+const SAMPLE_DEFAULT_STATE_STORAGE_KEY = "themison-demo-state-default-sample";
+
+function stableHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function generatedAvatarDataUrl(nameOrEmail: string) {
+  const seed = String(nameOrEmail || "").trim() || "TM";
+  const hash = stableHash(seed.toLowerCase());
+  const palettes = [
+    ["#DBEAFE", "#2563EB"],
+    ["#DCFCE7", "#059669"],
+    ["#FCE7F3", "#DB2777"],
+    ["#FEF3C7", "#D97706"],
+    ["#E0E7FF", "#4F46E5"],
+    ["#E0F2FE", "#0284C7"],
+  ] as const;
+  const [bg, fg] = palettes[hash % palettes.length];
+  const label = initials(seed).slice(0, 2).toUpperCase();
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96"><rect width="96" height="96" rx="18" fill="${bg}"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700" fill="${fg}">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 function getOtherConversationParticipant(conversation: Conversation, currentUserId: number | null) {
   const participants = conversation.participants || [];
   if (!participants.length) return null;
@@ -365,6 +393,37 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     return { byName, byEmail };
   }, [demoState.teamMembers]);
 
+  const sampleAvatarPool = useMemo(() => {
+    if (typeof window === "undefined") return [] as string[];
+
+    const collect = (storageKey: string) => {
+      try {
+        const raw = window.localStorage.getItem(storageKey);
+        if (!raw) return [] as string[];
+        const parsed = JSON.parse(raw) as { teamMembers?: Array<{ avatar?: string | null }> };
+        if (!Array.isArray(parsed.teamMembers)) return [] as string[];
+        return parsed.teamMembers
+          .map((member) => String(member?.avatar || "").trim())
+          .filter((avatar) => avatar.length > 0);
+      } catch {
+        return [] as string[];
+      }
+    };
+
+    return Array.from(
+      new Set([
+        ...collect(SAMPLE_STATE_STORAGE_KEY),
+        ...collect(SAMPLE_DEFAULT_STATE_STORAGE_KEY),
+      ])
+    );
+  }, [dataMode, demoState.teamMembers.length]);
+
+  const resolveSampleAvatarFallback = (seed: string) => {
+    if (!sampleAvatarPool.length) return null;
+    const index = stableHash(seed.toLowerCase()) % sampleAvatarPool.length;
+    return sampleAvatarPool[index] || null;
+  };
+
   const resolveMemberAvatar = (name?: string | null, email?: string | null) => {
     const emailKey = normalizeLookupKey(email);
     if (emailKey && memberAvatarIndex.byEmail.has(emailKey)) {
@@ -374,7 +433,9 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     if (nameKey && memberAvatarIndex.byName.has(nameKey)) {
       return memberAvatarIndex.byName.get(nameKey) || null;
     }
-    return null;
+    const fallbackSeed = String(name || email || "").trim();
+    if (!fallbackSeed) return null;
+    return resolveSampleAvatarFallback(fallbackSeed) || generatedAvatarDataUrl(fallbackSeed);
   };
 
   const resolveConversationAvatar = (conversation: Conversation) => {
