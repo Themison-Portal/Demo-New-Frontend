@@ -30,6 +30,14 @@ type WorksheetBlock = {
   checked?: boolean;
 };
 
+type QuestionType =
+  | "protocol_question"
+  | "schedule_question"
+  | "task_question"
+  | "safety_question"
+  | "document_management_question"
+  | "general_question";
+
 function extractTextContent(rawContent: unknown): string {
   if (typeof rawContent === "string") return rawContent;
   if (!Array.isArray(rawContent)) return "";
@@ -66,6 +74,23 @@ function normalizeWorksheetBlockType(value?: string): WorksheetBlockType {
   if (token === "heading3" || token === "h3") return "heading3";
   if (token === "checklist" || token === "checkbox" || token === "todo") return "checklist";
   return "text";
+}
+
+function classifyQuestionType(value: string): QuestionType {
+  const question = String(value || "").toLowerCase();
+  if (!question) return "general_question";
+  if (/\b(visit|window|schedule|timeline|soa|cycle|day)\b/.test(question)) return "schedule_question";
+  if (/\b(task|todo|to do|owner|assignee|deadline|due|action)\b/.test(question)) return "task_question";
+  if (/\b(adverse event|serious adverse|safety|toxicity|dose hold|stop dosing)\b/.test(question)) {
+    return "safety_question";
+  }
+  if (/\b(document|upload|file|category|version|amendment version)\b/.test(question)) {
+    return "document_management_question";
+  }
+  if (/\b(protocol|amendment|eligibility|criterion|criteria|endpoint|section)\b/.test(question)) {
+    return "protocol_question";
+  }
+  return "general_question";
 }
 
 function normalizeWorksheetBlocks(rawBlocks: unknown): WorksheetBlock[] {
@@ -366,6 +391,7 @@ export const documentAIRouter = router({
           message: "No user message found",
         };
       }
+      const questionType = classifyQuestionType(latestUserMessage.content);
 
       await logTelemetryEvent({
         eventType: "ai_query_submitted",
@@ -374,6 +400,9 @@ export const documentAIRouter = router({
         entityType: "query",
         payload: {
           query: latestUserMessage.content,
+          questionType,
+          trialId: resolvedTrialId ?? null,
+          demoMode: mode,
           documentIds: input.documentIds ?? [],
         },
         aiInvolved: true,
@@ -388,6 +417,7 @@ export const documentAIRouter = router({
             query: latestUserMessage.content,
             messages: input.messages,
             trialId: resolvedTrialId,
+            demoMode: mode,
             userId: ctx.user?.id,
           });
 
@@ -397,6 +427,12 @@ export const documentAIRouter = router({
             sessionId: input.sessionId,
             entityType: "response",
             entityId: resolvedTrialId,
+            payload: {
+              route: unified.route,
+              confidence: unified.confidence,
+              abstained: unified.abstained,
+              questionType,
+            },
             aiInvolved: true,
             aiOutput: unified.message,
             aiSources: unified.sources,
@@ -447,6 +483,10 @@ ${conversationHistory}`;
           action: "generated",
           sessionId: input.sessionId,
           entityType: "response",
+          payload: {
+            route: "fallback_llm",
+            questionType,
+          },
           aiInvolved: true,
           aiOutput: answer,
         });
@@ -482,6 +522,7 @@ ${conversationHistory}`;
           messages: input.messages,
           protocolIds: documentIds,
           trialId: resolvedTrialId,
+          demoMode: mode,
           userId: ctx.user?.id,
         });
 
@@ -491,6 +532,12 @@ ${conversationHistory}`;
           sessionId: input.sessionId,
           entityType: "response",
           entityId: resolvedTrialId,
+          payload: {
+            route: unified.route,
+            confidence: unified.confidence,
+            abstained: unified.abstained,
+            questionType,
+          },
           aiInvolved: true,
           aiOutput: unified.message,
           aiSources: unified.sources,
@@ -645,6 +692,12 @@ If the retrieved context is insufficient, clearly state what is missing instead 
             action: "generated",
             sessionId: input.sessionId,
             entityType: "response",
+            payload: {
+              route: "selected_docs_local_context",
+              needsComprehensive,
+              selectedChunkCount: selectedChunks.length,
+              questionType,
+            },
             aiInvolved: true,
             aiOutput: finalAnswer,
             aiSources: finalSources,
@@ -728,6 +781,12 @@ If the retrieved context is insufficient, clearly state what is missing instead 
           action: "generated",
           sessionId: input.sessionId,
           entityType: "response",
+          payload: {
+            route: "selected_docs_assistant_retrieval",
+            storeCount: storeNames.length,
+            citationCount: Array.isArray(citations) ? citations.length : 0,
+            questionType,
+          },
           aiInvolved: true,
           aiOutput: answer,
           aiSources: sources,

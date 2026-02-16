@@ -133,6 +133,19 @@ const writeSessions = (sessions: ChatSessionRecord[]) => {
 
 const getScopeKey = (trialId: string | null, dataMode: ChatDataMode) => `${dataMode}:${trialId || "no-trial"}`;
 
+const parseScopeKey = (scopeKey: string): { dataMode: ChatDataMode | null; trialId: string | null } => {
+  const delimiter = scopeKey.indexOf(":");
+  const dataModeToken = delimiter >= 0 ? scopeKey.slice(0, delimiter) : scopeKey;
+  const trialToken = delimiter >= 0 ? scopeKey.slice(delimiter + 1) : "no-trial";
+  const dataMode = ["sample", "full", "building"].includes(dataModeToken)
+    ? (dataModeToken as ChatDataMode)
+    : null;
+  return {
+    dataMode,
+    trialId: trialToken === "no-trial" ? null : trialToken,
+  };
+};
+
 const readActiveMap = (): ActiveChatSessionMap => {
   if (!isBrowser()) return {};
   try {
@@ -314,14 +327,8 @@ export const deleteChatSession = ({ sessionId }: { sessionId: string }) => {
     delete activeMap[scopeKey];
     mapUpdated = true;
 
-    const delimiter = scopeKey.indexOf(":");
-    const dataModeToken = delimiter >= 0 ? scopeKey.slice(0, delimiter) : scopeKey;
-    const trialToken = delimiter >= 0 ? scopeKey.slice(delimiter + 1) : "no-trial";
-    const dataMode = ["sample", "full", "building"].includes(dataModeToken)
-      ? (dataModeToken as ChatDataMode)
-      : null;
+    const { dataMode, trialId } = parseScopeKey(scopeKey);
     if (!dataMode) continue;
-    const trialId = trialToken === "no-trial" ? null : trialToken;
     window.dispatchEvent(
       new CustomEvent(CHAT_ACTIVE_UPDATED_EVENT, {
         detail: { trialId, dataMode, sessionId: null },
@@ -334,6 +341,36 @@ export const deleteChatSession = ({ sessionId }: { sessionId: string }) => {
   }
 
   return true;
+};
+
+export const clearChatSessionsByMode = ({ dataMode }: { dataMode: ChatDataMode }) => {
+  if (!isBrowser()) return 0;
+
+  const sessions = readSessions();
+  const nextSessions = sessions.filter((session) => session.dataMode !== dataMode);
+  const removedCount = sessions.length - nextSessions.length;
+  if (removedCount > 0) {
+    writeSessions(nextSessions);
+  }
+
+  const activeMap = readActiveMap();
+  let mapUpdated = false;
+  for (const [scopeKey] of Object.entries(activeMap)) {
+    const parsed = parseScopeKey(scopeKey);
+    if (parsed.dataMode !== dataMode) continue;
+    delete activeMap[scopeKey];
+    mapUpdated = true;
+    window.dispatchEvent(
+      new CustomEvent(CHAT_ACTIVE_UPDATED_EVENT, {
+        detail: { trialId: parsed.trialId, dataMode, sessionId: null },
+      })
+    );
+  }
+  if (mapUpdated) {
+    writeActiveMap(activeMap);
+  }
+
+  return removedCount;
 };
 
 export const formatRelativeChatTime = (iso: string) => {

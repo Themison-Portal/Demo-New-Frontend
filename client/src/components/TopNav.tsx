@@ -24,8 +24,9 @@ import { useDemoState } from "@/contexts/DemoStateContext";
 import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { ensureTrialTeamAssignments } from "@/lib/trialTeamAssignments";
+import { clearChatSessionsByMode } from "@/lib/chatSessions";
 import { toast } from "sonner";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import {
   AlertDialog,
@@ -39,6 +40,26 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Check } from "lucide-react";
 
+const MODE_SESSION_BOOTSTRAP_KEY_PREFIX = "themison-mode-session-bootstrapped:";
+
+function hasModeSessionBootstrap(mode: "sample" | "full" | "building") {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(`${MODE_SESSION_BOOTSTRAP_KEY_PREFIX}${mode}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markModeSessionBootstrap(mode: "sample" | "full" | "building") {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(`${MODE_SESSION_BOOTSTRAP_KEY_PREFIX}${mode}`, "1");
+  } catch {
+    // ignore
+  }
+}
+
 export function TopNav() {
   const [location, navigate] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
@@ -47,6 +68,7 @@ export function TopNav() {
     resetDemo,
     loadSampleData,
     loadFullDataset,
+    restoreModeFromDefaultLocal,
     saveCurrentModeAsDefault,
     fullResetLocal,
     setBuildingMode,
@@ -55,6 +77,11 @@ export function TopNav() {
   const { profile } = useOrganizationProfile();
   const currentDataMode = getCurrentDataMode();
   const utils = trpc.useUtils();
+  const modeBootstrapInFlightRef = useRef<Record<"sample" | "full" | "building", boolean>>({
+    sample: false,
+    full: false,
+    building: false,
+  });
 
   const runtimeUser = useMemo(() => {
     if (typeof window === "undefined") {
@@ -128,6 +155,13 @@ export function TopNav() {
       await utils.documents.list.invalidate();
     },
   });
+  const loadBuildingMutation = trpc.demo.loadBuildingMode.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate();
+      await utils.documents.list.invalidate();
+    },
+  });
+  const saveModeDefaultMutation = trpc.demo.saveModeDefault.useMutation();
   const fullResetMutation = trpc.demo.fullReset.useMutation({
     onSuccess: async () => {
       await utils.trials.list.invalidate();
@@ -144,6 +178,44 @@ export function TopNav() {
     toast.dismiss("demo-reset");
   }, [currentDataMode]);
 
+  useEffect(() => {
+    if (hasModeSessionBootstrap(currentDataMode)) return;
+    if (modeBootstrapInFlightRef.current[currentDataMode]) return;
+
+    let cancelled = false;
+    const targetMode = currentDataMode;
+    modeBootstrapInFlightRef.current[targetMode] = true;
+
+    const bootstrapModeFromSavedDefault = async () => {
+      try {
+        if (targetMode === "sample") {
+          await loadSampleMutation.mutateAsync({ resetToDefault: true });
+        } else if (targetMode === "full") {
+          await loadFullMutation.mutateAsync({ resetToDefault: true });
+        } else {
+          await loadBuildingMutation.mutateAsync({ resetToDefault: true });
+        }
+
+        if (cancelled) return;
+        restoreModeFromDefaultLocal(targetMode);
+        if (targetMode === "building") {
+          clearChatSessionsByMode({ dataMode: "building" });
+        }
+        markModeSessionBootstrap(targetMode);
+      } catch (error) {
+        console.error("Failed to bootstrap mode session", error);
+      } finally {
+        modeBootstrapInFlightRef.current[targetMode] = false;
+      }
+    };
+
+    void bootstrapModeFromSavedDefault();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentDataMode]);
+
   const handleConfirmAction = async () => {
     const needsLoading = confirmDialog.type !== 'building';
     try {
@@ -153,21 +225,28 @@ export function TopNav() {
       if (confirmDialog.type === 'reset') {
         await resetToEmptyMutation.mutateAsync();
         resetDemo();
+        markModeSessionBootstrap("building");
         toast.success("Data reset to empty state");
       } else if (confirmDialog.type === 'sample') {
         await loadSampleMutation.mutateAsync();
         loadSampleData();
+        markModeSessionBootstrap("sample");
         toast.success("Sample data loaded");
       } else if (confirmDialog.type === 'full') {
         await loadFullMutation.mutateAsync();
         loadFullDataset();
+        markModeSessionBootstrap("full");
         toast.success("Full dataset loaded");
       } else if (confirmDialog.type === 'full-reset') {
         await fullResetMutation.mutateAsync();
         fullResetLocal('sample');
+        markModeSessionBootstrap("sample");
         toast.success("All demo modes reset to defaults");
       } else if (confirmDialog.type === 'building') {
+        await loadBuildingMutation.mutateAsync();
         setBuildingMode();
+        clearChatSessionsByMode({ dataMode: "building" });
+        markModeSessionBootstrap("building");
         toast.success("Building mode enabled");
       }
       setConfirmDialog({ open: false, type: null });
@@ -376,9 +455,16 @@ export function TopNav() {
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
-                    onClick={() => {
-                      saveCurrentModeAsDefault();
-                      toast.success(`Saved ${currentDataMode} mode as your reset default`);
+                    onClick={async () => {
+                      toast.loading("Saving mode default...", { id: "save-mode-default" });
+                      try {
+                        await saveModeDefaultMutation.mutateAsync({ mode: currentDataMode });
+                        saveCurrentModeAsDefault();
+                        toast.success(`Saved ${currentDataMode} mode as default`, { id: "save-mode-default" });
+                      } catch (error) {
+                        console.error(error);
+                        toast.error("Failed to save mode default", { id: "save-mode-default" });
+                      }
                     }}
                   >
                     Save Current Mode as Default
@@ -422,13 +508,13 @@ export function TopNav() {
               {confirmDialog.type === 'reset' && 
                 'This will delete all trials, documents, tasks, and activity in building mode. This action cannot be undone.'}
               {confirmDialog.type === 'sample' && 
-                'Switch to the Sample dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'}
+                'Switch to Sample mode. On first open in a new browser session, Sample starts from its saved default.'}
               {confirmDialog.type === 'full' && 
-                'Switch to the Full dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'}
+                'Switch to Full mode. On first open in a new browser session, Full starts from its saved default.'}
               {confirmDialog.type === 'full-reset' && 
-                'This will reset all demo modes (sample, full, and building) back to their original default states.'}
+                'This will reset all demo modes (sample, full, and building) back to their saved defaults.'}
               {confirmDialog.type === 'building' &&
-                'Switch to Building Mode. Your building-mode data is preserved unless you choose Reset to Empty.'}
+                'Switch to Building mode. On first open in a new browser session, Building starts from its saved default.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

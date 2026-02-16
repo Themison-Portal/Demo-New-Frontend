@@ -1395,6 +1395,23 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
               orderIndex: j,
             });
             createdTasks += 1;
+
+            await logTelemetryEvent({
+              eventType: "task_created",
+              action: "created",
+              userId: String(ctx.user.id),
+              entityType: "task",
+              entityId: `scaffold:${scaffold.id}:phase:${createdPhase.id}:task:${j}`,
+              payload: {
+                trialId,
+                scaffoldId: scaffold.id,
+                phaseId: createdPhase.id,
+                phaseName: phase.name,
+                taskName: task.name,
+                source: "study_setup_scaffold_generation",
+              },
+              aiInvolved: true,
+            });
           }
         }
       }

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, notLike } from "drizzle-orm";
 import {
   executionMaps,
   fileSearchDocuments,
@@ -661,7 +661,8 @@ async function resolveProtocolsForScope(
   db: any,
   explicitProtocolIds: number[] | undefined,
   trialId: string | undefined,
-  queryPlan: UnifiedQueryPlan
+  queryPlan: UnifiedQueryPlan,
+  demoMode?: "sample" | "full" | "building"
 ): Promise<Protocol[]> {
   const sortByPrecedence = (rows: Protocol[]) => {
     const scored = rows.map((protocol, index) => ({
@@ -678,6 +679,43 @@ async function resolveProtocolsForScope(
     return sortByPrecedence(rows);
   }
   if (!trialId) {
+    if (demoMode) {
+      const modePrefix = `${demoMode}:%`;
+      const activeScoped = (await db
+        .select()
+        .from(protocols)
+        .where(and(isNull(protocols.archivedAt), like(protocols.trialId, modePrefix)))
+        .orderBy(desc(protocols.createdAt))) as Protocol[];
+      if (activeScoped.length > 0) return sortByPrecedence(activeScoped);
+
+      if (demoMode !== "building") {
+        const activeLegacy = (await db
+          .select()
+          .from(protocols)
+          .where(and(isNull(protocols.archivedAt), notLike(protocols.trialId, "%:%")))
+          .orderBy(desc(protocols.createdAt))) as Protocol[];
+        if (activeLegacy.length > 0) return sortByPrecedence(activeLegacy);
+      }
+
+      const scopedAll = (await db
+        .select()
+        .from(protocols)
+        .where(like(protocols.trialId, modePrefix))
+        .orderBy(desc(protocols.createdAt))) as Protocol[];
+      if (scopedAll.length > 0) return sortByPrecedence(scopedAll);
+
+      if (demoMode !== "building") {
+        const legacyAll = (await db
+          .select()
+          .from(protocols)
+          .where(notLike(protocols.trialId, "%:%"))
+          .orderBy(desc(protocols.createdAt))) as Protocol[];
+        if (legacyAll.length > 0) return sortByPrecedence(legacyAll);
+      }
+
+      return [];
+    }
+
     const activeAll = (await db
       .select()
       .from(protocols)
@@ -3192,6 +3230,7 @@ export async function runUnifiedQuery(params: {
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   protocolIds?: number[];
   trialId?: string;
+  demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
 }) {
@@ -3202,7 +3241,13 @@ export async function runUnifiedQuery(params: {
     Boolean((params.protocolIds && params.protocolIds.length > 0) || params.trialId),
     Boolean(params.trialId)
   );
-  const protocolRows = await resolveProtocolsForScope(params.db, params.protocolIds, params.trialId, provisionalPlan);
+  const protocolRows = await resolveProtocolsForScope(
+    params.db,
+    params.protocolIds,
+    params.trialId,
+    provisionalPlan,
+    params.demoMode
+  );
   const protocolFileUrls = new Map<number, string | null>(
     protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
   );

@@ -365,6 +365,7 @@ interface DemoStateContextType {
   resetDemo: () => void;
   loadSampleData: () => void;
   loadFullDataset: () => void;
+  restoreModeFromDefaultLocal: (mode: DemoState["dataMode"]) => void;
   saveCurrentModeAsDefault: () => void;
   fullResetLocal: (modeOverride?: DemoState["dataMode"]) => void;
   setBuildingMode: () => void;
@@ -681,56 +682,69 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(nextState));
   };
 
+  const getFallbackDefaultStateForMode = (mode: DemoState["dataMode"]): DemoState => {
+    if (mode === "building") {
+      return withMode(
+        {
+          tasks: [],
+          documents: [],
+          milestones: [],
+          teamMembers: [
+            {
+              id: "member-1",
+              name: "Kaleb Sanders",
+              email: "kaleb.s@azorg.be",
+              role: "Principal Investigator",
+              clinicalRole: "Principal Investigator",
+              appRole: "Superadmin",
+              team: "Clinical",
+              site: "Copenhagen",
+              status: "Active",
+              initials: "KS",
+            },
+          ],
+          trials: [],
+          activeTrials: 0,
+          blockedTasks: 0,
+          dataMode: "building",
+        },
+        "building"
+      );
+    }
+    if (mode === "full") {
+      return withMode(buildFullDataset(), "full");
+    }
+    return withMode(initialDemoState, "sample");
+  };
+
+  const readDefaultStateForMode = (mode: DemoState["dataMode"]) => {
+    const fallbackState = getFallbackDefaultStateForMode(mode);
+    const stored = localStorage.getItem(getDefaultStorageKeyForMode(mode));
+    if (!stored) return fallbackState;
+    try {
+      const parsed = JSON.parse(stored) as DemoState;
+      return withMode(migrateDemoStateMemberEmails(parsed), mode);
+    } catch (error) {
+      console.error(`Failed to parse stored default state for ${mode}:`, error);
+      return fallbackState;
+    }
+  };
+
+  const restoreModeFromDefaultLocal = (mode: DemoState["dataMode"]) => {
+    const nextState = readDefaultStateForMode(mode);
+    localStorage.setItem(getStorageKeyForMode(mode), JSON.stringify(nextState));
+    setState((prev) => (prev.dataMode === mode ? nextState : prev));
+  };
+
   const saveCurrentModeAsDefault = () => {
     const key = getDefaultStorageKeyForMode(state.dataMode);
     localStorage.setItem(key, JSON.stringify(withMode(state, state.dataMode)));
   };
 
   const fullResetLocal = (modeOverride?: DemoState["dataMode"]) => {
-    const defaultBuildingState = withMode(
-      {
-        tasks: [],
-        documents: [],
-        milestones: [],
-        teamMembers: [
-          {
-            id: "member-1",
-            name: "Kaleb Sanders",
-            email: "kaleb.s@azorg.be",
-            role: "Principal Investigator",
-            clinicalRole: "Principal Investigator",
-            appRole: "Superadmin",
-            team: "Clinical",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "KS",
-          },
-        ],
-        trials: [],
-        activeTrials: 0,
-        blockedTasks: 0,
-        dataMode: "building",
-      },
-      "building"
-    );
-    const defaultSampleState = withMode(initialDemoState, "sample");
-    const defaultFullState = withMode(buildFullDataset(), "full");
-
-    const readDefaultStateForMode = (mode: DemoState["dataMode"], fallbackState: DemoState) => {
-      const stored = localStorage.getItem(getDefaultStorageKeyForMode(mode));
-      if (!stored) return fallbackState;
-      try {
-        const parsed = JSON.parse(stored) as DemoState;
-        return withMode(migrateDemoStateMemberEmails(parsed), mode);
-      } catch (error) {
-        console.error(`Failed to parse stored default state for ${mode}:`, error);
-        return fallbackState;
-      }
-    };
-
-    const buildingState = readDefaultStateForMode("building", defaultBuildingState);
-    const sampleState = readDefaultStateForMode("sample", defaultSampleState);
-    const fullState = readDefaultStateForMode("full", defaultFullState);
+    const buildingState = readDefaultStateForMode("building");
+    const sampleState = readDefaultStateForMode("sample");
+    const fullState = readDefaultStateForMode("full");
 
     localStorage.setItem(STORAGE_KEY_BUILDING, JSON.stringify(buildingState));
     localStorage.setItem(STORAGE_KEY_SAMPLE, JSON.stringify(sampleState));
@@ -784,6 +798,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
         resetDemo,
         loadSampleData,
         loadFullDataset,
+        restoreModeFromDefaultLocal,
         saveCurrentModeAsDefault,
         fullResetLocal,
         setBuildingMode,

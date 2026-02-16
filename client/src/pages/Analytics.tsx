@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Activity, AlertTriangle, CheckCircle2, FlaskConical } from "lucide-react";
+import { logEvent } from "@/lib/telemetry";
 
 type WorkspaceTask = {
   status?: string | null;
@@ -21,6 +22,7 @@ function normalizeStatus(status?: string | null): string {
 export default function Analytics() {
   const { state, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+  const hasLoggedViewRef = useRef(false);
 
   const { data: trials = [] } = trpc.trials.list.useQuery(
     { demoMode: currentDataMode },
@@ -92,6 +94,21 @@ export default function Analytics() {
       .sort((a, b) => b.count - a.count)
       .slice(0, 6);
   }, [state.teamMembers, workspaceRows]);
+
+  useEffect(() => {
+    if (hasLoggedViewRef.current) return;
+    hasLoggedViewRef.current = true;
+    logEvent({
+      eventType: "feature_used",
+      action: "view_analytics_summary",
+      entityType: "analytics",
+      payload: {
+        demoMode: currentDataMode,
+        trialCount: trials.length,
+        taskTotal: taskStats.total,
+      },
+    });
+  }, [currentDataMode, taskStats.total, trials.length]);
 
   return (
     <div className="px-8 pb-8 pt-4">

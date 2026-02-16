@@ -14,6 +14,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { logEvent } from "@/lib/telemetry";
 
 interface MetricCard {
   title: string;
@@ -297,7 +298,17 @@ export default function Overview() {
       }));
   }, [docsByTrial, trialLabelById]);
 
-  const handleMetricClick = () => {
+  const handleMetricClick = (metric: MetricCard) => {
+    logEvent({
+      eventType: "feature_used",
+      action: "open_metric_link",
+      entityType: "overview_metric",
+      entityId: metric.title,
+      payload: {
+        href: metric.linkHref,
+        demoMode: currentDataMode,
+      },
+    });
     toast.info("Feature coming soon");
   };
 
@@ -340,7 +351,7 @@ export default function Overview() {
                 <Button
                   variant="link"
                   className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
-                  onClick={handleMetricClick}
+                  onClick={() => handleMetricClick(metric)}
                 >
                   {metric.linkText}
                   <ArrowRight className="ml-1 h-3 w-3" />

@@ -282,6 +282,24 @@ export const documentsRouter = router({
       
       const protocolId = insertedProtocols[0]?.id;
 
+      if (protocolId) {
+        await logTelemetryEvent({
+          eventType: "document_created",
+          action: "created",
+          userId: String(ctx.user.id),
+          entityType: "document",
+          entityId: String(protocolId),
+          payload: {
+            trialId: resolvedTrialId,
+            filename: input.filename,
+            category: input.category,
+            sourceType: input.sourceType ?? "manual",
+            sourceReference: input.sourceReference ?? null,
+            demoMode: mode,
+          },
+        });
+      }
+
       // Automatically upload to Google File Search Store (async, don't block response)
       if (protocolId) {
         // Run in background

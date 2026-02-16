@@ -4,6 +4,7 @@ import { Wand2, Sparkles, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useDemoState } from "@/contexts/DemoStateContext";
+import { logEvent } from "@/lib/telemetry";
 
 /**
  * Study Setup Agent - Entry Point Screen
@@ -33,11 +34,36 @@ export default function StudySetupWizard() {
   const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation({
     onSuccess: (data) => {
       setIsGenerating(false);
+      logEvent({
+        eventType: "feature_used",
+        action: "generate_execution_plan_success",
+        entityType: "task_scaffold",
+        entityId: String(data?.scaffoldId ?? trialId),
+        payload: {
+          trialId,
+          protocolId: protocolId ?? null,
+          demoMode: currentDataMode,
+        },
+        aiInvolved: true,
+      });
       // Navigate to scaffold view
       setLocation(`/trial/${trialId}/wizard/scaffold`);
     },
     onError: (error) => {
       setIsGenerating(false);
+      logEvent({
+        eventType: "feature_used",
+        action: "generate_execution_plan_failed",
+        entityType: "task_scaffold",
+        entityId: trialId,
+        payload: {
+          trialId,
+          protocolId: protocolId ?? null,
+          demoMode: currentDataMode,
+          error: error?.message || "unknown_error",
+        },
+        aiInvolved: true,
+      });
       console.error("Failed to generate scaffold:", error);
       alert("Failed to generate execution plan. Please try again.");
     },
@@ -45,9 +71,28 @@ export default function StudySetupWizard() {
 
   const handleGenerate = () => {
     if (!protocolId) {
+      logEvent({
+        eventType: "feature_used",
+        action: "generate_execution_plan_blocked_no_protocol",
+        entityType: "task_scaffold",
+        entityId: trialId,
+        payload: { trialId, demoMode: currentDataMode },
+      });
       alert("No protocol found. Please upload a protocol first.");
       return;
     }
+    logEvent({
+      eventType: "feature_used",
+      action: "generate_execution_plan_started",
+      entityType: "task_scaffold",
+      entityId: trialId,
+      payload: {
+        trialId,
+        protocolId,
+        demoMode: currentDataMode,
+      },
+      aiInvolved: true,
+    });
     setIsGenerating(true);
     generateScaffold.mutate({ protocolId, trialId, demoMode: currentDataMode });
   };

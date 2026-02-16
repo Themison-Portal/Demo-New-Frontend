@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { trpc } from "@/lib/trpc";
+import { logEvent } from "@/lib/telemetry";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
 
@@ -212,6 +213,18 @@ export default function Integrations() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
+  const trackIntegrationEvent = (action: string, payload?: Record<string, unknown>) => {
+    logEvent({
+      eventType: "feature_used",
+      action,
+      entityType: "integration",
+      payload: {
+        demoMode: currentDataMode,
+        ...(payload ?? {}),
+      },
+    });
+  };
+
   const uniqueIntegrations = useMemo(
     () => Array.from(new Map(INTEGRATIONS.map((entry) => [entry.id, entry])).values()),
     []
@@ -271,7 +284,10 @@ export default function Integrations() {
           <button
             type="button"
             className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors pr-5 border-r border-gray-200"
-            onClick={() => setLocation("/")}
+            onClick={() => {
+              trackIntegrationEvent("navigate_dashboard");
+              setLocation("/");
+            }}
           >
             <ArrowLeft className="h-4 w-4" />
             Dashboard
@@ -279,7 +295,10 @@ export default function Integrations() {
           <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
             <button
               type="button"
-              onClick={() => setIntegrationsView("catalog")}
+              onClick={() => {
+                trackIntegrationEvent("switch_view", { view: "catalog" });
+                setIntegrationsView("catalog");
+              }}
               className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
                 integrationsView === "catalog"
                   ? "text-blue-700 bg-blue-50"
@@ -291,7 +310,10 @@ export default function Integrations() {
             </button>
             <button
               type="button"
-              onClick={() => setIntegrationsView("activity")}
+              onClick={() => {
+                trackIntegrationEvent("switch_view", { view: "activity" });
+                setIntegrationsView("activity");
+              }}
               className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
                 integrationsView === "activity"
                   ? "text-blue-700 bg-blue-50"
@@ -308,7 +330,10 @@ export default function Integrations() {
           <button
             type="button"
             className="inline-flex items-center gap-2 rounded-md h-7 px-3 text-xs border bg-primary text-primary-foreground border-primary hover:bg-primary/90"
-            onClick={() => toast.message("Integrations are in roadmap mode. Connect flows are coming soon.")}
+            onClick={() => {
+              trackIntegrationEvent("request_integration");
+              toast.message("Integrations are in roadmap mode. Connect flows are coming soon.");
+            }}
           >
             Request Integration
           </button>
@@ -343,7 +368,10 @@ export default function Integrations() {
                     <button
                       key={tab.key}
                       type="button"
-                      onClick={() => setActiveTab(tab.key)}
+                      onClick={() => {
+                        trackIntegrationEvent("change_tab", { tab: tab.key });
+                        setActiveTab(tab.key);
+                      }}
                       className={
                         activeTab === tab.key
                           ? "text-blue-600 border-b-2 border-blue-600 pb-1"
@@ -362,13 +390,22 @@ export default function Integrations() {
                       placeholder="Search systems..."
                       className="pl-9 h-10"
                       value={searchTerm}
-                      onChange={(event) => setSearchTerm(event.target.value)}
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        setSearchTerm(next);
+                        if (next.trim().length >= 2 || next.trim().length === 0) {
+                          trackIntegrationEvent("search", { queryLength: next.trim().length });
+                        }
+                      }}
                     />
                     {searchTerm ? (
                       <button
                         type="button"
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                        onClick={() => setSearchTerm("")}
+                        onClick={() => {
+                          trackIntegrationEvent("clear_search");
+                          setSearchTerm("");
+                        }}
                         aria-label="Clear search"
                       >
                         <X className="h-4 w-4" />
@@ -380,7 +417,11 @@ export default function Integrations() {
                     <select
                       className="h-9 rounded-md border border-gray-200 bg-white px-3 pr-8 text-sm min-w-[124px] appearance-none"
                       value={categoryFilter}
-                      onChange={(event) => setCategoryFilter(event.target.value as IntegrationCategory | "all")}
+                      onChange={(event) => {
+                        const next = event.target.value as IntegrationCategory | "all";
+                        trackIntegrationEvent("change_category_filter", { category: next });
+                        setCategoryFilter(next);
+                      }}
                     >
                       <option value="all">Categories</option>
                       {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
@@ -396,7 +437,11 @@ export default function Integrations() {
                     variant="outline"
                     size="sm"
                     className="h-9 text-sm"
-                    onClick={() => setShowAdvancedFilters((value) => !value)}
+                    onClick={() => {
+                      const next = !showAdvancedFilters;
+                      trackIntegrationEvent("toggle_advanced_filters", { open: next });
+                      setShowAdvancedFilters(next);
+                    }}
                   >
                     <Filter className="h-4 w-4 mr-2" />
                     Filter
@@ -409,7 +454,13 @@ export default function Integrations() {
                       <select
                         className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 pr-8 text-sm appearance-none"
                         value={trialScope}
-                        onChange={(event) => setTrialScope(event.target.value)}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          trackIntegrationEvent("change_trial_scope", {
+                            trialScope: next,
+                          });
+                          setTrialScope(next);
+                        }}
                       >
                         <option value="all">All Trials</option>
                         {trials.map((trial) => (
@@ -425,7 +476,11 @@ export default function Integrations() {
                       <select
                         className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 pr-8 text-sm appearance-none"
                         value={statusFilter}
-                        onChange={(event) => setStatusFilter(event.target.value as "all" | IntegrationStatus)}
+                        onChange={(event) => {
+                          const next = event.target.value as "all" | IntegrationStatus;
+                          trackIntegrationEvent("change_status_filter", { status: next });
+                          setStatusFilter(next);
+                        }}
                       >
                         <option value="all">All Statuses</option>
                         <option value="coming_soon">Coming soon</option>

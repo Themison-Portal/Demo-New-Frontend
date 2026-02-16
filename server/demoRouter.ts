@@ -1,20 +1,44 @@
 import { protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
+  aiAnalyticsRollups,
+  aiFeatureSnapshots,
+  aiTrainingExamples,
+  collabTelemetryEvents,
+  conversationParticipants,
+  conversations,
+  crossReferences,
   documentCategories,
+  emailChains,
+  executionMaps,
   fileSearchDocuments,
   fileSearchStores,
+  mapPhaseTransitions,
+  mapPhases,
+  mapTaskDependencies,
+  mapTasks,
+  mapTelemetryEvents,
+  messages,
+  knowledgeGraphEdges,
+  knowledgeGraphNodes,
   phaseTransitions,
   phases,
+  protocolMapSections,
+  protocolChunks,
   protocolSections,
   protocols,
   taskDependencies,
   taskScaffolds,
   tasks,
+  threadAnchors,
+  threadParticipants,
+  threads,
+  trialInboxes,
   trials,
 } from "../drizzle/schema";
 import { toDemoId, type DemoMode } from "./_core/demoMode";
-import { inArray, like, or } from "drizzle-orm";
+import { inArray, like, or, sql } from "drizzle-orm";
+import { z } from "zod";
 
 const DEFAULT_CATEGORIES = [
   "Protocol",
@@ -812,54 +836,972 @@ const FULL_TRIALS = FULL_TRIALS_BASE.map((trial) => ({
   ...FULL_TRIAL_DETAILS[trial.id],
 }));
 
-async function wipeModeData(mode: DemoMode | "all") {
-  const db = await getDb();
+type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+type DbTransaction = Parameters<Parameters<DbClient["transaction"]>[0]>[0];
+
+const DEMO_MODE_VALUES = ["sample", "full", "building"] as const;
+const demoModeSchema = z.enum(DEMO_MODE_VALUES);
+const modeLoadInputSchema = z.object({ resetToDefault: z.boolean().optional() }).optional();
+
+const SNAPSHOT_ROW_KEYS = [
+  "trials",
+  "protocols",
+  "protocolSections",
+  "protocolChunks",
+  "fileSearchStores",
+  "fileSearchDocuments",
+  "taskScaffolds",
+  "phases",
+  "tasks",
+  "taskDependencies",
+  "phaseTransitions",
+  "executionMaps",
+  "mapPhases",
+  "mapTasks",
+  "mapTaskDependencies",
+  "mapPhaseTransitions",
+  "protocolMapSections",
+  "mapTelemetryEvents",
+  "conversations",
+  "conversationParticipants",
+  "threads",
+  "threadAnchors",
+  "threadParticipants",
+  "trialInboxes",
+  "emailChains",
+  "messages",
+  "crossReferences",
+  "collabTelemetryEvents",
+  "aiFeatureSnapshots",
+  "aiAnalyticsRollups",
+  "aiTrainingExamples",
+  "knowledgeGraphNodes",
+  "knowledgeGraphEdges",
+] as const;
+
+type SnapshotRows = Record<(typeof SNAPSHOT_ROW_KEYS)[number], unknown[]>;
+
+const demoModeSnapshotSchema = z.object({
+  version: z.literal(1),
+  mode: demoModeSchema,
+  capturedAt: z.string(),
+  rows: z.record(z.string(), z.array(z.unknown())),
+});
+type DemoModeSnapshot = z.infer<typeof demoModeSnapshotSchema>;
+
+type ModeRowCollection = {
+  rows: SnapshotRows;
+  trialIds: string[];
+  protocolIds: number[];
+  scaffoldIds: number[];
+  phaseIds: number[];
+  taskIds: number[];
+  storeIds: number[];
+  mapIds: string[];
+  mapPhaseIds: string[];
+  mapTaskIds: string[];
+  conversationIds: string[];
+  threadIds: string[];
+  inboxIds: string[];
+  emailChainIds: string[];
+  messageIds: string[];
+  crossReferenceIds: string[];
+};
+
+const DEMO_MODE_DEFAULTS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS demo_mode_defaults (
+    mode varchar(16) NOT NULL PRIMARY KEY,
+    payload json NOT NULL,
+    updatedBy int NOT NULL,
+    createdAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updatedAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
+
+let demoModeDefaultsTableReady = false;
+
+function emptySnapshotRows(): SnapshotRows {
+  return {
+    trials: [],
+    protocols: [],
+    protocolSections: [],
+    protocolChunks: [],
+    fileSearchStores: [],
+    fileSearchDocuments: [],
+    taskScaffolds: [],
+    phases: [],
+    tasks: [],
+    taskDependencies: [],
+    phaseTransitions: [],
+    executionMaps: [],
+    mapPhases: [],
+    mapTasks: [],
+    mapTaskDependencies: [],
+    mapPhaseTransitions: [],
+    protocolMapSections: [],
+    mapTelemetryEvents: [],
+    conversations: [],
+    conversationParticipants: [],
+    threads: [],
+    threadAnchors: [],
+    threadParticipants: [],
+    trialInboxes: [],
+    emailChains: [],
+    messages: [],
+    crossReferences: [],
+    collabTelemetryEvents: [],
+    aiFeatureSnapshots: [],
+    aiAnalyticsRollups: [],
+    aiTrainingExamples: [],
+    knowledgeGraphNodes: [],
+    knowledgeGraphEdges: [],
+  };
+}
+
+function normalizeSnapshotRows(input: Record<string, unknown[]>): SnapshotRows {
+  const next = emptySnapshotRows();
+  for (const key of SNAPSHOT_ROW_KEYS) {
+    const value = input[key];
+    next[key] = Array.isArray(value) ? value : [];
+  }
+  return next;
+}
+
+function extractExecuteRows(result: unknown): Array<Record<string, unknown>> {
+  const rows = Array.isArray(result)
+    ? Array.isArray(result[0])
+      ? result[0]
+      : result
+    : result && typeof result === "object" && "rows" in result
+    ? ((result as { rows?: unknown }).rows ?? [])
+    : [];
+
+  if (!Array.isArray(rows)) return [];
+  return rows.filter(
+    (row): row is Record<string, unknown> =>
+      Boolean(row) && typeof row === "object" && !Array.isArray(row)
+  );
+}
+
+function coerceDateValue(value: unknown): unknown {
+  if (value instanceof Date || value === null || value === undefined) return value;
+  if (typeof value !== "string") return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed;
+}
+
+function coerceJsonValue(value: unknown): unknown {
+  if (value === null || value === undefined || typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  const couldBeJson =
+    (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+    (trimmed.startsWith("[") && trimmed.endsWith("]"));
+  if (!couldBeJson) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function toRowObjects(rows: unknown[]): Array<Record<string, unknown>> {
+  return rows.filter(
+    (row): row is Record<string, unknown> =>
+      Boolean(row) && typeof row === "object" && !Array.isArray(row)
+  );
+}
+
+function normalizeRowsForInsert(
+  rows: unknown[],
+  options?: { dateFields?: readonly string[]; jsonFields?: readonly string[] }
+): Array<Record<string, unknown>> {
+  const dateFields = options?.dateFields ?? [];
+  const jsonFields = options?.jsonFields ?? [];
+  return toRowObjects(rows).map((row) => {
+    const next = { ...row };
+    for (const field of dateFields) {
+      next[field] = coerceDateValue(next[field]);
+    }
+    for (const field of jsonFields) {
+      next[field] = coerceJsonValue(next[field]);
+    }
+    return next;
+  });
+}
+
+async function insertSnapshotRows(
+  tx: DbTransaction,
+  table: unknown,
+  rows: unknown[],
+  options?: { dateFields?: readonly string[]; jsonFields?: readonly string[] }
+) {
+  const normalized = normalizeRowsForInsert(rows, options);
+  if (normalized.length === 0) return;
+  await tx.insert(table as never).values(normalized as never);
+}
+
+async function ensureDemoModeDefaultsTable(db: DbClient) {
+  if (demoModeDefaultsTableReady) return;
+  await db.execute(sql.raw(DEMO_MODE_DEFAULTS_TABLE_SQL));
+  demoModeDefaultsTableReady = true;
+}
+
+async function readSavedModeSnapshot(
+  db: DbClient,
+  mode: DemoMode
+): Promise<DemoModeSnapshot | null> {
+  try {
+    await ensureDemoModeDefaultsTable(db);
+  } catch (error) {
+    console.warn("[demo] Could not access demo_mode_defaults table. Continuing without saved defaults.", error);
+    return null;
+  }
+  const result = await db.execute(
+    sql`SELECT payload FROM demo_mode_defaults WHERE mode = ${mode} LIMIT 1`
+  );
+  const rows = extractExecuteRows(result);
+  if (rows.length === 0) return null;
+  const payloadRaw = rows[0]?.payload;
+  let payload: unknown = payloadRaw;
+  if (typeof payloadRaw === "string") {
+    try {
+      payload = JSON.parse(payloadRaw);
+    } catch (error) {
+      console.warn("[demo] Failed to parse saved demo mode snapshot payload", error);
+      return null;
+    }
+  }
+  const parsed = demoModeSnapshotSchema.safeParse(payload);
+  if (!parsed.success) {
+    console.warn("[demo] Invalid saved demo mode snapshot payload", parsed.error.flatten());
+    return null;
+  }
+  return {
+    ...parsed.data,
+    mode,
+    rows: normalizeSnapshotRows(parsed.data.rows),
+  };
+}
+
+async function writeSavedModeSnapshot(
+  db: DbClient,
+  mode: DemoMode,
+  snapshot: DemoModeSnapshot,
+  updatedBy: number
+) {
+  await ensureDemoModeDefaultsTable(db);
+  const payload = JSON.stringify(snapshot);
+  await db.execute(
+    sql`
+      INSERT INTO demo_mode_defaults (mode, payload, updatedBy)
+      VALUES (${mode}, ${payload}, ${updatedBy})
+      ON DUPLICATE KEY UPDATE
+        payload = VALUES(payload),
+        updatedBy = VALUES(updatedBy),
+        updatedAt = CURRENT_TIMESTAMP
+    `
+  );
+}
+
+async function collectModeRows(
+  tx: DbTransaction,
+  mode: DemoMode | "all"
+): Promise<ModeRowCollection> {
+  const trialRows = mode === "all"
+    ? await tx.select().from(trials)
+    : await tx
+        .select()
+        .from(trials)
+        .where(like(trials.id, `${mode}:%`));
+  const trialIds = trialRows.map((row) => row.id);
+
+  if (trialIds.length === 0) {
+    return {
+      rows: emptySnapshotRows(),
+      trialIds: [],
+      protocolIds: [],
+      scaffoldIds: [],
+      phaseIds: [],
+      taskIds: [],
+      storeIds: [],
+      mapIds: [],
+      mapPhaseIds: [],
+      mapTaskIds: [],
+      conversationIds: [],
+      threadIds: [],
+      inboxIds: [],
+      emailChainIds: [],
+      messageIds: [],
+      crossReferenceIds: [],
+    };
+  }
+
+  const protocolRows = await tx
+    .select()
+    .from(protocols)
+    .where(inArray(protocols.trialId, trialIds));
+  const protocolIds = protocolRows.map((row) => row.id);
+
+  const protocolSectionRows = protocolIds.length > 0
+    ? await tx
+        .select()
+        .from(protocolSections)
+        .where(inArray(protocolSections.protocolId, protocolIds))
+    : [];
+
+  const protocolChunkRows = protocolIds.length > 0
+    ? await tx
+        .select()
+        .from(protocolChunks)
+        .where(inArray(protocolChunks.protocolId, protocolIds))
+    : [];
+
+  const scaffoldRows = await tx
+    .select()
+    .from(taskScaffolds)
+    .where(inArray(taskScaffolds.trialId, trialIds));
+  const scaffoldIds = scaffoldRows.map((row) => row.id);
+
+  const phaseRows = scaffoldIds.length > 0
+    ? await tx
+        .select()
+        .from(phases)
+        .where(inArray(phases.scaffoldId, scaffoldIds))
+    : [];
+  const phaseIds = phaseRows.map((row) => row.id);
+
+  const taskRows = phaseIds.length > 0
+    ? await tx
+        .select()
+        .from(tasks)
+        .where(inArray(tasks.phaseId, phaseIds))
+    : [];
+  const taskIds = taskRows.map((row) => row.id);
+
+  const taskDependencyRows = taskIds.length > 0
+    ? await tx
+        .select()
+        .from(taskDependencies)
+        .where(
+          or(
+            inArray(taskDependencies.taskId, taskIds),
+            inArray(taskDependencies.dependsOnTaskId, taskIds)
+          )
+        )
+    : [];
+
+  const phaseTransitionRows = phaseIds.length > 0
+    ? await tx
+        .select()
+        .from(phaseTransitions)
+        .where(
+          or(
+            inArray(phaseTransitions.fromPhaseId, phaseIds),
+            inArray(phaseTransitions.toPhaseId, phaseIds)
+          )
+        )
+    : [];
+
+  const storeRows = await tx
+    .select()
+    .from(fileSearchStores)
+    .where(inArray(fileSearchStores.trialId, trialIds));
+  const storeIds = storeRows.map((row) => row.id);
+
+  const fileDocumentRows =
+    protocolIds.length > 0 && storeIds.length > 0
+      ? await tx
+          .select()
+          .from(fileSearchDocuments)
+          .where(
+            or(
+              inArray(fileSearchDocuments.protocolId, protocolIds),
+              inArray(fileSearchDocuments.storeId, storeIds)
+            )
+          )
+      : protocolIds.length > 0
+      ? await tx
+          .select()
+          .from(fileSearchDocuments)
+          .where(inArray(fileSearchDocuments.protocolId, protocolIds))
+      : storeIds.length > 0
+      ? await tx
+          .select()
+          .from(fileSearchDocuments)
+          .where(inArray(fileSearchDocuments.storeId, storeIds))
+      : [];
+
+  const executionMapRows = await tx
+    .select()
+    .from(executionMaps)
+    .where(inArray(executionMaps.trialId, trialIds));
+  const mapIds = executionMapRows.map((row) => row.id);
+
+  const mapPhaseRows = mapIds.length > 0
+    ? await tx
+        .select()
+        .from(mapPhases)
+        .where(inArray(mapPhases.mapId, mapIds))
+    : [];
+  const mapPhaseIds = mapPhaseRows.map((row) => row.id);
+
+  const mapTaskRows = mapIds.length > 0
+    ? await tx
+        .select()
+        .from(mapTasks)
+        .where(inArray(mapTasks.mapId, mapIds))
+    : [];
+  const mapTaskIds = mapTaskRows.map((row) => row.id);
+
+  const mapTaskDependencyRows = mapTaskIds.length > 0
+    ? await tx
+        .select()
+        .from(mapTaskDependencies)
+        .where(
+          or(
+            inArray(mapTaskDependencies.sourceTaskId, mapTaskIds),
+            inArray(mapTaskDependencies.targetTaskId, mapTaskIds)
+          )
+        )
+    : [];
+
+  const mapPhaseTransitionRows = mapPhaseIds.length > 0
+    ? await tx
+        .select()
+        .from(mapPhaseTransitions)
+        .where(
+          or(
+            inArray(mapPhaseTransitions.fromPhaseId, mapPhaseIds),
+            inArray(mapPhaseTransitions.toPhaseId, mapPhaseIds)
+          )
+        )
+    : [];
+
+  const protocolMapSectionRows = mapIds.length > 0
+    ? await tx
+        .select()
+        .from(protocolMapSections)
+        .where(inArray(protocolMapSections.mapId, mapIds))
+    : [];
+
+  const mapTelemetryRows =
+    mapIds.length > 0
+      ? await tx
+          .select()
+          .from(mapTelemetryEvents)
+          .where(
+            or(
+              inArray(mapTelemetryEvents.mapId, mapIds),
+              inArray(mapTelemetryEvents.trialId, trialIds)
+            )
+          )
+      : await tx
+          .select()
+          .from(mapTelemetryEvents)
+          .where(inArray(mapTelemetryEvents.trialId, trialIds));
+
+  const conversationRows = await tx
+    .select()
+    .from(conversations)
+    .where(inArray(conversations.trialId, trialIds));
+  const conversationIds = conversationRows.map((row) => row.id);
+
+  const conversationParticipantRows = conversationIds.length > 0
+    ? await tx
+        .select()
+        .from(conversationParticipants)
+        .where(inArray(conversationParticipants.conversationId, conversationIds))
+    : [];
+
+  const threadRows = await tx
+    .select()
+    .from(threads)
+    .where(inArray(threads.trialId, trialIds));
+  const threadIds = threadRows.map((row) => row.id);
+
+  const threadAnchorRows = threadIds.length > 0
+    ? await tx
+        .select()
+        .from(threadAnchors)
+        .where(inArray(threadAnchors.threadId, threadIds))
+    : [];
+
+  const threadParticipantRows = threadIds.length > 0
+    ? await tx
+        .select()
+        .from(threadParticipants)
+        .where(inArray(threadParticipants.threadId, threadIds))
+    : [];
+
+  const trialInboxRows = await tx
+    .select()
+    .from(trialInboxes)
+    .where(inArray(trialInboxes.trialId, trialIds));
+  const inboxIds = trialInboxRows.map((row) => row.id);
+
+  const emailChainRows = inboxIds.length > 0
+    ? await tx
+        .select()
+        .from(emailChains)
+        .where(inArray(emailChains.inboxId, inboxIds))
+    : [];
+  const emailChainIds = emailChainRows.map((row) => row.id);
+
+  const messageRows =
+    conversationIds.length > 0 && threadIds.length > 0 && emailChainIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(
+            or(
+              inArray(messages.conversationId, conversationIds),
+              inArray(messages.threadId, threadIds),
+              inArray(messages.emailChainId, emailChainIds)
+            )
+          )
+      : conversationIds.length > 0 && threadIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(
+            or(
+              inArray(messages.conversationId, conversationIds),
+              inArray(messages.threadId, threadIds)
+            )
+          )
+      : conversationIds.length > 0 && emailChainIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(
+            or(
+              inArray(messages.conversationId, conversationIds),
+              inArray(messages.emailChainId, emailChainIds)
+            )
+          )
+      : threadIds.length > 0 && emailChainIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(
+            or(
+              inArray(messages.threadId, threadIds),
+              inArray(messages.emailChainId, emailChainIds)
+            )
+          )
+      : conversationIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(inArray(messages.conversationId, conversationIds))
+      : threadIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(inArray(messages.threadId, threadIds))
+      : emailChainIds.length > 0
+      ? await tx
+          .select()
+          .from(messages)
+          .where(inArray(messages.emailChainId, emailChainIds))
+      : [];
+  const messageIds = messageRows.map((row) => row.id);
+
+  const crossRefEntityIds = Array.from(
+    new Set<string>([
+      ...messageIds,
+      ...threadIds,
+      ...emailChainIds,
+      ...mapTaskIds.map((id) => String(id)),
+      ...taskIds.map((id) => String(id)),
+    ])
+  );
+
+  const crossReferenceRows = crossRefEntityIds.length > 0
+    ? await tx
+        .select()
+        .from(crossReferences)
+        .where(
+          or(
+            inArray(crossReferences.sourceId, crossRefEntityIds),
+            inArray(crossReferences.targetId, crossRefEntityIds)
+          )
+        )
+    : [];
+  const crossReferenceIds = crossReferenceRows.map((row) => row.id);
+
+  const collabTelemetryRows = await tx
+    .select()
+    .from(collabTelemetryEvents)
+    .where(inArray(collabTelemetryEvents.trialId, trialIds));
+
+  const aiFeatureSnapshotRows = await tx
+    .select()
+    .from(aiFeatureSnapshots)
+    .where(inArray(aiFeatureSnapshots.trialId, trialIds));
+
+  const aiAnalyticsRollupRows = await tx
+    .select()
+    .from(aiAnalyticsRollups)
+    .where(inArray(aiAnalyticsRollups.trialId, trialIds));
+
+  const aiTrainingExampleRows = await tx
+    .select()
+    .from(aiTrainingExamples)
+    .where(inArray(aiTrainingExamples.trialId, trialIds));
+
+  const knowledgeGraphNodeRows = await tx
+    .select()
+    .from(knowledgeGraphNodes)
+    .where(inArray(knowledgeGraphNodes.trialId, trialIds));
+
+  const knowledgeGraphEdgeRows = await tx
+    .select()
+    .from(knowledgeGraphEdges)
+    .where(inArray(knowledgeGraphEdges.trialId, trialIds));
+
+  return {
+    rows: {
+      trials: trialRows,
+      protocols: protocolRows,
+      protocolSections: protocolSectionRows,
+      protocolChunks: protocolChunkRows,
+      fileSearchStores: storeRows,
+      fileSearchDocuments: fileDocumentRows,
+      taskScaffolds: scaffoldRows,
+      phases: phaseRows,
+      tasks: taskRows,
+      taskDependencies: taskDependencyRows,
+      phaseTransitions: phaseTransitionRows,
+      executionMaps: executionMapRows,
+      mapPhases: mapPhaseRows,
+      mapTasks: mapTaskRows,
+      mapTaskDependencies: mapTaskDependencyRows,
+      mapPhaseTransitions: mapPhaseTransitionRows,
+      protocolMapSections: protocolMapSectionRows,
+      mapTelemetryEvents: mapTelemetryRows,
+      conversations: conversationRows,
+      conversationParticipants: conversationParticipantRows,
+      threads: threadRows,
+      threadAnchors: threadAnchorRows,
+      threadParticipants: threadParticipantRows,
+      trialInboxes: trialInboxRows,
+      emailChains: emailChainRows,
+      messages: messageRows,
+      crossReferences: crossReferenceRows,
+      collabTelemetryEvents: collabTelemetryRows,
+      aiFeatureSnapshots: aiFeatureSnapshotRows,
+      aiAnalyticsRollups: aiAnalyticsRollupRows,
+      aiTrainingExamples: aiTrainingExampleRows,
+      knowledgeGraphNodes: knowledgeGraphNodeRows,
+      knowledgeGraphEdges: knowledgeGraphEdgeRows,
+    },
+    trialIds,
+    protocolIds,
+    scaffoldIds,
+    phaseIds,
+    taskIds,
+    storeIds,
+    mapIds,
+    mapPhaseIds,
+    mapTaskIds,
+    conversationIds,
+    threadIds,
+    inboxIds,
+    emailChainIds,
+    messageIds,
+    crossReferenceIds,
+  };
+}
+
+async function captureModeSnapshot(
+  mode: DemoMode,
+  dbClient?: DbClient
+): Promise<DemoModeSnapshot> {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = await db.transaction(async (tx) => {
+    const collected = await collectModeRows(tx, mode);
+    return collected.rows;
+  });
+  return {
+    version: 1,
+    mode,
+    capturedAt: new Date().toISOString(),
+    rows,
+  };
+}
+
+async function restoreModeSnapshot(
+  snapshot: DemoModeSnapshot,
+  dbClient?: DbClient
+) {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+  const rows = normalizeSnapshotRows(snapshot.rows);
+  await db.transaction(async (tx) => {
+    await insertSnapshotRows(tx, trials, rows.trials, {
+      dateFields: ["startDate", "endDate", "createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, protocols, rows.protocols, {
+      dateFields: ["archivedAt", "createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, protocolSections, rows.protocolSections, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, protocolChunks, rows.protocolChunks, {
+      dateFields: ["createdAt", "updatedAt"],
+      jsonFields: ["metadata"],
+    });
+    await insertSnapshotRows(tx, fileSearchStores, rows.fileSearchStores, {
+      dateFields: ["createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, fileSearchDocuments, rows.fileSearchDocuments, {
+      dateFields: ["uploadedAt"],
+    });
+    await insertSnapshotRows(tx, taskScaffolds, rows.taskScaffolds, {
+      dateFields: ["confirmedAt", "createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, phases, rows.phases, {
+      dateFields: ["createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, tasks, rows.tasks, {
+      dateFields: ["suggestedDate", "createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, taskDependencies, rows.taskDependencies, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, phaseTransitions, rows.phaseTransitions, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, executionMaps, rows.executionMaps, {
+      dateFields: ["createdAt", "launchedAt", "updatedAt"],
+      jsonFields: ["metadata"],
+    });
+    await insertSnapshotRows(tx, mapPhases, rows.mapPhases, {
+      dateFields: ["estimatedDate", "windowStart", "windowEnd", "createdAt", "updatedAt"],
+      jsonFields: ["protocolRef"],
+    });
+    await insertSnapshotRows(tx, mapTasks, rows.mapTasks, {
+      dateFields: [
+        "blockedSince",
+        "suggestedDate",
+        "dueDate",
+        "startDate",
+        "completedDate",
+        "createdAt",
+        "updatedAt",
+      ],
+      jsonFields: ["tags", "protocolRefs"],
+    });
+    await insertSnapshotRows(tx, mapTaskDependencies, rows.mapTaskDependencies, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, mapPhaseTransitions, rows.mapPhaseTransitions, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, protocolMapSections, rows.protocolMapSections, {
+      dateFields: ["dateReference", "createdAt"],
+      jsonFields: ["linkedPhaseIds", "linkedTaskIds"],
+    });
+    await insertSnapshotRows(tx, mapTelemetryEvents, rows.mapTelemetryEvents, {
+      dateFields: ["createdAt"],
+      jsonFields: ["payload"],
+    });
+    await insertSnapshotRows(tx, conversations, rows.conversations, {
+      dateFields: ["createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, conversationParticipants, rows.conversationParticipants, {
+      dateFields: ["joinedAt", "lastReadAt"],
+    });
+    await insertSnapshotRows(tx, threads, rows.threads, {
+      dateFields: ["resolvedAt", "createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, threadAnchors, rows.threadAnchors, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, threadParticipants, rows.threadParticipants, {
+      dateFields: ["joinedAt", "lastReadAt"],
+    });
+    await insertSnapshotRows(tx, trialInboxes, rows.trialInboxes, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, emailChains, rows.emailChains, {
+      dateFields: ["createdAt", "updatedAt"],
+      jsonFields: ["aiLabels", "toAddresses", "ccAddresses"],
+    });
+    await insertSnapshotRows(tx, messages, rows.messages, {
+      dateFields: ["editedAt", "createdAt"],
+      jsonFields: ["embeddedContent"],
+    });
+    await insertSnapshotRows(tx, crossReferences, rows.crossReferences, {
+      dateFields: ["createdAt"],
+    });
+    await insertSnapshotRows(tx, collabTelemetryEvents, rows.collabTelemetryEvents, {
+      dateFields: ["createdAt"],
+      jsonFields: ["eventData"],
+    });
+    await insertSnapshotRows(tx, aiFeatureSnapshots, rows.aiFeatureSnapshots, {
+      dateFields: ["createdAt"],
+      jsonFields: ["featureVector"],
+    });
+    await insertSnapshotRows(tx, aiAnalyticsRollups, rows.aiAnalyticsRollups, {
+      dateFields: ["createdAt", "updatedAt"],
+    });
+    await insertSnapshotRows(tx, aiTrainingExamples, rows.aiTrainingExamples, {
+      dateFields: ["createdAt"],
+      jsonFields: ["metadata"],
+    });
+    await insertSnapshotRows(tx, knowledgeGraphNodes, rows.knowledgeGraphNodes, {
+      dateFields: ["createdAt", "updatedAt"],
+      jsonFields: ["properties"],
+    });
+    await insertSnapshotRows(tx, knowledgeGraphEdges, rows.knowledgeGraphEdges, {
+      dateFields: ["createdAt"],
+      jsonFields: ["properties"],
+    });
+  });
+}
+
+async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
+  const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
 
   await db.transaction(async (tx) => {
-    const trialRows = mode === "all"
-      ? await tx.select({ id: trials.id }).from(trials)
-      : await tx
-          .select({ id: trials.id })
-          .from(trials)
-          .where(like(trials.id, `${mode}:%`));
-
-    const trialIds = trialRows.map((row) => row.id);
+    const collected = await collectModeRows(tx, mode);
+    const {
+      trialIds,
+      protocolIds,
+      scaffoldIds,
+      phaseIds,
+      taskIds,
+      storeIds,
+      mapIds,
+      mapPhaseIds,
+      mapTaskIds,
+      conversationIds,
+      threadIds,
+      inboxIds,
+      emailChainIds,
+      messageIds,
+      crossReferenceIds,
+    } = collected;
     if (trialIds.length === 0) return;
 
-    const protocolRows = await tx
-      .select({ id: protocols.id })
-      .from(protocols)
-      .where(inArray(protocols.trialId, trialIds));
-    const protocolIds = protocolRows.map((row) => row.id);
+    if (crossReferenceIds.length > 0) {
+      await tx
+        .delete(crossReferences)
+        .where(inArray(crossReferences.id, crossReferenceIds));
+    }
 
-    const scaffoldRows = await tx
-      .select({ id: taskScaffolds.id })
-      .from(taskScaffolds)
-      .where(inArray(taskScaffolds.trialId, trialIds));
-    const scaffoldIds = scaffoldRows.map((row) => row.id);
+    if (messageIds.length > 0) {
+      await tx.delete(messages).where(inArray(messages.id, messageIds));
+    }
 
-    const phaseRows = scaffoldIds.length > 0
-      ? await tx
-          .select({ id: phases.id })
-          .from(phases)
-          .where(inArray(phases.scaffoldId, scaffoldIds))
-      : [];
-    const phaseIds = phaseRows.map((row) => row.id);
+    if (emailChainIds.length > 0) {
+      await tx
+        .delete(emailChains)
+        .where(inArray(emailChains.id, emailChainIds));
+    }
 
-    const taskRows = phaseIds.length > 0
-      ? await tx
-          .select({ id: tasks.id })
-          .from(tasks)
-          .where(inArray(tasks.phaseId, phaseIds))
-      : [];
-    const taskIds = taskRows.map((row) => row.id);
+    if (inboxIds.length > 0) {
+      await tx
+        .delete(trialInboxes)
+        .where(inArray(trialInboxes.id, inboxIds));
+    }
 
-    const storeRows = await tx
-      .select({ id: fileSearchStores.id })
-      .from(fileSearchStores)
-      .where(inArray(fileSearchStores.trialId, trialIds));
-    const storeIds = storeRows.map((row) => row.id);
+    if (threadIds.length > 0) {
+      await tx
+        .delete(threadAnchors)
+        .where(inArray(threadAnchors.threadId, threadIds));
+      await tx
+        .delete(threadParticipants)
+        .where(inArray(threadParticipants.threadId, threadIds));
+      await tx
+        .delete(threads)
+        .where(inArray(threads.id, threadIds));
+    }
+
+    if (conversationIds.length > 0) {
+      await tx
+        .delete(conversationParticipants)
+        .where(inArray(conversationParticipants.conversationId, conversationIds));
+      await tx
+        .delete(conversations)
+        .where(inArray(conversations.id, conversationIds));
+    }
+
+    await tx
+      .delete(collabTelemetryEvents)
+      .where(inArray(collabTelemetryEvents.trialId, trialIds));
+
+    if (mapTaskIds.length > 0) {
+      await tx
+        .delete(mapTaskDependencies)
+        .where(
+          or(
+            inArray(mapTaskDependencies.sourceTaskId, mapTaskIds),
+            inArray(mapTaskDependencies.targetTaskId, mapTaskIds)
+          )
+        );
+      await tx
+        .delete(mapTasks)
+        .where(inArray(mapTasks.id, mapTaskIds));
+    }
+
+    if (mapPhaseIds.length > 0) {
+      await tx
+        .delete(mapPhaseTransitions)
+        .where(
+          or(
+            inArray(mapPhaseTransitions.fromPhaseId, mapPhaseIds),
+            inArray(mapPhaseTransitions.toPhaseId, mapPhaseIds)
+          )
+        );
+      await tx
+        .delete(mapPhases)
+        .where(inArray(mapPhases.id, mapPhaseIds));
+    }
+
+    if (mapIds.length > 0) {
+      await tx
+        .delete(protocolMapSections)
+        .where(inArray(protocolMapSections.mapId, mapIds));
+      await tx
+        .delete(mapTelemetryEvents)
+        .where(
+          or(
+            inArray(mapTelemetryEvents.mapId, mapIds),
+            inArray(mapTelemetryEvents.trialId, trialIds)
+          )
+        );
+      await tx
+        .delete(executionMaps)
+        .where(inArray(executionMaps.id, mapIds));
+    } else {
+      await tx
+        .delete(mapTelemetryEvents)
+        .where(inArray(mapTelemetryEvents.trialId, trialIds));
+    }
+
+    await tx
+      .delete(knowledgeGraphEdges)
+      .where(inArray(knowledgeGraphEdges.trialId, trialIds));
+    await tx
+      .delete(knowledgeGraphNodes)
+      .where(inArray(knowledgeGraphNodes.trialId, trialIds));
+
+    await tx
+      .delete(aiTrainingExamples)
+      .where(inArray(aiTrainingExamples.trialId, trialIds));
+    await tx
+      .delete(aiAnalyticsRollups)
+      .where(inArray(aiAnalyticsRollups.trialId, trialIds));
+    await tx
+      .delete(aiFeatureSnapshots)
+      .where(inArray(aiFeatureSnapshots.trialId, trialIds));
 
     if (taskIds.length > 0) {
       await tx
@@ -870,12 +1812,12 @@ async function wipeModeData(mode: DemoMode | "all") {
             inArray(taskDependencies.dependsOnTaskId, taskIds)
           )
         );
+      await tx
+        .delete(tasks)
+        .where(inArray(tasks.id, taskIds));
     }
 
     if (phaseIds.length > 0) {
-      await tx
-        .delete(tasks)
-        .where(inArray(tasks.phaseId, phaseIds));
       await tx
         .delete(phaseTransitions)
         .where(
@@ -886,7 +1828,7 @@ async function wipeModeData(mode: DemoMode | "all") {
         );
       await tx
         .delete(phases)
-        .where(inArray(phases.scaffoldId, scaffoldIds));
+        .where(inArray(phases.id, phaseIds));
     }
 
     if (scaffoldIds.length > 0) {
@@ -900,8 +1842,14 @@ async function wipeModeData(mode: DemoMode | "all") {
         .delete(protocolSections)
         .where(inArray(protocolSections.protocolId, protocolIds));
       await tx
+        .delete(protocolChunks)
+        .where(inArray(protocolChunks.protocolId, protocolIds));
+      await tx
         .delete(fileSearchDocuments)
         .where(inArray(fileSearchDocuments.protocolId, protocolIds));
+      await tx
+        .delete(protocols)
+        .where(inArray(protocols.id, protocolIds));
     }
 
     if (storeIds.length > 0) {
@@ -913,38 +1861,36 @@ async function wipeModeData(mode: DemoMode | "all") {
         .where(inArray(fileSearchStores.id, storeIds));
     }
 
-    if (protocolIds.length > 0) {
-      await tx
-        .delete(protocols)
-        .where(inArray(protocols.id, protocolIds));
-    }
-
     await tx.delete(trials).where(inArray(trials.id, trialIds));
   });
 }
 
-async function seedCategories() {
-  const db = await getDb();
+async function seedCategories(dbClient?: DbClient) {
+  const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
 
-  await db.insert(documentCategories).values(
-    DEFAULT_CATEGORIES.map((name) => ({
-      name,
-      isDefault: true,
-    }))
-  ).onDuplicateKeyUpdate({
-    set: {
-      isDefault: true,
-    },
-  });
+  await db
+    .insert(documentCategories)
+    .values(
+      DEFAULT_CATEGORIES.map((name) => ({
+        name,
+        isDefault: true,
+      }))
+    )
+    .onDuplicateKeyUpdate({
+      set: {
+        isDefault: true,
+      },
+    });
 }
 
 async function seedTrials(
   data: typeof SAMPLE_TRIALS,
   createdBy: number,
-  mode: DemoMode
+  mode: DemoMode,
+  dbClient?: DbClient
 ) {
-  const db = await getDb();
+  const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
 
   await db.insert(trials).values(
@@ -956,47 +1902,161 @@ async function seedTrials(
   );
 }
 
+async function seedBaseModeData(
+  mode: DemoMode,
+  createdBy: number,
+  dbClient?: DbClient
+) {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (mode === "sample") {
+    await seedCategories(db);
+    await seedTrials(SAMPLE_TRIALS, createdBy, "sample", db);
+    return;
+  }
+  if (mode === "full") {
+    await seedCategories(db);
+    await seedTrials(FULL_TRIALS, createdBy, "full", db);
+    return;
+  }
+  // Building mode baseline is intentionally empty.
+}
+
+async function resetModeToDefault(
+  mode: DemoMode,
+  createdBy: number,
+  dbClient?: DbClient,
+  options?: { modeAlreadyWiped?: boolean }
+) {
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+
+  if (!options?.modeAlreadyWiped) {
+    await wipeModeData(mode, db);
+  }
+
+  const savedSnapshot = await readSavedModeSnapshot(db, mode);
+  if (savedSnapshot) {
+    try {
+      await restoreModeSnapshot(savedSnapshot, db);
+      if (mode !== "building") {
+        await seedCategories(db);
+      }
+      return { restoredFromSavedDefault: true };
+    } catch (error) {
+      console.error(`[demo] Failed restoring saved default for mode '${mode}', falling back to base seed.`, error);
+      await wipeModeData(mode, db);
+    }
+  }
+
+  await seedBaseModeData(mode, createdBy, db);
+  return { restoredFromSavedDefault: false };
+}
+
 export const demoRouter = router({
   resetToEmpty: protectedProcedure.mutation(async () => {
     await wipeModeData("building");
     return { ok: true };
   }),
 
-  loadSampleData: protectedProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new Error("Database not available");
-    const existing = await db
-      .select({ id: trials.id })
-      .from(trials)
-      .where(like(trials.id, "sample:%"))
-      .limit(1);
-    if (existing.length === 0) {
-      await seedCategories();
-      await seedTrials(SAMPLE_TRIALS, ctx.user.id, "sample");
-    }
-    return { ok: true, mode: "sample" as const };
-  }),
+  saveModeDefault: protectedProcedure
+    .input(z.object({ mode: demoModeSchema }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      const snapshot = await captureModeSnapshot(input.mode, db);
+      await writeSavedModeSnapshot(db, input.mode, snapshot, ctx.user.id);
+      return {
+        ok: true,
+        mode: input.mode,
+        restoredTrialCount: snapshot.rows.trials.length,
+      };
+    }),
 
-  loadFullDataset: protectedProcedure.mutation(async ({ ctx }) => {
-    const db = await getDb();
-    if (!db) throw new Error("Database not available");
-    const existing = await db
-      .select({ id: trials.id })
-      .from(trials)
-      .where(like(trials.id, "full:%"))
-      .limit(1);
-    if (existing.length === 0) {
-      await seedCategories();
-      await seedTrials(FULL_TRIALS, ctx.user.id, "full");
-    }
-    return { ok: true, mode: "full" as const };
-  }),
+  loadSampleData: protectedProcedure
+    .input(modeLoadInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const shouldResetToDefault = input?.resetToDefault === true;
+      if (shouldResetToDefault) {
+        const result = await resetModeToDefault("sample", ctx.user.id, db);
+        return { ok: true, mode: "sample" as const, ...result };
+      }
+
+      const existing = await db
+        .select({ id: trials.id })
+        .from(trials)
+        .where(like(trials.id, "sample:%"))
+        .limit(1);
+
+      if (existing.length === 0) {
+        const result = await resetModeToDefault("sample", ctx.user.id, db);
+        return { ok: true, mode: "sample" as const, ...result };
+      }
+
+      return { ok: true, mode: "sample" as const, restoredFromSavedDefault: false };
+    }),
+
+  loadFullDataset: protectedProcedure
+    .input(modeLoadInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+
+      const shouldResetToDefault = input?.resetToDefault === true;
+      if (shouldResetToDefault) {
+        const result = await resetModeToDefault("full", ctx.user.id, db);
+        return { ok: true, mode: "full" as const, ...result };
+      }
+
+      const existing = await db
+        .select({ id: trials.id })
+        .from(trials)
+        .where(like(trials.id, "full:%"))
+        .limit(1);
+
+      if (existing.length === 0) {
+        const result = await resetModeToDefault("full", ctx.user.id, db);
+        return { ok: true, mode: "full" as const, ...result };
+      }
+
+      return { ok: true, mode: "full" as const, restoredFromSavedDefault: false };
+    }),
+
+  loadBuildingMode: protectedProcedure
+    .input(modeLoadInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      const shouldResetToDefault = input?.resetToDefault === true;
+      if (!shouldResetToDefault) {
+        return { ok: true, mode: "building" as const, restoredFromSavedDefault: false };
+      }
+      const result = await resetModeToDefault("building", ctx.user.id, db);
+      return { ok: true, mode: "building" as const, ...result };
+    }),
 
   fullReset: protectedProcedure.mutation(async ({ ctx }) => {
-    await wipeModeData("all");
-    await seedCategories();
-    await seedTrials(SAMPLE_TRIALS, ctx.user.id, "sample");
-    await seedTrials(FULL_TRIALS, ctx.user.id, "full");
-    return { ok: true };
+    const db = await getDb();
+    if (!db) throw new Error("Database not available");
+
+    await wipeModeData("all", db);
+    const sampleResult = await resetModeToDefault("sample", ctx.user.id, db, { modeAlreadyWiped: true });
+    const fullResult = await resetModeToDefault("full", ctx.user.id, db, { modeAlreadyWiped: true });
+    const buildingResult = await resetModeToDefault("building", ctx.user.id, db, {
+      modeAlreadyWiped: true,
+    });
+
+    return {
+      ok: true,
+      restoredFromSavedDefault: {
+        sample: sampleResult.restoredFromSavedDefault,
+        full: fullResult.restoredFromSavedDefault,
+        building: buildingResult.restoredFromSavedDefault,
+      },
+    };
   }),
 });

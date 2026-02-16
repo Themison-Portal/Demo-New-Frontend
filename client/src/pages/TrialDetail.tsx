@@ -263,7 +263,15 @@ export default function TrialDetail() {
 
   const { data: protocols = [] } = trpc.documents.list.useQuery(
     { trialId, demoMode: currentDataMode },
-    { enabled: isValidTrialId }
+    {
+      enabled: isValidTrialId,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
+      refetchIntervalInBackground: true,
+    }
   );
 
   const protocolId = protocols?.[0]?.id;
@@ -858,11 +866,22 @@ export default function TrialDetail() {
     }
   }, [activeTab]);
 
-  const hasProtocolInHub = protocols.some((doc: any) => {
+  const hasProtocolInHubFromList = protocols.some((doc: any) => {
     const category = String(doc?.category || "").toLowerCase();
     const filename = String(doc?.filename || "").toLowerCase();
+    const isArchived = Boolean(doc?.archivedAt);
+    if (isArchived) return false;
     return category.includes("protocol") || filename.includes("protocol");
   });
+  const trialContextDocuments = (trialContext?.documents || null) as
+    | {
+        protocolCount?: number | null;
+        currentProtocol?: { id?: number | null } | null;
+      }
+    | null;
+  const hasProtocolInHubFromContext =
+    Number(trialContextDocuments?.protocolCount || 0) > 0 || Boolean(trialContextDocuments?.currentProtocol?.id);
+  const hasProtocolInHub = hasProtocolInHubFromList || hasProtocolInHubFromContext;
   const timelineReady = Boolean(trial?.startDate) && Boolean(trial?.endDate);
   const trialStatusValue = (trial?.status || "not-started").toLowerCase();
   const trialStatusLabel =

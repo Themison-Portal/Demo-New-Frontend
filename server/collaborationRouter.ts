@@ -70,6 +70,7 @@ const collabIntentSchema = z.enum([
 type CollabIntent = z.infer<typeof collabIntentSchema>;
 
 type CollabLayer = z.infer<typeof layerSchema>;
+type ThreadCategory = z.infer<typeof threadCategorySchema>;
 
 type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -340,6 +341,37 @@ async function logCollabEvent(db: DbClient, params: {
   });
 }
 
+function toThreadCreationEventType(category: ThreadCategory): "question_created" | "action_created" | null {
+  if (category === "question" || category === "clarification") return "question_created";
+  if (category === "action_required") return "action_created";
+  return null;
+}
+
+async function logThreadCreationEntityEvent(params: {
+  trialId: string;
+  userId: number | null;
+  threadId: string;
+  category: ThreadCategory;
+  source: "manual" | "from_message" | "from_email";
+}) {
+  const eventType = toThreadCreationEventType(params.category);
+  if (!eventType) return;
+
+  await logTelemetryEvent({
+    eventType,
+    action: "created",
+    userId: params.userId ? String(params.userId) : null,
+    entityType: eventType === "question_created" ? "question" : "action",
+    entityId: params.threadId,
+    payload: {
+      trialId: params.trialId,
+      category: params.category,
+      source: params.source,
+      threadId: params.threadId,
+    },
+  });
+}
+
 async function getTrialIdForMessageEntity(db: DbClient, record: {
   conversationId: string | null;
   threadId: string | null;
@@ -427,6 +459,23 @@ async function createAiMessage(options: {
   threadId?: string;
   emailChainId?: string;
 }) {
+  const intentHint = classifyIntentHeuristic(options.question);
+  await logCollabEvent(options.db, {
+    trialId: options.trialId,
+    userId: options.userId,
+    eventType: "ai_query_submitted",
+    layer: options.layer,
+    aiInvolved: true,
+    eventData: {
+      question: options.question,
+      questionLength: options.question.length,
+      intentHint,
+      conversationId: options.conversationId ?? null,
+      threadId: options.threadId ?? null,
+      emailChainId: options.emailChainId ?? null,
+    },
+  });
+
   const response = await generateAIResponse({
     db: options.db,
     trialId: options.trialId,
@@ -1016,6 +1065,14 @@ export const collaborationRouter = router({
             category: input.category,
             source: input.source,
           },
+        });
+
+        await logThreadCreationEntityEvent({
+          trialId: input.trialId,
+          userId: ctx.user.id,
+          threadId,
+          category: input.category,
+          source: input.source,
         });
 
         return { id: threadId };
@@ -1730,6 +1787,14 @@ export const collaborationRouter = router({
           },
         });
 
+        await logThreadCreationEntityEvent({
+          trialId: chainWithTrial.trialId,
+          userId: ctx.user.id,
+          threadId,
+          category: input.category,
+          source: "from_email",
+        });
+
         return { threadId };
       }),
 
@@ -1849,6 +1914,14 @@ export const collaborationRouter = router({
             messageId: input.messageId,
             threadId,
           },
+        });
+
+        await logThreadCreationEntityEvent({
+          trialId,
+          userId: ctx.user.id,
+          threadId,
+          category: input.category,
+          source: "from_message",
         });
 
         return { threadId };

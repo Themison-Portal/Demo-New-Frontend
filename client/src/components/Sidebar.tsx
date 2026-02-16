@@ -285,12 +285,12 @@ export function Sidebar() {
       case 'sample':
         return {
           title: 'Load Sample Data',
-          description: 'Switch to the Sample dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'
+          description: 'Switch to Sample mode. On first open in a new browser session, Sample starts from its saved default.'
         };
       case 'full':
         return {
           title: 'Load Full Dataset',
-          description: 'Switch to the Full dataset. Your work in other modes is preserved and can be resumed later. Only Full Reset or Reset to Empty will wipe data.'
+          description: 'Switch to Full mode. On first open in a new browser session, Full starts from its saved default.'
         };
       default:
         return { title: '', description: '' };

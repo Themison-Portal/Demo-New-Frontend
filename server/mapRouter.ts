@@ -966,6 +966,35 @@ async function trackMapEvent(input: {
   }
 }
 
+async function trackCreatedEntityEvent(input: {
+  eventType: "map_created" | "phase_created" | "task_created";
+  userId?: number | null;
+  entityType: "map" | "phase" | "task";
+  entityId: string;
+  trialId: string;
+  mapId?: string | null;
+  payload?: Record<string, unknown>;
+  aiInvolved?: boolean;
+}) {
+  try {
+    await logTelemetryEvent({
+      eventType: input.eventType,
+      action: "created",
+      userId: input.userId ? String(input.userId) : null,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      payload: {
+        trialId: input.trialId,
+        mapId: input.mapId ?? null,
+        ...(input.payload || {}),
+      },
+      aiInvolved: input.aiInvolved ?? false,
+    });
+  } catch (error) {
+    console.warn("[map.telemetry] failed to emit canonical creation event", error);
+  }
+}
+
 async function getMapByIdOrThrow(mapId: string) {
   const db = await getDb();
   if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
@@ -1597,6 +1626,23 @@ export const mapRouter = router({
             category,
             name: normalizedName,
           });
+
+          await trackCreatedEntityEvent({
+            eventType: "task_created",
+            userId: ctx.user.id,
+            entityType: "task",
+            entityId: newTaskId,
+            trialId: targetMap.trialId,
+            mapId: targetMap.id,
+            payload: {
+              phaseId: newPhaseId,
+              category,
+              status: legacyTask.status === "completed" ? "confirmed" : "suggested",
+              createdBy: "ai",
+              source: "legacy_scaffold_import",
+            },
+            aiInvolved: true,
+          });
         }
       }
 
@@ -1770,6 +1816,23 @@ export const mapRouter = router({
           protocolRefs,
           category: inputTask.category,
           name: inputTask.name,
+        });
+
+        await trackCreatedEntityEvent({
+          eventType: "task_created",
+          userId: ctx.user.id,
+          entityType: "task",
+          entityId: id,
+          trialId: targetMap.trialId,
+          mapId: targetMap.id,
+          payload: {
+            phaseId: inputTask.phaseId,
+            category: inputTask.category,
+            status: "suggested",
+            createdBy: "ai",
+            source: "auto_schedule_enrichment",
+          },
+          aiInvolved: true,
         });
       };
 
@@ -2318,6 +2381,21 @@ export const mapRouter = router({
         payload: { status: input.status, version: input.version ?? 1 },
       });
 
+      await trackCreatedEntityEvent({
+        eventType: "map_created",
+        userId: ctx.user.id,
+        entityType: "map",
+        entityId: id,
+        trialId: input.trialId,
+        mapId: id,
+        payload: {
+          protocolId: input.protocolId,
+          status: input.status,
+          version: input.version ?? 1,
+        },
+        aiInvolved: false,
+      });
+
       const [created] = await db.select().from(executionMaps).where(eq(executionMaps.id, id)).limit(1);
       return created;
     }),
@@ -2570,6 +2648,21 @@ export const mapRouter = router({
         targetType: "phase",
         payload: { name: input.name },
       });
+
+      await trackCreatedEntityEvent({
+        eventType: "phase_created",
+        userId: ctx.user.id,
+        entityType: "phase",
+        entityId: id,
+        trialId: map.trialId,
+        mapId: map.id,
+        payload: {
+          phaseType: input.phaseType ?? "custom",
+          displayOrder: nextOrder,
+          name: input.name,
+        },
+      });
+
       const [created] = await db.select().from(mapPhases).where(eq(mapPhases.id, id)).limit(1);
       return created;
     }),
@@ -2847,6 +2940,23 @@ export const mapRouter = router({
         targetId: id,
         targetType: "task",
         payload: { status: input.task.status, category: input.task.category },
+      });
+
+      await trackCreatedEntityEvent({
+        eventType: "task_created",
+        userId: ctx.user.id,
+        entityType: "task",
+        entityId: id,
+        trialId: map.trialId,
+        mapId: map.id,
+        payload: {
+          phaseId: input.phaseId,
+          status: input.task.status,
+          category: input.task.category,
+          createdBy: input.task.createdBy,
+          isCustom: input.task.isCustom,
+        },
+        aiInvolved: input.task.createdBy === "ai",
       });
 
       const [created] = await db.select().from(mapTasks).where(eq(mapTasks.id, id)).limit(1);

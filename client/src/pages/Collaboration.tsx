@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { CollaborationHub } from "@/components/collaboration/CollaborationHub";
 import { trpc } from "@/lib/trpc";
 import { useDemoState } from "@/contexts/DemoStateContext";
+import { logEvent } from "@/lib/telemetry";
 
 export default function Collaboration() {
   const { getCurrentDataMode } = useDemoState();
@@ -12,6 +14,19 @@ export default function Collaboration() {
       ? new URLSearchParams(window.location.search).get("trialId")
       : null;
   const trialId = trialIdFromQuery || trials[0]?.id || "";
+
+  useEffect(() => {
+    logEvent({
+      eventType: "feature_used",
+      action: trialId ? "open_collaboration_context" : "open_collaboration_without_trial",
+      entityType: "trial",
+      entityId: trialId || undefined,
+      payload: {
+        demoMode: currentDataMode,
+        source: trialIdFromQuery ? "query_param" : "default_first_trial",
+      },
+    });
+  }, [currentDataMode, trialId, trialIdFromQuery]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden px-8 pb-1 pt-4">
