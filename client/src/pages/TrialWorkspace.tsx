@@ -88,6 +88,16 @@ export function TrialWorkspace() {
 
   // Fetch trials from database
   const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
+  const executionWorkspaceQuery = trpc.map.loadWorkspace.useQuery(
+    {
+      trialIds: trials.map((trial) => trial.id),
+      includeArchived: false,
+      demoMode: currentDataMode,
+    },
+    {
+      enabled: trials.length > 0,
+    }
+  );
   const createTrialMutation = trpc.trials.create.useMutation({
     onError: (error) => {
       toast.error(`Failed to create trial: ${error.message}`);
@@ -133,7 +143,49 @@ export function TrialWorkspace() {
     return new Map((state.teamMembers || []).map((member) => [String(member.id), member]));
   }, [state.teamMembers]);
 
+  const taskProgressByTrial = useMemo(() => {
+    const summaryByTrial = new Map<
+      string,
+      {
+        total: number;
+        completed: number;
+        percent: number;
+      }
+    >();
+
+    const rows = (executionWorkspaceQuery.data || []) as Array<{
+      map?: { trialId?: string };
+      tasks?: Array<{ status?: string | null }>;
+    }>;
+
+    for (const row of rows) {
+      const trialId = String(row?.map?.trialId || "").toLowerCase();
+      if (!trialId) continue;
+      const trialTasks = Array.isArray(row?.tasks) ? row.tasks : [];
+      const total = trialTasks.length;
+      const completed = trialTasks.filter((task) => {
+        const status = String(task?.status || "").toLowerCase();
+        return status === "done" || status === "completed";
+      }).length;
+      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+      summaryByTrial.set(trialId, {
+        total,
+        completed,
+        percent,
+      });
+    }
+
+    return summaryByTrial;
+  }, [executionWorkspaceQuery.data]);
+
   const trialsWithMeta = useMemo(() => {
+    const parseSampleSizeToNumber = (value?: string | null) => {
+      const digits = String(value ?? "").replace(/[^0-9]/g, "");
+      if (!digits) return 0;
+      const parsed = Number.parseInt(digits, 10);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const memberSites = (state.teamMembers || [])
       .map((member) => member.site)
       .filter((site): site is string => Boolean(site));
@@ -184,11 +236,19 @@ export function TrialWorkspace() {
         ? assignedMembers.some((member) => String(member?.team || "").toLowerCase() === currentTeam)
         : false;
       const enrolledPatients = Number(trial.enrolledPatients || 0);
-      const targetPatients = Number(trial.targetPatients || 0);
+      const targetPatients =
+        Number(trial.targetPatients || 0) > 0
+          ? Number(trial.targetPatients || 0)
+          : parseSampleSizeToNumber((trial as { sampleSize?: string | null }).sampleSize);
       const enrollmentProgress =
         targetPatients > 0
           ? (enrolledPatients / targetPatients) * 100
           : Number(trial.completionPercentage || 0);
+      const taskProgress = taskProgressByTrial.get(normalizedTrialId) || {
+        total: 0,
+        completed: 0,
+        percent: 0,
+      };
       const searchHaystack = [
         trial.id,
         trial.title,
@@ -215,12 +275,15 @@ export function TrialWorkspace() {
         __isUnassigned: assignedMemberIds.length === 0,
         __piName: piName,
         __enrollmentProgress: enrollmentProgress,
+        __taskTotal: taskProgress.total,
+        __taskCompleted: taskProgress.completed,
+        __taskCompletionPercent: taskProgress.percent,
         __searchHaystack: searchHaystack,
       };
     });
 
     return withLocations;
-  }, [trials, state.teamMembers, teamMemberById, currentDataMode, currentMember]);
+  }, [trials, state.teamMembers, teamMemberById, currentDataMode, currentMember, taskProgressByTrial]);
 
   const locationOptions = useMemo(() => {
     const unique = Array.from(
@@ -1228,6 +1291,7 @@ export function TrialWorkspace() {
           initialValues={{
             name: "",
             email: "",
+            avatar: null,
             clinicalRole: "Principal Investigator",
             appRole: "Admin",
             team: "",
@@ -1376,7 +1440,13 @@ export function TrialWorkspace() {
                   {activeTrials.map((trial) => (
                     <TrialCard
                       key={trial.id}
-                      trial={{ ...trial, teamCount: (trial as any).__teamCount }}
+                      trial={{
+                        ...trial,
+                        teamCount: (trial as any).__teamCount,
+                        taskCompleted: (trial as any).__taskCompleted,
+                        taskTotal: (trial as any).__taskTotal,
+                        taskCompletionPercentage: (trial as any).__taskCompletionPercent,
+                      }}
                     />
                   ))}
                 </div>
@@ -1404,7 +1474,13 @@ export function TrialWorkspace() {
                   {pausedTrials.map((trial) => (
                     <TrialCard
                       key={trial.id}
-                      trial={{ ...trial, teamCount: (trial as any).__teamCount }}
+                      trial={{
+                        ...trial,
+                        teamCount: (trial as any).__teamCount,
+                        taskCompleted: (trial as any).__taskCompleted,
+                        taskTotal: (trial as any).__taskTotal,
+                        taskCompletionPercentage: (trial as any).__taskCompletionPercent,
+                      }}
                     />
                   ))}
                 </div>
@@ -1432,7 +1508,13 @@ export function TrialWorkspace() {
                   {closedTrials.map((trial) => (
                     <TrialCard
                       key={trial.id}
-                      trial={{ ...trial, teamCount: (trial as any).__teamCount }}
+                      trial={{
+                        ...trial,
+                        teamCount: (trial as any).__teamCount,
+                        taskCompleted: (trial as any).__taskCompleted,
+                        taskTotal: (trial as any).__taskTotal,
+                        taskCompletionPercentage: (trial as any).__taskCompletionPercent,
+                      }}
                     />
                   ))}
                 </div>

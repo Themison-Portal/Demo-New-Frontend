@@ -37,7 +37,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { StudySetupWizardEntry } from "@/components/StudySetupWizardEntry";
 import Documents from "@/pages/Documents";
@@ -275,10 +275,11 @@ export default function TrialDetail() {
     data: executionMapSummary,
     refetch: refetchExecutionMapSummary,
   } = trpc.map.getByTrial.useQuery(
-    { trialId, includeArchived: false },
+    { trialId, includeArchived: false, demoMode: currentDataMode },
     { enabled: isValidTrialId }
   );
   const confirmSuggestedMutation = trpc.map.confirmSuggested.useMutation();
+  const launchMapMutation = trpc.map.launch.useMutation();
 
   const map = useMapStore((store) => store.map);
   const mapPhases = useMapStore((store) => store.phases);
@@ -500,6 +501,7 @@ export default function TrialDetail() {
           name: member.name,
           role: member.clinicalRole || member.role,
           initials: member.initials,
+          avatar: member.avatar || null,
         })),
     [state.teamMembers, assignedMemberIds]
   );
@@ -613,6 +615,27 @@ export default function TrialDetail() {
   const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation();
   const importLegacyScaffold = trpc.map.importLegacyScaffold.useMutation();
 
+  const autoActivateGeneratedMap = async (mapId: string) => {
+    const trialStatus = String(trial?.status || "").toLowerCase();
+    const shouldAutoActivate =
+      (currentDataMode === "sample" || currentDataMode === "full") &&
+      (trialStatus === "active" || trialStatus === "recruiting");
+
+    if (!shouldAutoActivate) {
+      return { launched: false, autoConfirmed: 0 };
+    }
+
+    try {
+      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
+      await launchMapMutation.mutateAsync({ mapId });
+      await refetchExecutionMapSummary();
+      return { launched: true, autoConfirmed: confirmation.updated };
+    } catch (error) {
+      console.warn("Failed to auto-activate generated execution map:", error);
+      return { launched: false, autoConfirmed: 0 };
+    }
+  };
+
   const handleGenerateScaffold = async () => {
     if (!protocols || protocols.length === 0) {
       toast.error("No protocol found", {
@@ -665,6 +688,12 @@ export default function TrialDetail() {
       } else {
         toast.error("Plan was generated, but map sync is still in progress.");
       }
+      const activation = resolvedMapId
+        ? await autoActivateGeneratedMap(resolvedMapId)
+        : { launched: false, autoConfirmed: 0 };
+      if (activation.launched && resolvedMapId) {
+        await loadExecutionMap(resolvedMapId).catch(() => undefined);
+      }
       logEvent({
         eventType: "trial_setup_step_completed",
         action: "generated",
@@ -672,7 +701,17 @@ export default function TrialDetail() {
         payload: { trialId, demoMode: currentDataMode, mapId: resolvedMapId },
         aiInvolved: true,
       });
-      toast.success("Execution map generated");
+      if (activation.launched) {
+        const suffix =
+          activation.autoConfirmed > 0
+            ? ` (${activation.autoConfirmed} suggested task${
+                activation.autoConfirmed === 1 ? "" : "s"
+              } auto-confirmed)`
+            : "";
+        toast.success(`Execution map launched${suffix}`);
+      } else {
+        toast.success("Execution map generated");
+      }
     } catch (error: any) {
       if (cancelledGenerationRunsRef.current.has(runId)) {
         return;
@@ -746,8 +785,16 @@ export default function TrialDetail() {
     loadExecutionMap,
   ]);
 
+  const parseSampleSizeToNumber = (value?: string | null) => {
+    const digits = String(value ?? "").replace(/[^0-9]/g, "");
+    if (!digits) return 0;
+    const parsed = Number.parseInt(digits, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
   const enrolledPatients = trial?.enrolledPatients || 0;
-  const targetPatients = trial?.targetPatients || 0;
+  const targetPatients =
+    (trial?.targetPatients && trial.targetPatients > 0 ? trial.targetPatients : 0) ||
+    parseSampleSizeToNumber(trial?.sampleSize);
   const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
   const scaffoldTasks =
     scopedMapTasks.length > 0
@@ -1816,8 +1863,9 @@ export default function TrialDetail() {
             <div className="space-y-2">
               {trialTeamMembers.map((member) => (
                 <div key={member.id} className="rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
-                  <Avatar className="h-8 w-8">
-                    <AvatarFallback className="bg-[#e6e7eb] text-gray-600">
+                  <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
+                    <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
+                    <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
                       <User className="h-4 w-4" />
                     </AvatarFallback>
                   </Avatar>
@@ -2406,8 +2454,9 @@ export default function TrialDetail() {
                 <div className="mt-3 space-y-2">
                   {trialTeamMembers.map((member) => (
                     <div key={member.id} className="flex items-center gap-3">
-                      <Avatar className="h-8 w-8">
-                        <AvatarFallback className="bg-[#e6e7eb] text-gray-600">
+                      <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
+                        <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
+                        <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
                           <User className="h-4 w-4" />
                         </AvatarFallback>
                       </Avatar>
@@ -2426,7 +2475,11 @@ export default function TrialDetail() {
     );
   }
   return (
-    <div className={`h-full bg-[#F9FAFB] flex flex-col ${lockPageScrollToScaffold ? "overflow-hidden" : ""}`}>
+    <div
+      className={`bg-[#F9FAFB] flex flex-col ${
+        lockPageScrollToScaffold ? "h-full overflow-hidden" : "min-h-full"
+      }`}
+    >
       <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
         <div className="bg-white rounded-lg border border-gray-200 px-5 py-2 flex items-center gap-6">
           <button
@@ -2832,6 +2885,7 @@ export default function TrialDetail() {
         initialValues={{
           name: "",
           email: "",
+          avatar: null,
           clinicalRole: "Principal Investigator",
           appRole: "Admin",
           team: "",

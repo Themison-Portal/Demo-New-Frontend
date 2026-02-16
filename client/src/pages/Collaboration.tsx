@@ -14,7 +14,7 @@ export default function Collaboration() {
   const trialId = trialIdFromQuery || trials[0]?.id || "";
 
   return (
-    <div className="flex h-[calc(100vh-72px)] flex-col gap-4 overflow-hidden px-8 pb-4 pt-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden px-8 pb-1 pt-4">
       <div>
         <h1 className="mb-2 text-3xl font-bold tracking-tight text-foreground">Collaboration Hub</h1>
         <p className="text-sm text-muted-foreground">

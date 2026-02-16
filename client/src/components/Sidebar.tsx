@@ -10,7 +10,6 @@ import { trpc } from "@/lib/trpc";
 import { Link, useLocation } from "wouter";
 import { 
   Home, 
-  FileText,
   Brain,
   LayoutGrid, 
   Building, 
@@ -34,6 +33,7 @@ import {
 import { MessageChatSquare } from "@/components/icons/MessageChatSquare";
 import { TrialElements } from "@/components/icons/TrialElements";
 import { AnalyticsIcon } from "@/components/icons/AnalyticsIcon";
+import { BudgetIntelligenceIcon } from "@/components/icons/BudgetIntelligenceIcon";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -324,6 +324,7 @@ export function Sidebar() {
         { label: "Task Manager", icon: LayoutGrid, href: "/tasks" },
         { label: "Collaboration Hub", icon: MessageChatSquare, href: "/collaboration" },
         { label: "Analytics", icon: AnalyticsIcon, href: "/analytics" },
+        { label: "Budget Intelligence", icon: BudgetIntelligenceIcon, href: "/budget-intelligence" },
       ],
     },
     {

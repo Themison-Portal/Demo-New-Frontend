@@ -431,6 +431,7 @@ export default function Tasks() {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dragOverStatus, setDragOverStatus] = useState<TaskStatus | null>(null);
   const [teamAssignmentVersion, setTeamAssignmentVersion] = useState(0);
+  const sampleSeedSyncAttemptedRef = useRef(false);
   const [trialScope, setTrialScope] = useState<string>(trialFromQuery || ALL_SCOPE);
   const [statusFilter, setStatusFilter] = useState<string>(filterFromQuery || "all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
@@ -519,9 +520,10 @@ export default function Tasks() {
   );
 
   const mapSummaryQuery = trpc.map.getByTrial.useQuery(
-    { trialId: resolvedTrialId || "", includeArchived: false },
+    { trialId: resolvedTrialId || "", includeArchived: false, demoMode: currentDataMode },
     { enabled: Boolean(resolvedTrialId) }
   );
+  const syncSampleSeedMutation = trpc.demo.loadSampleData.useMutation();
 
   const mapDetailQuery = trpc.map.load.useQuery(
     { mapId: mapSummaryQuery.data?.id || "" },
@@ -536,6 +538,7 @@ export default function Tasks() {
     {
       trialIds: trials.map((trial) => trial.id),
       includeArchived: false,
+      demoMode: currentDataMode,
     },
     {
       enabled: trialScope === ALL_SCOPE && trials.length > 0,
@@ -554,6 +557,47 @@ export default function Tasks() {
     () => loadedMaps.filter((entry) => entry.map.status === "active"),
     [loadedMaps]
   );
+
+  useEffect(() => {
+    if (currentDataMode !== "sample") return;
+    if (trialScope !== ALL_SCOPE) return;
+    if (trialsLoading || workspaceMapQuery.isLoading) return;
+    if (trials.length === 0) return;
+    if (activeLoadedMaps.length > 0) return;
+    if (syncSampleSeedMutation.isPending) return;
+    if (sampleSeedSyncAttemptedRef.current) return;
+
+    sampleSeedSyncAttemptedRef.current = true;
+    void (async () => {
+      try {
+        await syncSampleSeedMutation.mutateAsync();
+        await Promise.all([
+          utils.trials.list.invalidate({ demoMode: currentDataMode }),
+          utils.documents.list.invalidate(),
+          utils.map.loadWorkspace.invalidate(),
+          utils.map.getByTrial.invalidate(),
+          utils.map.load.invalidate(),
+        ]);
+        toast.success("Sample execution plans synced");
+      } catch (error) {
+        sampleSeedSyncAttemptedRef.current = false;
+        console.warn("Failed to sync sample execution plans:", error);
+      }
+    })();
+  }, [
+    currentDataMode,
+    trialScope,
+    trialsLoading,
+    workspaceMapQuery.isLoading,
+    trials.length,
+    activeLoadedMaps.length,
+    syncSampleSeedMutation,
+    utils.trials.list,
+    utils.documents.list,
+    utils.map.loadWorkspace,
+    utils.map.getByTrial,
+    utils.map.load,
+  ]);
 
   const maps = useMemo(() => activeLoadedMaps.map((entry) => entry.map), [activeLoadedMaps]);
 

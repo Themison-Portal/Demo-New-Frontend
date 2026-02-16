@@ -56,6 +56,7 @@ export default function Organization() {
     name: member.name,
     clinicalRole: member.clinicalRole || member.role,
     email: member.email,
+    avatar: member.avatar || null,
     appRole: member.appRole || "Editor",
     status: member.status || "Active",
     team: member.team || "Operations",
@@ -66,6 +67,7 @@ export default function Organization() {
   const [formValues, setFormValues] = useState({
     name: "",
     email: "",
+    avatar: null as string | null,
     clinicalRole: "Principal Investigator",
     appRole: "Admin",
     team: "",
@@ -77,6 +79,7 @@ export default function Organization() {
     setFormValues({
       name: "",
       email: "",
+      avatar: null,
       clinicalRole: "Principal Investigator",
       appRole: "Admin",
       team: "",
@@ -90,6 +93,7 @@ export default function Organization() {
     setFormValues({
       name: member.name,
       email: member.email,
+      avatar: member.avatar,
       clinicalRole: member.clinicalRole,
       appRole: member.appRole,
       team: member.team,
@@ -469,13 +473,17 @@ export default function Organization() {
                     >
                       <div className="grid grid-cols-[1.6fr_2fr_1.2fr_1fr_1fr_1fr_90px_52px] gap-4 px-6 py-4 text-sm text-gray-700">
                       <div className="flex items-center gap-3">
-                        <div className="h-9 w-9 rounded-full bg-gray-100 flex items-center justify-center">
-                          <Users className="h-4 w-4 text-gray-400" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-semibold text-gray-900 truncate">{member.name}</div>
-                    </div>
-                  </div>
+                        <div className="h-9 w-9 overflow-hidden rounded-md bg-gray-100 flex items-center justify-center border border-gray-200">
+                          {member.avatar ? (
+                            <img src={member.avatar} alt={member.name} className="h-full w-full object-cover" />
+                          ) : (
+                            <Users className="h-4 w-4 text-gray-400" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-semibold text-gray-900 truncate">{member.name}</div>
+                        </div>
+                      </div>
                   <div className="flex items-center text-gray-600 min-w-0">
                     <span className="truncate" title={member.email}>{member.email}</span>
                   </div>

@@ -928,8 +928,33 @@ ${protocolContent}`;
         await db.deleteTaskScaffold(existingScaffold.id);
       }
 
-      // Use AI to analyze protocol and generate task scaffold
-      const systemPrompt = `You are an expert clinical trial operations planner.
+      let scaffoldData: any = null;
+      const shouldUseDeterministicDemoScaffold = mode === "sample" || mode === "full";
+
+      if (shouldUseDeterministicDemoScaffold) {
+        scaffoldData = normalizeScaffoldWithSchedule(
+          buildFallbackScaffold(protocol.filename, null),
+          null,
+          protocol.filename
+        );
+
+        await logTelemetryEvent({
+          eventType: "execution_plan_generation_retried",
+          action: "fallback_used",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocolId),
+          payload: {
+            trialId: protocolTrialId,
+            mode: "deterministic_demo",
+            hasStructuredSchedule: false,
+            demoMode: mode,
+          },
+          aiInvolved: true,
+        });
+      } else {
+        // Use AI to analyze protocol and generate task scaffold
+        const systemPrompt = `You are an expert clinical trial operations planner.
 Analyze the protocol and generate a complete study setup scaffold with actionable tasks.
 
 Each task must be operationally specific and include:
@@ -1064,173 +1089,172 @@ ${protocolContent}
 
 Based on the protocol content above, generate a complete task scaffold for this clinical trial. Include all necessary phases, tasks, and dependencies.`;
 
-      const invokeScaffoldLLM = async (prompt: string) =>
-        invokeLLM({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: prompt },
-          ],
-          response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "task_scaffold",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                protocolSections: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      name: { type: "string" },
-                      dateReference: { type: ["string", "null"] },
-                      pageReference: { type: ["string", "null"] },
-                      children: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            name: { type: "string" },
-                            dateReference: { type: ["string", "null"] },
-                            pageReference: { type: ["string", "null"] },
+        const invokeScaffoldLLM = async (prompt: string) =>
+          invokeLLM({
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: prompt },
+            ],
+            response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "task_scaffold",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: {
+                  protocolSections: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        name: { type: "string" },
+                        dateReference: { type: ["string", "null"] },
+                        pageReference: { type: ["string", "null"] },
+                        children: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              name: { type: "string" },
+                              dateReference: { type: ["string", "null"] },
+                              pageReference: { type: ["string", "null"] },
+                            },
+                            required: ["name"],
+                            additionalProperties: false,
                           },
-                          required: ["name"],
-                          additionalProperties: false,
                         },
                       },
+                      required: ["name"],
+                      additionalProperties: false,
                     },
-                    required: ["name"],
-                    additionalProperties: false,
                   },
-                },
-                phases: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    properties: {
-                      name: { type: "string" },
-                      color: { type: "string" },
-                      tasks: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            name: { type: "string" },
-                            suggestedDate: { type: ["string", "null"] },
-                            estimatedDuration: { type: ["number", "null"] },
-                            category: {
-                              type: "string",
-                              enum: [
-                                "consent",
-                                "eligibility",
-                                "lab_sample",
-                                "vital_signs",
-                                "imaging",
-                                "drug_administration",
-                                "assessment",
-                                "questionnaire",
-                                "data_entry",
-                                "coordination",
-                                "documentation",
-                                "follow_up",
-                                "safety_reporting",
-                                "regulatory",
-                                "custom",
-                              ],
-                            },
-                            assignedRole: {
-                              type: ["string", "null"],
-                              enum: [
-                                "pi",
-                                "sub_i",
-                                "crc",
-                                "nurse",
-                                "pharmacist",
-                                "lab_tech",
-                                "data_manager",
-                                "regulatory_coordinator",
-                                "custom",
-                                null,
-                              ],
-                            },
-                            priority: {
-                              type: "string",
-                              enum: ["critical", "high", "medium", "low"],
-                            },
-                            protocolReference: {
-                              type: "object",
-                              properties: {
-                                section: { type: "string" },
-                                page: { type: ["number", "null"] },
-                                extractedText: { type: ["string", "null"] },
+                  phases: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        name: { type: "string" },
+                        color: { type: "string" },
+                        tasks: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              name: { type: "string" },
+                              suggestedDate: { type: ["string", "null"] },
+                              estimatedDuration: { type: ["number", "null"] },
+                              category: {
+                                type: "string",
+                                enum: [
+                                  "consent",
+                                  "eligibility",
+                                  "lab_sample",
+                                  "vital_signs",
+                                  "imaging",
+                                  "drug_administration",
+                                  "assessment",
+                                  "questionnaire",
+                                  "data_entry",
+                                  "coordination",
+                                  "documentation",
+                                  "follow_up",
+                                  "safety_reporting",
+                                  "regulatory",
+                                  "custom",
+                                ],
                               },
-                              required: ["section", "page", "extractedText"],
-                              additionalProperties: false,
+                              assignedRole: {
+                                type: ["string", "null"],
+                                enum: [
+                                  "pi",
+                                  "sub_i",
+                                  "crc",
+                                  "nurse",
+                                  "pharmacist",
+                                  "lab_tech",
+                                  "data_manager",
+                                  "regulatory_coordinator",
+                                  "custom",
+                                  null,
+                                ],
+                              },
+                              priority: {
+                                type: "string",
+                                enum: ["critical", "high", "medium", "low"],
+                              },
+                              protocolReference: {
+                                type: "object",
+                                properties: {
+                                  section: { type: "string" },
+                                  page: { type: ["number", "null"] },
+                                  extractedText: { type: ["string", "null"] },
+                                },
+                                required: ["section", "page", "extractedText"],
+                                additionalProperties: false,
+                              },
+                              aiConfidence: { type: ["number", "null"] },
+                              conditionalNote: { type: ["string", "null"] },
+                              dependencies: {
+                                type: "array",
+                                items: { type: "string" },
+                              },
                             },
-                            aiConfidence: { type: ["number", "null"] },
-                            conditionalNote: { type: ["string", "null"] },
-                            dependencies: {
-                              type: "array",
-                              items: { type: "string" },
-                            },
+                            required: [
+                              "name",
+                              "suggestedDate",
+                              "estimatedDuration",
+                              "category",
+                              "assignedRole",
+                              "priority",
+                              "protocolReference",
+                              "aiConfidence",
+                              "conditionalNote",
+                              "dependencies",
+                            ],
+                            additionalProperties: false,
                           },
-                          required: [
-                            "name",
-                            "suggestedDate",
-                            "estimatedDuration",
-                            "category",
-                            "assignedRole",
-                            "priority",
-                            "protocolReference",
-                            "aiConfidence",
-                            "conditionalNote",
-                            "dependencies",
-                          ],
-                          additionalProperties: false,
+                        },
+                        transitions: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              toPhase: { type: "string" },
+                              condition: { type: ["string", "null"] },
+                            },
+                            required: ["toPhase"],
+                            additionalProperties: false,
+                          },
                         },
                       },
-                      transitions: {
-                        type: "array",
-                        items: {
-                          type: "object",
-                          properties: {
-                            toPhase: { type: "string" },
-                            condition: { type: ["string", "null"] },
-                          },
-                          required: ["toPhase"],
-                          additionalProperties: false,
-                        },
-                      },
+                      required: ["name", "color", "tasks"],
+                      additionalProperties: false,
                     },
-                    required: ["name", "color", "tasks"],
-                    additionalProperties: false,
                   },
                 },
+                required: ["protocolSections", "phases"],
+                additionalProperties: false,
               },
-              required: ["protocolSections", "phases"],
-              additionalProperties: false,
             },
           },
-        },
-      });
+        });
 
-      const structuredSchedule = await getStructuredScheduleOfActivities(protocolId).catch(() => null);
-      let response;
-      let scaffoldData: any = null;
-      try {
-        response = await invokeScaffoldLLM(userPrompt);
-      } catch (error) {
-        const compactContextBlock = contextChunks
-          .slice(0, 3)
-          .map((chunk, index) => {
-            const title = chunk.sectionTitle || "Untitled section";
-            return `[Compact Context ${index + 1}] ${title} (${chunk.sectionType}, ${chunk.citation.page})
+        const structuredSchedule = await getStructuredScheduleOfActivities(protocolId).catch(() => null);
+        let response;
+        try {
+          response = await invokeScaffoldLLM(userPrompt);
+        } catch (error) {
+          const compactContextBlock = contextChunks
+            .slice(0, 3)
+            .map((chunk, index) => {
+              const title = chunk.sectionTitle || "Untitled section";
+              return `[Compact Context ${index + 1}] ${title} (${chunk.sectionType}, ${chunk.citation.page})
 ${chunk.chunkText.slice(0, 700)}`;
-          })
-          .join("\n\n");
+            })
+            .join("\n\n");
 
-        const compactPrompt = `Protocol Document: ${protocol.filename}
+          const compactPrompt = `Protocol Document: ${protocol.filename}
 
 Priority Context Chunks:
 ${compactContextBlock || "[No pre-processed context chunks available]"}
@@ -1240,56 +1264,57 @@ ${protocolContent.slice(0, 9000)}
 
 Generate the same JSON scaffold format, but prioritize correctness over completeness if content is limited.`;
 
-        await logTelemetryEvent({
-          eventType: "execution_plan_generation_retried",
-          action: "retry",
-          userId: String(ctx.user.id),
-          entityType: "protocol",
-          entityId: String(protocolId),
-          payload: {
-            trialId: protocolTrialId,
-            reason: error instanceof Error ? error.message : String(error),
-            mode: "compact_fallback",
-            demoMode: mode,
-          },
-          aiInvolved: true,
-        });
-
-        try {
-          response = await invokeScaffoldLLM(compactPrompt);
-        } catch (compactError) {
           await logTelemetryEvent({
             eventType: "execution_plan_generation_retried",
-            action: "fallback_used",
+            action: "retry",
             userId: String(ctx.user.id),
             entityType: "protocol",
             entityId: String(protocolId),
             payload: {
               trialId: protocolTrialId,
-              reason: compactError instanceof Error ? compactError.message : String(compactError),
-              mode: "deterministic_fallback",
-              hasStructuredSchedule: Boolean(structuredSchedule),
+              reason: error instanceof Error ? error.message : String(error),
+              mode: "compact_fallback",
               demoMode: mode,
             },
             aiInvolved: true,
           });
-          scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
-        }
-      }
 
-      if (!scaffoldData) {
-        const content = response?.choices?.[0]?.message?.content;
-        if (!content || typeof content !== "string") {
-          scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
-        } else {
           try {
-            scaffoldData = JSON.parse(content);
-          } catch {
+            response = await invokeScaffoldLLM(compactPrompt);
+          } catch (compactError) {
+            await logTelemetryEvent({
+              eventType: "execution_plan_generation_retried",
+              action: "fallback_used",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: protocolTrialId,
+                reason: compactError instanceof Error ? compactError.message : String(compactError),
+                mode: "deterministic_fallback",
+                hasStructuredSchedule: Boolean(structuredSchedule),
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
             scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
           }
         }
+
+        if (!scaffoldData) {
+          const content = response?.choices?.[0]?.message?.content;
+          if (!content || typeof content !== "string") {
+            scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
+          } else {
+            try {
+              scaffoldData = JSON.parse(content);
+            } catch {
+              scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
+            }
+          }
+        }
+        scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);
       }
-      scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);
 
       // Create task scaffold
       await db.createTaskScaffold({

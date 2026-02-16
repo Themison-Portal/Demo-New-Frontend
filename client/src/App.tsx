@@ -117,7 +117,7 @@ function Router() {
         { label: "Workspace", href: "/" },
         { label: "Trial Workspace", href: "/trial-workspace" },
         { label: trialId ? `Trial ${trialId}` : "Trial" },
-        { label: "Themison AI" },
+        { label: "Document AI Assistant" },
       ];
       breadcrumbIcon = FileText;
     } else {

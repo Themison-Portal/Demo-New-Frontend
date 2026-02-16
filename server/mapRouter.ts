@@ -24,8 +24,10 @@ import { getDb } from "./db";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
+import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
 
 const MAP_STATUSES = ["draft", "active", "revised", "archived"] as const;
+const MAP_DEMO_MODES: DemoMode[] = ["sample", "full", "building"];
 const TASK_STATUSES = [
   "suggested",
   "confirmed",
@@ -88,6 +90,14 @@ function ensureProtocolRefs(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
   const flattened = value.flatMap((item) => (Array.isArray(item) ? item : [item]));
   return flattened.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
+}
+
+function resolveMapTrialCandidates(trialId: string, demoMode?: DemoMode) {
+  const normalized = String(trialId || "").trim();
+  if (!normalized) return [] as string[];
+  if (/^(sample|full|building):/i.test(normalized)) return [normalized];
+  const modes = demoMode ? [demoMode] : MAP_DEMO_MODES;
+  return Array.from(new Set([normalized, ...modes.map((mode) => toDemoId(mode, normalized))]));
 }
 
 type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -1122,19 +1132,24 @@ export const mapRouter = router({
       z.object({
         trialId: z.string(),
         includeArchived: z.boolean().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .query(async ({ input }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
+      const candidates = resolveMapTrialCandidates(input.trialId, input.demoMode as DemoMode | undefined);
+      if (candidates.length === 0) return null;
+
       const rows = await db
         .select()
         .from(executionMaps)
-        .where(eq(executionMaps.trialId, input.trialId))
+        .where(candidates.length === 1 ? eq(executionMaps.trialId, candidates[0]) : inArray(executionMaps.trialId, candidates))
         .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version));
 
-      return pickPreferredExecutionMap(rows, Boolean(input.includeArchived));
+      const selected = pickPreferredExecutionMap(rows, Boolean(input.includeArchived));
+      return selected ? { ...selected, trialId: stripDemoId(selected.trialId) } : null;
     }),
 
   loadWorkspace: protectedProcedure
@@ -1142,6 +1157,7 @@ export const mapRouter = router({
       z.object({
         trialIds: z.array(z.string()).default([]),
         includeArchived: z.boolean().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .query(async ({ input }) => {
@@ -1153,22 +1169,34 @@ export const mapRouter = router({
       );
       if (!uniqueTrialIds.length) return [];
 
+      const trialCandidateEntries = uniqueTrialIds.map((trialId) => ({
+        requestedTrialId: trialId,
+        candidates: resolveMapTrialCandidates(trialId, input.demoMode as DemoMode | undefined),
+      }));
+      const flatCandidateIds = Array.from(
+        new Set(trialCandidateEntries.flatMap((entry) => entry.candidates).filter(Boolean))
+      );
+      if (!flatCandidateIds.length) return [];
+
       const rows = await db
         .select()
         .from(executionMaps)
-        .where(inArray(executionMaps.trialId, uniqueTrialIds))
+        .where(inArray(executionMaps.trialId, flatCandidateIds))
         .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version));
 
-      const selectedMaps = uniqueTrialIds
-        .map((trialId) => {
-          const perTrial = rows.filter((row) => row.trialId === trialId);
-          return pickPreferredExecutionMap(perTrial, Boolean(input.includeArchived));
+      const selectedMaps = trialCandidateEntries
+        .map((entry) => {
+          const candidateSet = new Set(entry.candidates);
+          const perTrial = rows.filter((row) => candidateSet.has(row.trialId));
+          const selected = pickPreferredExecutionMap(perTrial, Boolean(input.includeArchived));
+          if (!selected) return null;
+          return { requestedTrialId: entry.requestedTrialId, map: selected };
         })
-        .filter(Boolean) as Array<typeof executionMaps.$inferSelect>;
+        .filter(Boolean) as Array<{ requestedTrialId: string; map: typeof executionMaps.$inferSelect }>;
 
       if (!selectedMaps.length) return [];
 
-      const mapIds = selectedMaps.map((map) => map.id);
+      const mapIds = selectedMaps.map((entry) => entry.map.id);
 
       const phases = await db
         .select()
@@ -1220,20 +1248,20 @@ export const mapRouter = router({
       const mapIdByTaskId = new Map(tasks.map((task) => [task.id, task.mapId]));
       const mapIdByPhaseId = new Map(phases.map((phase) => [phase.id, phase.mapId]));
 
-      return selectedMaps.map((map) => ({
-        map,
-        phases: phases.filter((phase) => phase.mapId === map.id),
-        tasks: tasks.filter((task) => task.mapId === map.id),
+      return selectedMaps.map((entry) => ({
+        map: { ...entry.map, trialId: entry.requestedTrialId },
+        phases: phases.filter((phase) => phase.mapId === entry.map.id),
+        tasks: tasks.filter((task) => task.mapId === entry.map.id),
         dependencies: dependencies.filter(
           (dep) =>
-            mapIdByTaskId.get(dep.sourceTaskId) === map.id && mapIdByTaskId.get(dep.targetTaskId) === map.id
+            mapIdByTaskId.get(dep.sourceTaskId) === entry.map.id && mapIdByTaskId.get(dep.targetTaskId) === entry.map.id
         ),
         transitions: transitions.filter(
           (transition) =>
-            mapIdByPhaseId.get(transition.fromPhaseId) === map.id &&
-            mapIdByPhaseId.get(transition.toPhaseId) === map.id
+            mapIdByPhaseId.get(transition.fromPhaseId) === entry.map.id &&
+            mapIdByPhaseId.get(transition.toPhaseId) === entry.map.id
         ),
-        protocolMapSections: protocolSections.filter((section) => section.mapId === map.id),
+        protocolMapSections: protocolSections.filter((section) => section.mapId === entry.map.id),
       }));
     }),
 
@@ -2230,7 +2258,7 @@ export const mapRouter = router({
         .orderBy(asc(protocolMapSections.displayOrder));
 
       return {
-        map,
+        map: { ...map, trialId: stripDemoId(map.trialId) },
         phases,
         tasks,
         dependencies,

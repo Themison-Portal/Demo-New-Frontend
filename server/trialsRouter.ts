@@ -45,6 +45,14 @@ function extractDbErrorDetails(error: unknown) {
   };
 }
 
+function parseSampleSizeToTarget(sampleSize?: string | null) {
+  const digitsOnly = String(sampleSize ?? "").replace(/[^0-9]/g, "");
+  if (!digitsOnly) return undefined;
+  const parsed = Number.parseInt(digitsOnly, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 export const trialsRouter = router({
   // Get a single trial by ID
   getById: publicProcedure
@@ -982,7 +990,10 @@ export const trialsRouter = router({
         endDate: input.endDate ? new Date(input.endDate) : null,
         principalInvestigator: clamp(trialInput.principalInvestigator, 255),
         enrolledPatients: trialInput.enrolledPatients,
-        targetPatients: trialInput.targetPatients,
+        targetPatients:
+          trialInput.targetPatients !== undefined
+            ? trialInput.targetPatients
+            : parseSampleSizeToTarget(trialInput.sampleSize),
         completionPercentage: trialInput.completionPercentage,
         createdBy: ctx.user.id,
       };
@@ -1155,6 +1166,20 @@ export const trialsRouter = router({
       if (updates.principalInvestigator !== undefined) processedUpdates.principalInvestigator = clamp(updates.principalInvestigator, 255);
       if (updates.enrolledPatients !== undefined) processedUpdates.enrolledPatients = updates.enrolledPatients;
       if (updates.targetPatients !== undefined) processedUpdates.targetPatients = updates.targetPatients;
+      if (updates.targetPatients === undefined && updates.sampleSize !== undefined) {
+        const inferredTarget = parseSampleSizeToTarget(updates.sampleSize);
+        if (inferredTarget !== undefined) {
+          const [existingTrial] = await db
+            .select({ targetPatients: trials.targetPatients })
+            .from(trials)
+            .where(eq(trials.id, resolvedId))
+            .limit(1);
+          const currentTarget = Number(existingTrial?.targetPatients || 0);
+          if (currentTarget <= 0) {
+            processedUpdates.targetPatients = inferredTarget;
+          }
+        }
+      }
       if (updates.completionPercentage !== undefined) processedUpdates.completionPercentage = updates.completionPercentage;
       if (updates.startDate) {
         processedUpdates.startDate = new Date(updates.startDate);

@@ -148,8 +148,8 @@ export function ConversationList({
             >
               <div className="flex items-start gap-2.5">
                 <div className="relative mt-0.5">
-                  <Avatar className="h-10 w-10 border border-neutral-200 bg-neutral-100">
-                    <AvatarFallback className="text-xs font-semibold text-neutral-700">
+                  <Avatar className="h-10 w-10 rounded-lg border border-neutral-200 bg-neutral-100">
+                    <AvatarFallback className="rounded-lg text-xs font-semibold text-neutral-700">
                       {getInitials(displayName)}
                     </AvatarFallback>
                   </Avatar>
@@ -169,7 +169,12 @@ export function ConversationList({
                       {conversation.lastMessage?.content || "No messages yet"}
                     </p>
                     {(conversation.unreadCount || 0) > 0 ? (
-                      <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-blue-500 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+                      <span
+                        className={cn(
+                          "inline-flex h-5 shrink-0 items-center justify-center rounded-full bg-blue-500 text-[10px] font-semibold leading-none text-white",
+                          (conversation.unreadCount || 0) > 9 ? "min-w-5 px-1.5" : "w-5"
+                        )}
+                      >
                         {conversation.unreadCount}
                       </span>
                     ) : null}

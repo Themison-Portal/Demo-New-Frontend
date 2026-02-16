@@ -24,7 +24,6 @@ import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
-import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -41,7 +40,6 @@ export function TopNav() {
   const [location, navigate] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
   const { state, resetDemo, loadSampleData, loadFullDataset, fullResetLocal, setBuildingMode, getCurrentDataMode } = useDemoState();
-  const { profile } = useOrganizationProfile();
   const currentDataMode = getCurrentDataMode();
   const utils = trpc.useUtils();
   
@@ -127,7 +125,7 @@ export function TopNav() {
     // Always show organization name, not trial
     return {
       type: 'organization' as const,
-      name: String(profile.name || "").trim() || "Organization",
+      name: 'Themison Research',
       id: 'org-1',
     };
   };

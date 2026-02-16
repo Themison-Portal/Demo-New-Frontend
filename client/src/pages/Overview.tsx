@@ -95,7 +95,9 @@ export default function Overview() {
   const { state, updateTask, getActiveTasksCount } = useDemoState();
   
   // Fetch trials from database
-  const { data: trials = [] } = trpc.trials.list.useQuery();
+  const { getCurrentDataMode } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
+  const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
   const activeTrialsCount = trials.filter(t => ['active', 'recruiting'].includes(t.status)).length;
 
   const handleMetricClick = (href: string) => {
@@ -114,7 +116,7 @@ export default function Overview() {
   const blockedTasksCount = state.tasks.filter(t => t.status === "waiting_on_monitor" && !t.completed).length;
 
   return (
-    <div className="px-8 pb-8 pt-4">
+    <div className="p-8">
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>

@@ -8,7 +8,6 @@ import { and, eq, inArray } from "drizzle-orm";
 import { protocolChunks, protocols } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeEmbeddings, invokeLLM } from "./llm";
-import { ENV } from "./env";
 import { extractPdfPages, type PdfPageText } from "../pdfExtractor";
 
 type SectionAccumulator = {
@@ -72,8 +71,6 @@ type ScheduleVariantCandidate = {
   source: ScheduleVariantSource;
   schedule: Omit<StructuredSchedule, "sourcePages">;
 };
-
-let hasLoggedRagProviderFallback = false;
 
 export type StructuredSchedule = {
   visits: ScheduleVisit[];
@@ -3469,13 +3466,6 @@ export async function getProtocolContextChunks(options: {
   limit?: number;
   comprehensive?: boolean;
 }) {
-  if (ENV.ragProvider !== "internal" && !hasLoggedRagProviderFallback) {
-    hasLoggedRagProviderFallback = true;
-    console.warn(
-      `[protocolContext] RAG_PROVIDER="${ENV.ragProvider}" is configured but external routing is not enabled on this branch; using internal retrieval.`
-    );
-  }
-
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 

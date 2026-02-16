@@ -2242,11 +2242,38 @@ export const collaborationRouter = router({
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const existingCountRows = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(conversations)
-        .where(eq(conversations.trialId, input.trialId));
-      if ((existingCountRows[0]?.count ?? 0) > 0) {
+      const inbox = await ensureTrialInbox(db, input.trialId);
+
+      const [conversationCountRows, threadCountRows, emailCountRows, emailInboxCountRows, emailDraftCountRows] = await Promise.all([
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(conversations)
+          .where(eq(conversations.trialId, input.trialId)),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(threads)
+          .where(eq(threads.trialId, input.trialId)),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(emailChains)
+          .where(eq(emailChains.inboxId, inbox.id)),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(emailChains)
+          .where(and(eq(emailChains.inboxId, inbox.id), eq(emailChains.folder, "inbox"))),
+        db
+          .select({ count: sql<number>`count(*)` })
+          .from(emailChains)
+          .where(and(eq(emailChains.inboxId, inbox.id), eq(emailChains.folder, "drafts"))),
+      ]);
+
+      const conversationCount = conversationCountRows[0]?.count ?? 0;
+      const threadCount = threadCountRows[0]?.count ?? 0;
+      const emailCount = emailCountRows[0]?.count ?? 0;
+      const emailInboxCount = emailInboxCountRows[0]?.count ?? 0;
+      const emailDraftCount = emailDraftCountRows[0]?.count ?? 0;
+
+      if (conversationCount > 0 && threadCount > 0 && emailInboxCount > 0 && emailDraftCount > 0) {
         return {
           success: true,
           trialId: input.trialId,
@@ -2254,7 +2281,252 @@ export const collaborationRouter = router({
         };
       }
 
-      const inbox = await ensureTrialInbox(db, input.trialId);
+      if ((conversationCount > 0 || threadCount > 0) && (emailInboxCount === 0 || emailDraftCount === 0)) {
+        const [existingVisitThread] = await db
+          .select({ id: threads.id })
+          .from(threads)
+          .where(and(eq(threads.trialId, input.trialId), eq(threads.title, "Visit 3 timing clarification")))
+          .limit(1);
+
+        let threadVisitId = existingVisitThread?.id ?? null;
+        if (!threadVisitId) {
+          const [latestThread] = await db
+            .select({ id: threads.id })
+            .from(threads)
+            .where(eq(threads.trialId, input.trialId))
+            .orderBy(desc(threads.updatedAt))
+            .limit(1);
+          threadVisitId = latestThread?.id ?? null;
+        }
+
+        if (!threadVisitId) {
+          threadVisitId = randomUUID();
+          await db.insert(threads).values({
+            id: threadVisitId,
+            trialId: input.trialId,
+            title: "Visit 3 timing clarification",
+            category: "question",
+            status: "open",
+            resolvedBy: null,
+            resolvedAt: null,
+            resolutionSummary: null,
+            aiContributed: true,
+            aiResolutionSuggested: false,
+            createdBy: ctx.user.id,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+
+        const existingChains = await db
+          .select({ id: emailChains.id, subject: emailChains.subject })
+          .from(emailChains)
+          .where(eq(emailChains.inboxId, inbox.id));
+        const bySubject = new Map(existingChains.map((row) => [row.subject, row.id]));
+
+        const sponsorSubject = "Visit 3 blood sample timing confirmation";
+        const systemSubject = "CTMS Enrollment Update";
+        const draftSubject = "Re: Visit 3 blood sample timing confirmation";
+
+        const sponsorChainId = bySubject.get(sponsorSubject) ?? randomUUID();
+        const systemChainId = bySubject.get(systemSubject) ?? randomUUID();
+        const draftChainId = bySubject.get(draftSubject) ?? randomUUID();
+
+        const chainsToInsert = [];
+        if (!bySubject.has(sponsorSubject)) {
+          chainsToInsert.push({
+            id: sponsorChainId,
+            inboxId: inbox.id,
+            subject: sponsorSubject,
+            folder: "inbox" as const,
+            aiLabels: ["sponsor_query", "action_required"],
+            aiPriority: "high" as const,
+            aiSummary: "Sponsor requesting confirmation of Visit 3 blood sample timing window.",
+            aiSuggestedThreadId: threadVisitId,
+            linkedThreadId: threadVisitId,
+            fromAddress: "sponsor.ops@cro-example.com",
+            fromName: "Sponsor Operations",
+            toAddresses: [inbox.emailAddress],
+            ccAddresses: [],
+            messageCount: 1,
+            isRead: false,
+            isStarred: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+        if (!bySubject.has(systemSubject)) {
+          chainsToInsert.push({
+            id: systemChainId,
+            inboxId: inbox.id,
+            subject: systemSubject,
+            folder: "inbox" as const,
+            aiLabels: ["system_notification", "fyi"],
+            aiPriority: "low" as const,
+            aiSummary: "Enrollment update: 2 new patients screened.",
+            aiSuggestedThreadId: null,
+            linkedThreadId: null,
+            fromAddress: "notifications@ctms.local",
+            fromName: "CTMS System",
+            toAddresses: [inbox.emailAddress],
+            ccAddresses: [],
+            messageCount: 1,
+            isRead: false,
+            isStarred: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+        if (!bySubject.has(draftSubject)) {
+          chainsToInsert.push({
+            id: draftChainId,
+            inboxId: inbox.id,
+            subject: draftSubject,
+            folder: "drafts" as const,
+            aiLabels: ["draft"],
+            aiPriority: "medium" as const,
+            aiSummary: "AI-generated draft reply pending coordinator review.",
+            aiSuggestedThreadId: threadVisitId,
+            linkedThreadId: threadVisitId,
+            fromAddress: inbox.emailAddress,
+            fromName: "Susan Johnson",
+            toAddresses: ["sponsor.ops@cro-example.com"],
+            ccAddresses: [],
+            messageCount: 1,
+            isRead: true,
+            isStarred: false,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+
+        if (chainsToInsert.length > 0) {
+          await db.insert(emailChains).values(chainsToInsert);
+        }
+
+        const messagesToInsert = [];
+        if (!bySubject.has(sponsorSubject)) {
+          messagesToInsert.push({
+            id: randomUUID(),
+            conversationId: null,
+            threadId: null,
+            emailChainId: sponsorChainId,
+            senderId: null,
+            senderType: "email_external" as const,
+            senderName: "Sponsor Operations",
+            senderEmail: "sponsor.ops@cro-example.com",
+            content: "Please confirm the Visit 3 blood sample timing window.",
+            contentType: "email" as const,
+            embeddedContent: null,
+            isAiGenerated: false,
+            aiModel: null,
+            aiLatencyMs: null,
+            editedAt: null,
+            createdAt: new Date(),
+          });
+        }
+        if (!bySubject.has(systemSubject)) {
+          messagesToInsert.push({
+            id: randomUUID(),
+            conversationId: null,
+            threadId: null,
+            emailChainId: systemChainId,
+            senderId: null,
+            senderType: "email_external" as const,
+            senderName: "CTMS System",
+            senderEmail: "notifications@ctms.local",
+            content: "Enrollment update: 2 new patients screened.",
+            contentType: "email" as const,
+            embeddedContent: null,
+            isAiGenerated: false,
+            aiModel: null,
+            aiLatencyMs: null,
+            editedAt: null,
+            createdAt: new Date(),
+          });
+        }
+        if (!bySubject.has(draftSubject)) {
+          messagesToInsert.push({
+            id: randomUUID(),
+            conversationId: null,
+            threadId: null,
+            emailChainId: draftChainId,
+            senderId: null,
+            senderType: "ai" as const,
+            senderName: "Themison AI",
+            senderEmail: null,
+            content:
+              "Per Protocol Section 5.5.3, Visit 3 blood samples should be collected within a strict +/-2 hour window. Please let us know if additional detail is needed.",
+            contentType: "email" as const,
+            embeddedContent: {
+              type: "ai_response",
+              sources: [
+                {
+                  document_id: "protocol-main",
+                  document_name: "Protocol DN-2024-01",
+                  section_ref: "Section 5.5.3",
+                  quoted_text:
+                    "Visit 3 blood samples must be collected within a +/-2 hour window from scheduled collection time.",
+                  page_number: 64,
+                },
+              ],
+              confidence: 0.9,
+              query_intent: "email_draft",
+              suggested_actions: [],
+            },
+            isAiGenerated: true,
+            aiModel: "gpt-4-turbo",
+            aiLatencyMs: 530,
+            editedAt: null,
+            createdAt: new Date(),
+          });
+        }
+
+        if (messagesToInsert.length > 0) {
+          await db.insert(messages).values(messagesToInsert as any);
+        }
+
+        const [existingSponsorRef] = await db
+          .select({ id: crossReferences.id })
+          .from(crossReferences)
+          .where(
+            and(
+              eq(crossReferences.sourceType, "email_chain"),
+              eq(crossReferences.sourceId, sponsorChainId),
+              eq(crossReferences.targetType, "thread"),
+              eq(crossReferences.targetId, threadVisitId)
+            )
+          )
+          .limit(1);
+        if (!existingSponsorRef) {
+          await db.insert(crossReferences).values({
+            id: randomUUID(),
+            sourceType: "email_chain",
+            sourceId: sponsorChainId,
+            targetType: "thread",
+            targetId: threadVisitId,
+            refType: "manual",
+            createdBy: ctx.user.id,
+            createdAt: new Date(),
+          });
+        }
+
+        await logCollabEvent(db, {
+          trialId: input.trialId,
+          userId: ctx.user.id,
+          layer: "inbox",
+          eventType: "collaboration_seeded_inbox_backfill",
+          eventData: {
+            emailChainsInserted: chainsToInsert.length,
+          },
+        });
+
+        return {
+          success: true,
+          trialId: input.trialId,
+          seededInboxOnly: true,
+        };
+      }
 
       const [susan, olivia, allan] = await Promise.all([
         (async () => {
