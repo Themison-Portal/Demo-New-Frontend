@@ -24,7 +24,7 @@ export default function Collaboration() {
 
       {trialId ? (
         <div className="min-h-0 flex-1">
-          <CollaborationHub trialId={trialId} />
+          <CollaborationHub trialId={trialId} dataMode={currentDataMode} />
         </div>
       ) : (
         <div className="rounded-lg border border-border bg-background p-6 text-sm text-muted-foreground">

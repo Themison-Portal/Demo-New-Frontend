@@ -13,12 +13,16 @@ import { BreadcrumbItem } from "./components/Breadcrumb";
 import { Home, FileText, LayoutGrid, Bell, Building, Settings as SettingsIcon, Puzzle, LucideIcon } from "lucide-react";
 import { MessageChatSquare } from "./components/icons/MessageChatSquare";
 import { TrialElements } from "./components/icons/TrialElements";
+import { AnalyticsIcon } from "./components/icons/AnalyticsIcon";
+import { BudgetIntelligenceIcon } from "./components/icons/BudgetIntelligenceIcon";
 import Overview from "./pages/Overview";
 import { TrialWorkspace } from "./pages/TrialWorkspace";
 import TrialDetail from "./pages/TrialDetail";
 import DocumentAIAssistant from "./pages/DocumentAIAssistant";
 import Tasks from "./pages/Tasks";
 import Collaboration from "./pages/Collaboration";
+import Analytics from "./pages/Analytics";
+import BudgetIntelligence from "./pages/BudgetIntelligence";
 import Organization from "./pages/Organization";
 import Integrations from "./pages/Integrations";
 import Notifications from "./pages/Notifications";
@@ -33,6 +37,8 @@ const iconMap: Record<string, any> = {
   "/documents": FileText,
   "/tasks": LayoutGrid,
   "/collaboration": MessageChatSquare,
+  "/analytics": AnalyticsIcon,
+  "/budget-intelligence": BudgetIntelligenceIcon,
   "/organization": Building,
   "/integrations": Puzzle,
   "/notifications": Bell,
@@ -63,6 +69,14 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
   "/collaboration": [
     { label: "Workspace", href: "/" },
     { label: "Collaboration Hub" },
+  ],
+  "/analytics": [
+    { label: "Workspace", href: "/" },
+    { label: "Analytics" },
+  ],
+  "/budget-intelligence": [
+    { label: "Workspace", href: "/" },
+    { label: "Budget Intelligence" },
   ],
   "/organization": [
     { label: "Team & Admin", href: "/" },
@@ -148,6 +162,8 @@ function Router() {
         }}</Route>
         <Route path="/tasks" component={Tasks} />
         <Route path="/collaboration" component={Collaboration} />
+        <Route path="/analytics" component={Analytics} />
+        <Route path="/budget-intelligence" component={BudgetIntelligence} />
         <Route path="/organization" component={Organization} />
         <Route path="/integrations" component={Integrations} />
         <Route path="/notifications" component={Notifications} />

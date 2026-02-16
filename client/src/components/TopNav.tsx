@@ -5,6 +5,7 @@
 
 import { Bell, ChevronDown, ChevronRight, Home, FileText, File, FlaskConical, LayoutGrid, Users, Building2, Puzzle, Settings as SettingsIcon, User, Brain } from "lucide-react";
 import { AnalyticsIcon } from "@/components/icons/AnalyticsIcon";
+import { BudgetIntelligenceIcon } from "@/components/icons/BudgetIntelligenceIcon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,8 +23,10 @@ import { useSidebarNav } from "@/contexts/SidebarNavContext";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { Link, useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
+import { ensureTrialTeamAssignments } from "@/lib/trialTeamAssignments";
 import { toast } from "sonner";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,12 +42,71 @@ import { Check } from "lucide-react";
 export function TopNav() {
   const [location, navigate] = useLocation();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
-  const { state, resetDemo, loadSampleData, loadFullDataset, fullResetLocal, setBuildingMode, getCurrentDataMode } = useDemoState();
+  const {
+    state,
+    resetDemo,
+    loadSampleData,
+    loadFullDataset,
+    saveCurrentModeAsDefault,
+    fullResetLocal,
+    setBuildingMode,
+    getCurrentDataMode,
+  } = useDemoState();
+  const { profile } = useOrganizationProfile();
   const currentDataMode = getCurrentDataMode();
   const utils = trpc.useUtils();
+
+  const runtimeUser = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+    }
+    try {
+      const raw = window.localStorage.getItem("manus-runtime-user-info");
+      if (!raw) return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      const parsed = JSON.parse(raw) as { name?: unknown; email?: unknown };
+      return {
+        name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Kaleb Sanders",
+        email: typeof parsed.email === "string" && parsed.email.trim() ? parsed.email.trim() : "kaleb.s@azorg.be",
+      };
+    } catch {
+      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+    }
+  }, []);
+
+  const currentMember = useMemo(() => {
+    const normalizedRuntimeEmail = runtimeUser.email.toLowerCase();
+    const normalizedRuntimeName = runtimeUser.name.toLowerCase();
+    const matchedByEmail = state.teamMembers.find(
+      (member) => member.email.toLowerCase() === normalizedRuntimeEmail
+    );
+    if (matchedByEmail) return matchedByEmail;
+    const matchedByName = state.teamMembers.find(
+      (member) => member.name.toLowerCase() === normalizedRuntimeName
+    );
+    return matchedByName ?? state.teamMembers[0] ?? null;
+  }, [runtimeUser.email, runtimeUser.name, state.teamMembers]);
+
+  const displayName = currentMember?.name || runtimeUser.name;
+  const displayEmail = currentMember?.email || runtimeUser.email;
+  const displayAvatar = currentMember?.avatar || "";
   
   // Fetch trials from database for breadcrumb display
   const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
+
+  useEffect(() => {
+    if (currentDataMode !== "sample") return;
+    if (!Array.isArray(trials) || trials.length === 0) return;
+    if (!Array.isArray(state.teamMembers) || state.teamMembers.length === 0) return;
+
+    ensureTrialTeamAssignments({
+      mode: "sample",
+      trials: trials.map((trial) => ({
+        id: String(trial?.id || ""),
+        location: typeof trial?.location === "string" ? trial.location : null,
+      })),
+      members: state.teamMembers,
+    });
+  }, [currentDataMode, state.teamMembers, trials]);
 
   const resetToEmptyMutation = trpc.demo.resetToEmpty.useMutation({
     onSuccess: async () => {
@@ -102,7 +164,7 @@ export function TopNav() {
         toast.success("Full dataset loaded");
       } else if (confirmDialog.type === 'full-reset') {
         await fullResetMutation.mutateAsync();
-        fullResetLocal('building');
+        fullResetLocal('sample');
         toast.success("All demo modes reset to defaults");
       } else if (confirmDialog.type === 'building') {
         setBuildingMode();
@@ -125,7 +187,7 @@ export function TopNav() {
     // Always show organization name, not trial
     return {
       type: 'organization' as const,
-      name: 'Themison Research',
+      name: String(profile.name || "").trim() || "Organization",
       id: 'org-1',
     };
   };
@@ -179,6 +241,7 @@ export function TopNav() {
     }
     if (location.startsWith('/tasks')) return { section: 'Workspace', sectionHref: '/', page: 'Task Manager', pageHref: '/tasks' };
     if (location.startsWith('/collaboration')) return { section: 'Workspace', sectionHref: '/', page: 'Collaboration Hub', pageHref: '/collaboration' };
+    if (location.startsWith('/budget-intelligence')) return { section: 'Workspace', sectionHref: '/', page: 'Budget Intelligence', pageHref: '/budget-intelligence' };
     if (location.startsWith('/analytics')) return { section: 'Workspace', sectionHref: '/', page: 'Analytics', pageHref: '/analytics' };
     if (location.startsWith('/organization')) return { section: 'Team & Admin', sectionHref: '/', page: 'Organization', pageHref: '/organization' };
     if (location.startsWith('/integrations')) return { section: 'Team & Admin', sectionHref: '/', page: 'Integrations', pageHref: '/integrations' };
@@ -197,6 +260,7 @@ export function TopNav() {
     if (location.startsWith('/documents')) return Brain;
     if (location.startsWith('/tasks')) return LayoutGrid;
     if (location.startsWith('/collaboration')) return Users;
+    if (location.startsWith('/budget-intelligence')) return BudgetIntelligenceIcon;
     if (location.startsWith('/analytics')) return AnalyticsIcon;
     if (location.startsWith('/organization')) return Building2;
     if (location.startsWith('/integrations')) return Puzzle;
@@ -258,22 +322,22 @@ export function TopNav() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="flex items-center gap-2 h-9 px-2">
-                <Avatar className="h-7 w-7">
-                  <AvatarImage src="" alt="Kaleb Sanders" />
-                  <AvatarFallback className="bg-primary text-primary-foreground text-xs" style={{backgroundColor: '#e6e7eb'}}>
+                <Avatar className="h-7 w-7 rounded-md">
+                  <AvatarImage src={displayAvatar} alt={displayName} className="rounded-md object-cover" />
+                  <AvatarFallback className="rounded-md bg-primary text-primary-foreground text-xs" style={{backgroundColor: '#e6e7eb'}}>
                     <User className="h-4 w-4 text-gray-600" />
                   </AvatarFallback>
                 </Avatar>
-                <span className="text-xs font-medium hidden md:inline">Kaleb Sanders</span>
+                <span className="text-xs font-medium hidden md:inline">{displayName}</span>
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>
                 <div className="flex flex-col">
-                  <span className="font-medium">Kaleb Sanders</span>
+                  <span className="font-medium">{displayName}</span>
                   <span className="text-xs text-muted-foreground font-normal">
-                    kaleb.s@themison.com
+                    {displayEmail}
                   </span>
                 </div>
               </DropdownMenuLabel>
@@ -309,6 +373,15 @@ export function TopNav() {
                   >
                     <span>Building Mode</span>
                     {currentDataMode === 'building' && <Check className="h-4 w-4 ml-4" />}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => {
+                      saveCurrentModeAsDefault();
+                      toast.success(`Saved ${currentDataMode} mode as your reset default`);
+                    }}
+                  >
+                    Save Current Mode as Default
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem 

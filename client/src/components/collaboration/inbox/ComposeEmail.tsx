@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { Brain } from "lucide-react";
 import type { DraftResult } from "@/types/collaboration";
 
 interface ComposeEmailProps {
@@ -46,7 +47,10 @@ export function ComposeEmail({ onSend, onDraftWithAI }: ComposeEmailProps) {
       <textarea className="min-h-[180px] w-full rounded-xl border border-neutral-300 px-3 py-2 text-sm" placeholder="Body" value={body} onChange={(event) => setBody(event.target.value)} />
 
       <div className="rounded-xl border border-neutral-300 bg-neutral-50 p-3">
-        <div className="mb-1 text-xs font-medium text-neutral-600">Draft with AI</div>
+        <div className="mb-1 inline-flex items-center gap-1.5 text-xs font-medium text-neutral-600">
+          <Brain className="h-3.5 w-3.5 text-indigo-600" />
+          Draft with Themison AI
+        </div>
         <input
           className="h-9 w-full rounded-lg border border-neutral-300 px-2 text-xs"
           placeholder="Any specific instructions?"
@@ -54,7 +58,7 @@ export function ComposeEmail({ onSend, onDraftWithAI }: ComposeEmailProps) {
           onChange={(event) => setInstructions(event.target.value)}
         />
         <button type="button" onClick={draftWithAI} disabled={drafting} className="mt-2 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-100 disabled:opacity-60">
-          {drafting ? "Generating..." : "Generate Draft"}
+          {drafting ? "Generating with Themison AI..." : "Generate with Themison AI"}
         </button>
       </div>
 

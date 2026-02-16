@@ -31,6 +31,35 @@ export type EmailFolder = "inbox" | "sent" | "drafts" | "archived";
 
 export type EmailPriority = "high" | "medium" | "low";
 
+export type InboxAILabel =
+  | "urgent"
+  | "action_required"
+  | "lab_alert"
+  | "safety_report"
+  | "sponsor_query"
+  | "system_notification"
+  | "fyi"
+  | "protocol_clarification"
+  | "irb_correspondence"
+  | "enrollment_update"
+  | "administrative"
+  | "draft";
+
+export interface InboxLabelSetting {
+  key: InboxAILabel;
+  enabled: boolean;
+  displayName: string;
+  color: string;
+  textColor: string;
+  confidenceThreshold?: number;
+}
+
+export interface InboxTriageSettings {
+  confidenceThreshold: number;
+  autoApplyConfidence?: number;
+  labels: InboxLabelSetting[];
+}
+
 export interface Conversation {
   id: string;
   trialId: string;
@@ -115,6 +144,11 @@ export interface ThreadParticipant {
   userId: number;
   joinedAt: string | Date;
   lastReadAt: string | Date | null;
+  user?: {
+    id: number;
+    name: string | null;
+    email: string | null;
+  } | null;
 }
 
 export interface TrialInbox {

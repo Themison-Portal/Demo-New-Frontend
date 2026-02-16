@@ -4,7 +4,7 @@
  * Survives page navigation and browser refresh, can be reset to initial state
  */
 
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
 import { toast } from "sonner";
 
 // Task status types
@@ -114,7 +114,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-1",
       name: "Kaleb Sanders",
-      email: "kaleb.s@themison.com",
+      email: "kaleb.s@azorg.be",
       role: "Principal Investigator",
       clinicalRole: "Principal Investigator",
       appRole: "Superadmin",
@@ -126,7 +126,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-2",
       name: "Ava Patel",
-      email: "ava.patel@themison.com",
+      email: "ava.patel@azorg.be",
       role: "Sub-Investigator",
       clinicalRole: "Sub-Investigator",
       appRole: "Admin",
@@ -138,7 +138,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-3",
       name: "Liam Chen",
-      email: "liam.chen@themison.com",
+      email: "liam.chen@azorg.be",
       role: "Clinical Research Coordinator",
       clinicalRole: "CRC",
       appRole: "Editor",
@@ -150,7 +150,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-4",
       name: "Maya Rodriguez",
-      email: "maya.rodriguez@themison.com",
+      email: "maya.rodriguez@azorg.be",
       role: "Research Nurse",
       clinicalRole: "Nurse",
       appRole: "Editor",
@@ -162,7 +162,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-5",
       name: "Noah Brooks",
-      email: "noah.brooks@themison.com",
+      email: "noah.brooks@azorg.be",
       role: "Data Manager",
       clinicalRole: "Data Manager",
       appRole: "Editor",
@@ -174,7 +174,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-6",
       name: "Olivia Hart",
-      email: "olivia.hart@themison.com",
+      email: "olivia.hart@azorg.be",
       role: "Regulatory Specialist",
       clinicalRole: "Regulatory",
       appRole: "Admin",
@@ -186,7 +186,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-7",
       name: "Sofia Alvarez",
-      email: "sofia.alvarez@themison.com",
+      email: "sofia.alvarez@azorg.be",
       role: "Clinical Operations",
       clinicalRole: "CRC",
       appRole: "Editor",
@@ -198,7 +198,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-8",
       name: "Daniel Nguyen",
-      email: "daniel.nguyen@themison.com",
+      email: "daniel.nguyen@azorg.be",
       role: "Lab Lead",
       clinicalRole: "Lab",
       appRole: "Admin",
@@ -210,7 +210,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-9",
       name: "Priya Nair",
-      email: "priya.nair@themison.com",
+      email: "priya.nair@azorg.be",
       role: "Safety Lead",
       clinicalRole: "Safety",
       appRole: "Editor",
@@ -222,7 +222,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-10",
       name: "Lucas Meyer",
-      email: "lucas.meyer@themison.com",
+      email: "lucas.meyer@azorg.be",
       role: "Site Manager",
       clinicalRole: "Site Manager",
       appRole: "Admin",
@@ -234,7 +234,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-11",
       name: "Isabelle Laurent",
-      email: "isabelle.laurent@themison.com",
+      email: "isabelle.laurent@azorg.be",
       role: "Quality Lead",
       clinicalRole: "Quality",
       appRole: "Editor",
@@ -246,7 +246,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-12",
       name: "Jordan Reed",
-      email: "jordan.reed@themison.com",
+      email: "jordan.reed@azorg.be",
       role: "Regulatory",
       clinicalRole: "Regulatory",
       appRole: "Editor",
@@ -258,7 +258,7 @@ const initialDemoState: DemoState = {
     {
       id: "member-13",
       name: "Zara Malik",
-      email: "zara.malik@themison.com",
+      email: "zara.malik@azorg.be",
       role: "Pharmacovigilance",
       clinicalRole: "Pharmacovigilance",
       appRole: "Editor",
@@ -365,6 +365,7 @@ interface DemoStateContextType {
   resetDemo: () => void;
   loadSampleData: () => void;
   loadFullDataset: () => void;
+  saveCurrentModeAsDefault: () => void;
   fullResetLocal: (modeOverride?: DemoState["dataMode"]) => void;
   setBuildingMode: () => void;
   getCompletedTasksCount: () => number;
@@ -379,6 +380,15 @@ const STORAGE_KEY_SAMPLE = `${STORAGE_KEY}-sample`;
 const STORAGE_KEY_FULL = `${STORAGE_KEY}-full`;
 const STORAGE_KEY_BUILDING = `${STORAGE_KEY}-building`;
 const STORAGE_KEY_ACTIVE_MODE = `${STORAGE_KEY}-active-mode`;
+const STORAGE_KEY_DEFAULT_SAMPLE = `${STORAGE_KEY}-default-sample`;
+const STORAGE_KEY_DEFAULT_FULL = `${STORAGE_KEY}-default-full`;
+const STORAGE_KEY_DEFAULT_BUILDING = `${STORAGE_KEY}-default-building`;
+const LEGACY_MEMBER_EMAIL_DOMAIN = "@themison.com";
+const CURRENT_MEMBER_EMAIL_DOMAIN = "@azorg.be";
+const COLLAB_DEMO_STORAGE_PREFIXES = [
+  "themison-collab-demo-conversations-",
+  "themison-collab-demo-inbox-",
+];
 
 const isDemoDataMode = (value: string | null): value is DemoState["dataMode"] => {
   return value === "sample" || value === "full" || value === "building";
@@ -396,12 +406,74 @@ const getStorageKeyForMode = (mode: DemoState["dataMode"]) => {
   }
 };
 
+const getDefaultStorageKeyForMode = (mode: DemoState["dataMode"]) => {
+  switch (mode) {
+    case "full":
+      return STORAGE_KEY_DEFAULT_FULL;
+    case "building":
+      return STORAGE_KEY_DEFAULT_BUILDING;
+    case "sample":
+    default:
+      return STORAGE_KEY_DEFAULT_SAMPLE;
+  }
+};
+
 const withMode = (state: DemoState, mode: DemoState["dataMode"]) => ({
   ...state,
   dataMode: mode,
 });
 
+const isQuotaExceededError = (error: unknown) => {
+  return (
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED" || error.code === 22)
+  );
+};
+
+const clearCollaborationDemoStorage = () => {
+  const keysToDelete: string[] = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (!key) continue;
+    if (COLLAB_DEMO_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      keysToDelete.push(key);
+    }
+  }
+  keysToDelete.forEach((key) => localStorage.removeItem(key));
+};
+
+const migrateMemberEmailDomain = (email: string) => {
+  const trimmed = email.trim();
+  if (!trimmed.toLowerCase().endsWith(LEGACY_MEMBER_EMAIL_DOMAIN)) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, -LEGACY_MEMBER_EMAIL_DOMAIN.length)}${CURRENT_MEMBER_EMAIL_DOMAIN}`;
+};
+
+const migrateDemoStateMemberEmails = (value: DemoState): DemoState => {
+  if (!Array.isArray(value.teamMembers) || value.teamMembers.length === 0) {
+    return value;
+  }
+
+  let didChange = false;
+  const migratedTeamMembers = value.teamMembers.map((member) => {
+    const nextEmail = migrateMemberEmailDomain(member.email ?? "");
+    if (nextEmail !== member.email) {
+      didChange = true;
+      return { ...member, email: nextEmail };
+    }
+    return member;
+  });
+
+  if (!didChange) return value;
+  return {
+    ...value,
+    teamMembers: migratedTeamMembers,
+  };
+};
+
 export function DemoStateProvider({ children }: { children: ReactNode }) {
+  const quotaToastShownRef = useRef(false);
   const [state, setState] = useState<DemoState>(() => {
     // Load active mode from localStorage on initial mount (sample mode by default)
     const storedModeRaw = localStorage.getItem(STORAGE_KEY_ACTIVE_MODE);
@@ -409,7 +481,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem(getStorageKeyForMode(activeMode));
     if (stored) {
       try {
-        return withMode(JSON.parse(stored), activeMode);
+        const parsed = JSON.parse(stored) as DemoState;
+        return withMode(migrateDemoStateMemberEmails(parsed), activeMode);
       } catch (e) {
         console.error("Failed to parse stored state:", e);
         return withMode(initialDemoState, "sample");
@@ -421,8 +494,33 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
   // Save to localStorage whenever state changes
   useEffect(() => {
     const key = getStorageKeyForMode(state.dataMode);
-    localStorage.setItem(key, JSON.stringify(state));
-    localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+      localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
+    } catch (error) {
+      if (!isQuotaExceededError(error)) {
+        console.error("Failed to persist demo state:", error);
+        return;
+      }
+
+      // Fallback #1: clear regenerable collaboration cache, then retry preserving avatars.
+      clearCollaborationDemoStorage();
+
+      try {
+        localStorage.setItem(key, JSON.stringify(state));
+        localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
+        if (!quotaToastShownRef.current) {
+          toast.success("Cleared cached collaboration demo data to save profile photos.");
+          quotaToastShownRef.current = true;
+        }
+      } catch (fallbackError) {
+        console.error("Failed to persist demo state after cache cleanup:", fallbackError);
+        if (!quotaToastShownRef.current) {
+          toast.error("Storage is full. Please run Full Reset to clear local demo data, then save photos again.");
+          quotaToastShownRef.current = true;
+        }
+      }
+    }
   }, [state]);
 
   useEffect(() => {
@@ -484,7 +582,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
         {
           id: "member-1",
           name: "Kaleb Sanders",
-          email: "kaleb.s@themison.com",
+          email: "kaleb.s@azorg.be",
           role: "Principal Investigator",
           clinicalRole: "Principal Investigator",
           appRole: "Superadmin",
@@ -508,7 +606,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem(STORAGE_KEY_SAMPLE);
     if (stored) {
       try {
-        setState(withMode(JSON.parse(stored), "sample"));
+        const parsed = JSON.parse(stored) as DemoState;
+        setState(withMode(migrateDemoStateMemberEmails(parsed), "sample"));
         return;
       } catch (e) {
         console.error("Failed to parse stored sample state:", e);
@@ -533,12 +632,12 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     ],
     teamMembers: [
       ...initialDemoState.teamMembers,
-      { id: "member-14", name: "Hannah Park", email: "hannah.park@themison.com", role: "Project Manager", clinicalRole: "Project Manager", appRole: "Admin", team: "Operations", site: "Brussels", status: "Active", initials: "HP" },
-      { id: "member-15", name: "Marco Silva", email: "marco.silva@themison.com", role: "Clinical Operations", clinicalRole: "Clinical Ops", appRole: "Editor", team: "Clinical", site: "Lisbon", status: "Active", initials: "MS" },
-      { id: "member-16", name: "Rina Sato", email: "rina.sato@themison.com", role: "eTMF Lead", clinicalRole: "eTMF", appRole: "Editor", team: "Regulatory", site: "Berlin", status: "Active", initials: "RS" },
-      { id: "member-17", name: "Owen Price", email: "owen.price@themison.com", role: "Medical Monitor", clinicalRole: "Medical Monitor", appRole: "Admin", team: "Medical", site: "London", status: "Active", initials: "OP" },
-      { id: "member-18", name: "Camila Duarte", email: "camila.duarte@themison.com", role: "Site Coordinator", clinicalRole: "CRC", appRole: "Editor", team: "Study Team", site: "Paris", status: "Active", initials: "CD" },
-      { id: "member-19", name: "Isaac Walker", email: "isaac.walker@themison.com", role: "Principal Investigator", clinicalRole: "Principal Investigator", appRole: "Admin", team: "Clinical", site: "Copenhagen", status: "Active", initials: "IW" },
+      { id: "member-14", name: "Hannah Park", email: "hannah.park@azorg.be", role: "Project Manager", clinicalRole: "Project Manager", appRole: "Admin", team: "Operations", site: "Brussels", status: "Active", initials: "HP" },
+      { id: "member-15", name: "Marco Silva", email: "marco.silva@azorg.be", role: "Clinical Operations", clinicalRole: "Clinical Ops", appRole: "Editor", team: "Clinical", site: "Lisbon", status: "Active", initials: "MS" },
+      { id: "member-16", name: "Rina Sato", email: "rina.sato@azorg.be", role: "eTMF Lead", clinicalRole: "eTMF", appRole: "Editor", team: "Regulatory", site: "Berlin", status: "Active", initials: "RS" },
+      { id: "member-17", name: "Owen Price", email: "owen.price@azorg.be", role: "Medical Monitor", clinicalRole: "Medical Monitor", appRole: "Admin", team: "Medical", site: "London", status: "Active", initials: "OP" },
+      { id: "member-18", name: "Camila Duarte", email: "camila.duarte@azorg.be", role: "Site Coordinator", clinicalRole: "CRC", appRole: "Editor", team: "Study Team", site: "Paris", status: "Active", initials: "CD" },
+      { id: "member-19", name: "Isaac Walker", email: "isaac.walker@azorg.be", role: "Principal Investigator", clinicalRole: "Principal Investigator", appRole: "Admin", team: "Clinical", site: "Copenhagen", status: "Active", initials: "IW" },
     ],
     trials: [
       ...initialDemoState.trials,
@@ -570,7 +669,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem(STORAGE_KEY_FULL);
     if (stored) {
       try {
-        setState(withMode(JSON.parse(stored), "full"));
+        const parsed = JSON.parse(stored) as DemoState;
+        setState(withMode(migrateDemoStateMemberEmails(parsed), "full"));
         return;
       } catch (e) {
         console.error("Failed to parse stored full state:", e);
@@ -581,8 +681,13 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(nextState));
   };
 
+  const saveCurrentModeAsDefault = () => {
+    const key = getDefaultStorageKeyForMode(state.dataMode);
+    localStorage.setItem(key, JSON.stringify(withMode(state, state.dataMode)));
+  };
+
   const fullResetLocal = (modeOverride?: DemoState["dataMode"]) => {
-    const buildingState = withMode(
+    const defaultBuildingState = withMode(
       {
         tasks: [],
         documents: [],
@@ -591,7 +696,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
           {
             id: "member-1",
             name: "Kaleb Sanders",
-            email: "kaleb.s@themison.com",
+            email: "kaleb.s@azorg.be",
             role: "Principal Investigator",
             clinicalRole: "Principal Investigator",
             appRole: "Superadmin",
@@ -608,11 +713,29 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       },
       "building"
     );
-    const sampleState = withMode(initialDemoState, "sample");
-    const fullState = withMode(buildFullDataset(), "full");
+    const defaultSampleState = withMode(initialDemoState, "sample");
+    const defaultFullState = withMode(buildFullDataset(), "full");
+
+    const readDefaultStateForMode = (mode: DemoState["dataMode"], fallbackState: DemoState) => {
+      const stored = localStorage.getItem(getDefaultStorageKeyForMode(mode));
+      if (!stored) return fallbackState;
+      try {
+        const parsed = JSON.parse(stored) as DemoState;
+        return withMode(migrateDemoStateMemberEmails(parsed), mode);
+      } catch (error) {
+        console.error(`Failed to parse stored default state for ${mode}:`, error);
+        return fallbackState;
+      }
+    };
+
+    const buildingState = readDefaultStateForMode("building", defaultBuildingState);
+    const sampleState = readDefaultStateForMode("sample", defaultSampleState);
+    const fullState = readDefaultStateForMode("full", defaultFullState);
+
     localStorage.setItem(STORAGE_KEY_BUILDING, JSON.stringify(buildingState));
     localStorage.setItem(STORAGE_KEY_SAMPLE, JSON.stringify(sampleState));
     localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(fullState));
+    clearCollaborationDemoStorage();
     const targetMode = modeOverride ?? state.dataMode;
     if (targetMode === "full") {
       setState(fullState);
@@ -627,8 +750,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem(STORAGE_KEY_BUILDING);
     if (stored) {
       try {
-        const parsed = JSON.parse(stored);
-        setState(withMode(parsed, "building"));
+        const parsed = JSON.parse(stored) as DemoState;
+        setState(withMode(migrateDemoStateMemberEmails(parsed), "building"));
         return;
       } catch (e) {
         console.error("Failed to parse stored building state:", e);
@@ -661,6 +784,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
         resetDemo,
         loadSampleData,
         loadFullDataset,
+        saveCurrentModeAsDefault,
         fullResetLocal,
         setBuildingMode,
         getCompletedTasksCount,
