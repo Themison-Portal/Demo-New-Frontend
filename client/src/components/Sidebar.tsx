@@ -309,7 +309,7 @@ export function Sidebar() {
     {
       title: "GENERAL",
       items: [
-        { label: "Dashboard", icon: Home, href: "/" },
+        { label: "Home", icon: Home, href: "/" },
         { 
           label: "Trial Workspace", 
           icon: TrialElements, 
@@ -323,7 +323,7 @@ export function Sidebar() {
         { label: "Themison AI", icon: Brain, href: "/documents" },
         { label: "Task Manager", icon: LayoutGrid, href: "/tasks" },
         { label: "Collaboration Hub", icon: MessageChatSquare, href: "/collaboration" },
-        { label: "Analytics", icon: AnalyticsIcon, href: "/analytics" },
+        { label: "Analytics Dashboard", icon: AnalyticsIcon, href: "/analytics" },
         { label: "Budget Intelligence", icon: BudgetIntelligenceIcon, href: "/budget-intelligence" },
       ],
     },

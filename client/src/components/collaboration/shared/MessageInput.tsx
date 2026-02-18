@@ -281,7 +281,7 @@ export function MessageInput({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-gray-700 focus:outline-none"
+                  className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-[#0E0017] focus:outline-none"
                   aria-label="Attach"
                 >
                   <Paperclip className="h-4 w-4" />
@@ -289,7 +289,7 @@ export function MessageInput({
                 <div ref={contextMenuRef} className="relative">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors duration-150 hover:bg-[#e9edf2] focus:outline-none"
+                    className="inline-flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-[#0E0017] focus:outline-none"
                     aria-label="Add context"
                     aria-expanded={contextMenuOpen}
                     onClick={() => setContextMenuOpen((open) => !open)}
@@ -366,7 +366,7 @@ export function MessageInput({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors duration-150 hover:bg-[#e9edf2] focus:outline-none"
+                  className="inline-flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-[#0E0017] focus:outline-none"
                   aria-label="Auto"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
@@ -375,7 +375,7 @@ export function MessageInput({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-gray-700 focus:outline-none"
+                  className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 transition-colors duration-150 hover:bg-[#e9edf2] hover:text-[#0E0017] focus:outline-none"
                   aria-label="Voice input"
                 >
                   <Mic className="h-4 w-4" />
@@ -383,7 +383,7 @@ export function MessageInput({
                 <button
                   type="submit"
                   className={`inline-flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors duration-150 focus:outline-none ${
-                    value.trim() ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-300 hover:bg-gray-300"
+                    value.trim() ? "bg-blue-600 hover:bg-blue-700" : "bg-[#8FAEF6] hover:bg-[#8FAEF6]"
                   } disabled:cursor-not-allowed disabled:opacity-100`}
                   disabled={disabled || !value.trim()}
                   aria-label="Send"
@@ -425,7 +425,7 @@ export function MessageInput({
             <button
               type="button"
               className={
-                "inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-300 bg-white text-neutral-500 hover:bg-neutral-50"
+                "inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-300 bg-white text-neutral-500 hover:bg-neutral-50 hover:text-[#0E0017]"
               }
               aria-label="Attach"
             >
@@ -434,7 +434,7 @@ export function MessageInput({
             <button
               type="button"
               className={
-                "inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-300 bg-white text-neutral-500 hover:bg-neutral-50"
+                "inline-flex h-9 w-9 items-center justify-center rounded-full border border-neutral-300 bg-white text-neutral-500 hover:bg-neutral-50 hover:text-[#0E0017]"
               }
               aria-label="Add"
             >

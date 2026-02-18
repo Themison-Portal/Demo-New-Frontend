@@ -48,7 +48,7 @@ const iconMap: Record<string, any> = {
 // Breadcrumb configuration for each route
 const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
   "/": [
-    { label: "Dashboard" },
+    { label: "Home" },
   ],
   "/workspace": [
     { label: "Clinical Hub", href: "/" },
@@ -72,7 +72,7 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
   ],
   "/analytics": [
     { label: "Workspace", href: "/" },
-    { label: "Analytics" },
+    { label: "Analytics Dashboard" },
   ],
   "/budget-intelligence": [
     { label: "Workspace", href: "/" },
@@ -147,7 +147,14 @@ function Router() {
   return (
     <DashboardLayout breadcrumbs={breadcrumbs} breadcrumbIcon={breadcrumbIcon}>
       <Switch>
-        <Route path="/" component={Overview} />
+        <Route path="/">
+          {() => (
+            <>
+              <Overview />
+              <Analytics embedded />
+            </>
+          )}
+        </Route>
         <Route path="/workspace" component={TrialWorkspace} />
         <Route path="/trial-workspace" component={TrialWorkspace} />
         <Route path="/trial/:id/assistant">{(params) => (
@@ -162,7 +169,7 @@ function Router() {
         }}</Route>
         <Route path="/tasks" component={Tasks} />
         <Route path="/collaboration" component={Collaboration} />
-        <Route path="/analytics" component={Analytics} />
+        <Route path="/analytics">{() => <Analytics />}</Route>
         <Route path="/budget-intelligence" component={BudgetIntelligence} />
         <Route path="/organization" component={Organization} />
         <Route path="/integrations" component={Integrations} />

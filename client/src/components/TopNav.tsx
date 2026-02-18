@@ -273,7 +273,7 @@ export function TopNav() {
 
   // Get breadcrumb based on current location (returns section, page, and optional subpage)
   const getBreadcrumb = () => {
-    if (location === '/') return { section: 'General', page: 'Dashboard' };
+    if (location === '/') return { section: 'General', page: 'Home' };
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) {
       const trialId = location.split('/')[2]?.toLowerCase();
       const trial = trials.find(t => t.id === trialId);
@@ -321,7 +321,7 @@ export function TopNav() {
     if (location.startsWith('/tasks')) return { section: 'Workspace', sectionHref: '/', page: 'Task Manager', pageHref: '/tasks' };
     if (location.startsWith('/collaboration')) return { section: 'Workspace', sectionHref: '/', page: 'Collaboration Hub', pageHref: '/collaboration' };
     if (location.startsWith('/budget-intelligence')) return { section: 'Workspace', sectionHref: '/', page: 'Budget Intelligence', pageHref: '/budget-intelligence' };
-    if (location.startsWith('/analytics')) return { section: 'Workspace', sectionHref: '/', page: 'Analytics', pageHref: '/analytics' };
+    if (location.startsWith('/analytics')) return { section: 'Workspace', sectionHref: '/', page: 'Analytics Dashboard', pageHref: '/analytics' };
     if (location.startsWith('/organization')) return { section: 'Team & Admin', sectionHref: '/', page: 'Organization', pageHref: '/organization' };
     if (location.startsWith('/integrations')) return { section: 'Team & Admin', sectionHref: '/', page: 'Integrations', pageHref: '/integrations' };
     if (location.startsWith('/notifications')) return { section: 'Team & Admin', sectionHref: '/', page: 'Notifications', pageHref: '/notifications' };
@@ -356,7 +356,7 @@ export function TopNav() {
       <header className="h-11 mt-2 bg-transparent border-none flex items-center justify-between pr-4 gap-4 w-full">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-xs pl-8">
-          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+          <div className="flex items-center justify-center w-8 h-8 rounded-[7px] bg-primary/10">
             {(() => {
               const IconComponent = getBreadcrumbIcon();
               return <IconComponent className="h-4 w-4 text-primary" />;

@@ -63,7 +63,7 @@
   --secondary: oklch(0.96 0 0); /* Very light gray #F5F5F5 */
   --secondary-foreground: #0E0017;
   --muted: oklch(0.98 0 0); /* Subtle gray #FAFAFA */
-  --muted-foreground: oklch(0.65 0 0); /* Light gray for section headers */
+  --muted-foreground: #75778B; /* Unified gray text */
   --accent: oklch(0.96 0 0); /* Light gray for hover states */
   --accent-foreground: #0E0017;
   --destructive: oklch(0.55 0.22 25); /* Red for critical alerts */
@@ -93,7 +93,7 @@
   --secondary: oklch(0.24 0.006 286.033);
   --secondary-foreground: oklch(0.7 0.005 65);
   --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
+  --muted-foreground: #75778B;
   --accent: oklch(0.274 0.006 286.033);
   --accent-foreground:  oklch(0.92 0.005 65);
   --destructive: oklch(0.704 0.191 22.216);
@@ -146,10 +146,43 @@
 }
 
 @layer utilities {
-  .text-gray-900,
-  .text-slate-900 {
-    color: #0E0017 !important;
+  .text-muted-foreground,
+  .text-gray-300,
+  .text-gray-400,
+  .text-gray-500,
+  .text-gray-600,
+  .text-gray-700,
+  .text-slate-300,
+  .text-slate-400,
+  .text-slate-500,
+  .text-slate-600,
+  .text-slate-700,
+  .text-zinc-300,
+  .text-zinc-400,
+  .text-zinc-500,
+  .text-zinc-600,
+  .text-zinc-700,
+  .text-neutral-300,
+  .text-neutral-400,
+  .text-neutral-500,
+  .text-neutral-600,
+  .text-neutral-700,
+  .text-stone-300,
+  .text-stone-400,
+  .text-stone-500,
+  .text-stone-600,
+  .text-stone-700,
+  .text-\[\#525252\],
+  .text-\[\#55565a\],
+  .text-\[\#667085\],
+  .text-\[\#6f7075\],
+  .text-\[\#858481\],
+  .text-\[\#8b8d93\],
+  .text-\[\#2f3033\],
+  .text-\[\#34322d\] {
+    color: #75778B;
   }
+
 }
 
 /* Scrollbars: remove track borders/lines */

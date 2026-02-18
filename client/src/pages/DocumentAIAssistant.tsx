@@ -21,6 +21,7 @@ import {
   Folder,
   FileSearch, 
   List, 
+  ListChecks,
   Calendar,
   CheckSquare,
   PanelRight,
@@ -51,9 +52,13 @@ import {
   AtSign,
   Mail,
   Database,
+  Users,
+  Globe,
+  Circle,
   FlaskConical,
   Trash2,
   Search,
+  Upload,
   Download
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -86,6 +91,129 @@ interface ChatMessage {
   thoughtsSummary?: string; // UI-friendly summary (no raw chain-of-thought)
   sources?: Array<{ filename: string; section?: string; excerpt?: string; fileId?: string; fileUrl?: string; protocolId?: number; page?: number; category?: string; sourceType?: string }>;
 }
+
+type AddContextOption = {
+  id: string;
+  label: string;
+  defaultSelected?: boolean;
+  disabled?: boolean;
+  hint?: string;
+};
+
+type AddContextCategory = {
+  id: string;
+  label: string;
+  options: AddContextOption[];
+};
+
+const ADD_CONTEXT_CATEGORIES: AddContextCategory[] = [
+  {
+    id: "trial_context",
+    label: "Trial context",
+    options: [
+      { id: "trial_current", label: "Current Trial (auto)", defaultSelected: true },
+      { id: "trial_switch", label: "Switch Trial..." },
+      { id: "trial_add_another", label: "Add another Trial..." },
+    ],
+  },
+  {
+    id: "documents",
+    label: "Documents",
+    options: [
+      { id: "doc_protocol_latest", label: "Protocol (latest)", defaultSelected: true },
+      { id: "doc_protocol_amendments", label: "Protocol Amendment(s)" },
+      { id: "doc_ib_pharmacy_lab", label: "IB / Pharmacy / Lab Manual" },
+      { id: "doc_site_sops", label: "SOPs (site SOPs)" },
+      { id: "doc_uploaded", label: "Uploaded files..." },
+    ],
+  },
+  {
+    id: "execution_tasks",
+    label: "Execution / Tasks",
+    options: [
+      { id: "tasks_soa", label: "Schedule of Activities" },
+      { id: "tasks_board_current", label: "Task Board (current)", defaultSelected: true },
+      { id: "tasks_selected", label: "Selected Task(s)..." },
+      { id: "tasks_upcoming", label: "Upcoming (next 7 days)" },
+      { id: "tasks_blocked", label: "Blocked tasks" },
+      { id: "tasks_overdue", label: "Overdue tasks" },
+    ],
+  },
+  {
+    id: "collaboration",
+    label: "Collaboration",
+    options: [
+      { id: "collab_this_thread", label: "This thread" },
+      { id: "collab_recent_decisions", label: "Recent decisions (7 days)" },
+      { id: "collab_open_questions", label: "Open questions" },
+      { id: "collab_mentions_me", label: "Mentions of me" },
+    ],
+  },
+  {
+    id: "people_roles",
+    label: "People & Roles",
+    options: [
+      { id: "people_my_role", label: "My role in this trial", defaultSelected: true },
+      { id: "people_team_list", label: "Trial team list" },
+      { id: "people_responsibilities", label: "Role responsibilities" },
+    ],
+  },
+  {
+    id: "systems_links",
+    label: "Systems & Links",
+    options: [
+      { id: "systems_bookmarks", label: "Trial Systems / Bookmarks" },
+      { id: "systems_integrations", label: "Connected Integrations", disabled: true, hint: "Soon" },
+    ],
+  },
+];
+
+const createDefaultSelectedContextIds = () => {
+  const defaults = new Set<string>();
+  ADD_CONTEXT_CATEGORIES.forEach((category) => {
+    category.options.forEach((option) => {
+      if (option.defaultSelected) {
+        defaults.add(option.id);
+      }
+    });
+  });
+  return defaults;
+};
+
+const getAddContextCategoryIcon = (categoryId: string) => {
+  switch (categoryId) {
+    case "trial_context":
+      return FlaskConical;
+    case "documents":
+      return FileText;
+    case "execution_tasks":
+      return ListChecks;
+    case "collaboration":
+      return MessageSquare;
+    case "people_roles":
+      return Users;
+    case "systems_links":
+      return Globe;
+    default:
+      return FileText;
+  }
+};
+
+const getAddContextOptionIcon = (option: AddContextOption, isSelected: boolean) => {
+  if (isSelected) {
+    return <Check className="h-4 w-4 text-blue-600" />;
+  }
+  if (option.id === "trial_switch") {
+    return <Search className="h-4 w-4 text-gray-400" />;
+  }
+  if (option.id === "trial_add_another") {
+    return <Plus className="h-4 w-4 text-gray-400" />;
+  }
+  if (option.id === "doc_uploaded") {
+    return <Upload className="h-4 w-4 text-gray-400" />;
+  }
+  return <Circle className="h-4 w-4 text-gray-300" />;
+};
 
 type WorksheetBlockType =
   | "text"
@@ -570,6 +698,13 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const searchMode = trialId ? 'single' : 'all';
   const selectedTrialId = trialId || 'all';
   const [sourceModalOpen, setSourceModalOpen] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [activeContextCategoryId, setActiveContextCategoryId] = useState<string>(
+    ADD_CONTEXT_CATEGORIES[0]?.id || ""
+  );
+  const [selectedContextIds, setSelectedContextIds] = useState<Set<string>>(() =>
+    createDefaultSelectedContextIds()
+  );
   
   useEffect(() => {
     console.log('sourceModalOpen state changed to:', sourceModalOpen);
@@ -606,7 +741,48 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const chatEndRef = useRef<HTMLDivElement>(null);
   const archiveSearchInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const modalTrialIds = trialId ? [trialId] : selectedTrials;
+
+  const activeContextCategory = useMemo(
+    () =>
+      ADD_CONTEXT_CATEGORIES.find((category) => category.id === activeContextCategoryId) ||
+      ADD_CONTEXT_CATEGORIES[0],
+    [activeContextCategoryId]
+  );
+
+  useEffect(() => {
+    if (!contextMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!contextMenuRef.current) return;
+      if (contextMenuRef.current.contains(event.target as Node)) return;
+      setContextMenuOpen(false);
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setContextMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [contextMenuOpen]);
+
+  const toggleContextOption = (option: AddContextOption) => {
+    if (option.disabled) return;
+    setSelectedContextIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(option.id)) {
+        next.delete(option.id);
+      } else {
+        next.add(option.id);
+      }
+      return next;
+    });
+  };
 
   const toggleSourceModalTrial = useCallback((targetTrialId: string) => {
     if (trialId) return;
@@ -618,6 +794,68 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     // Reset selected documents when trial selection changes to avoid stale cross-trial scope.
     setSelectedDocuments([]);
   }, [trialId]);
+
+  const renderAddContextMenu = () => {
+    if (!contextMenuOpen || !activeContextCategory) return null;
+    return (
+      <div className="absolute bottom-full left-0 z-40 mb-2 w-[520px] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+        <div className="grid grid-cols-[200px_1fr]">
+          <div className="max-h-[320px] overflow-y-auto border-r border-gray-200 bg-gray-50/60 py-2">
+            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-gray-400">
+              Add context
+            </p>
+            {ADD_CONTEXT_CATEGORIES.map((category) => {
+              const isActive = category.id === activeContextCategoryId;
+              const CategoryIcon = getAddContextCategoryIcon(category.id);
+              return (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => setActiveContextCategoryId(category.id)}
+                  className={`flex w-full items-center justify-between px-3 py-2 text-left transition-colors ${
+                    isActive ? "bg-gray-100 text-gray-900" : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  <span className="flex items-center gap-2 text-sm">
+                    <CategoryIcon className="h-4 w-4 text-gray-500" />
+                    {category.label}
+                  </span>
+                  <ChevronRight className="h-4 w-4 text-gray-400" />
+                </button>
+              );
+            })}
+          </div>
+          <div className="max-h-[320px] overflow-y-auto py-2">
+            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-gray-400">
+              {activeContextCategory.label}
+            </p>
+            <div className="space-y-1">
+              {activeContextCategory.options.map((option) => {
+                const isSelected = selectedContextIds.has(option.id);
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    disabled={option.disabled}
+                    onClick={() => toggleContextOption(option)}
+                    className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
+                      option.disabled ? "cursor-not-allowed opacity-60" : "text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    <span className="shrink-0">{getAddContextOptionIcon(option, isSelected)}</span>
+                    <span className="min-w-0 flex-1 text-sm">
+                      {option.label}
+                      {option.hint ? <span className="ml-1 text-xs text-gray-400">({option.hint})</span> : null}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderSourceModal = () => (
     <Dialog
@@ -3721,7 +3959,7 @@ Output rules:
               {chatHistory.length === 0 ? (
                 <div className="flex flex-col items-center text-center space-y-10 pt-6">
                   <div className="space-y-2">
-                    <h1 className="text-3xl font-semibold text-gray-900">Themison AI</h1>
+                    <h1 className="text-3xl font-semibold text-[#0E0017]">Themison AI</h1>
                     <p className="text-gray-600">
                       {assistantSubtitle}
                     </p>
@@ -3751,7 +3989,7 @@ Output rules:
                         <div className="mt-3 flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <button
-                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700"
+                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-[#0E0017]"
                               onClick={() =>
                                 logEvent({
                                   eventType: "feature_used",
@@ -3762,23 +4000,29 @@ Output rules:
                             >
                               <Paperclip className="h-4 w-4" />
                             </button>
-                            <button
-                              className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]"
-                              onClick={() =>
-                                logEvent({
-                                  eventType: "feature_used",
-                                  action: "add_context",
-                                  entityType: "chat_input",
-                                })
-                              }
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              Add context
-                            </button>
+                            <div ref={contextMenuRef} className="relative">
+                              <button
+                                type="button"
+                                className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2] hover:text-[#0E0017]"
+                                aria-expanded={contextMenuOpen}
+                                onClick={() => {
+                                  logEvent({
+                                    eventType: "feature_used",
+                                    action: "add_context",
+                                    entityType: "chat_input",
+                                  });
+                                  setContextMenuOpen((open) => !open);
+                                }}
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                Add context
+                              </button>
+                              {renderAddContextMenu()}
+                            </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <button
-                              className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]"
+                              className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2] hover:text-[#0E0017]"
                               onClick={() =>
                                 logEvent({
                                   eventType: "feature_used",
@@ -3791,7 +4035,7 @@ Output rules:
                               Auto
                             </button>
                             <button
-                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700"
+                              className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-[#0E0017]"
                               onClick={() =>
                                 logEvent({
                                   eventType: "feature_used",
@@ -3805,7 +4049,7 @@ Output rules:
                             <button
                               type="button"
                               onClick={handleSend}
-                              className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                              className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-[#8FAEF6] disabled:text-white disabled:opacity-100"
                               disabled={isLoading || !message.trim()}
                             >
                               <ArrowUp className="h-4 w-4" />
@@ -4281,7 +4525,7 @@ Output rules:
                       </div>
                       <div className="flex-1 space-y-3">
                         <div className="flex items-center h-8">
-                          <span className="text-sm font-medium text-gray-900">Themison AI</span>
+                          <span className="text-sm font-medium text-[#0E0017]">Themison AI</span>
                         </div>
                         <div className="flex items-center gap-2 text-gray-500">
                           <div className="flex gap-1">
@@ -4359,21 +4603,36 @@ Output rules:
 
                   <div className="mt-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700">
+                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-[#0E0017]">
                         <Paperclip className="h-4 w-4" />
                       </button>
-                      <button className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]">
-                        <Plus className="h-3.5 w-3.5" />
-                        Add context
-                      </button>
+                      <div ref={contextMenuRef} className="relative">
+                        <button
+                          type="button"
+                          className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2] hover:text-[#0E0017]"
+                          aria-expanded={contextMenuOpen}
+                          onClick={() => {
+                            logEvent({
+                              eventType: "feature_used",
+                              action: "add_context",
+                              entityType: "chat_input",
+                            });
+                            setContextMenuOpen((open) => !open);
+                          }}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Add context
+                        </button>
+                        {renderAddContextMenu()}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2]">
+                      <button className="flex items-center gap-2 rounded-full bg-[#f3f4f6] px-3 py-1.5 text-sm text-gray-600 transition-colors hover:bg-[#e9edf2] hover:text-[#0E0017]">
                         <Sparkles className="h-3.5 w-3.5" />
                         Auto
                         <ChevronDown className="h-3.5 w-3.5" />
                       </button>
-                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-gray-700">
+                      <button className="rounded-full bg-[#f3f4f6] p-1.5 text-gray-500 hover:bg-[#e9edf2] hover:text-[#0E0017]">
                         <Mic className="h-4 w-4" />
                       </button>
                       <Button
