@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
@@ -14,6 +14,7 @@ import {
   taskScaffolds,
   tasks as legacyTasks,
   mapTaskDependencies,
+  mapTaskStatusHistory,
   mapTasks,
   mapTelemetryEvents,
   protocolChunks,
@@ -102,9 +103,32 @@ function resolveMapTrialCandidates(trialId: string, demoMode?: DemoMode) {
 
 type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type MapTaskInsertRow = typeof mapTasks.$inferInsert;
+type TaskStatus = (typeof TASK_STATUSES)[number];
 let mapTaskConditionalNoteColumnSupport: boolean | null = null;
 let mapTaskSchemaPatched = false;
 let mapTaskColumnCache: Set<string> | null = null;
+let mapTaskStatusHistoryTableReady = false;
+
+const MAP_TASK_STATUS_HISTORY_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS map_task_status_history (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    mapId varchar(36) NOT NULL,
+    trialId varchar(50) NOT NULL,
+    taskId varchar(36) NOT NULL,
+    fromStatus enum('suggested','confirmed','todo','in_progress','blocked','waiting','done','skipped','cancelled') NULL,
+    toStatus enum('suggested','confirmed','todo','in_progress','blocked','waiting','done','skipped','cancelled') NOT NULL,
+    reason text NULL,
+    source varchar(32) NOT NULL DEFAULT 'status_change',
+    changedBy int NULL,
+    enteredAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    exitedAt timestamp NULL,
+    durationSeconds int NULL,
+    createdAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_task_status_history_map_task_entered (mapId, taskId, enteredAt),
+    KEY idx_task_status_history_trial_entered (trialId, enteredAt),
+    KEY idx_task_status_history_task_open (taskId, exitedAt)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
 
 function truncateString(value: unknown, maxLength: number): string | null {
   if (typeof value !== "string") return null;
@@ -966,6 +990,106 @@ async function trackMapEvent(input: {
   }
 }
 
+async function ensureMapTaskStatusHistoryTable(db: DbClient) {
+  if (mapTaskStatusHistoryTableReady) return;
+  await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+  mapTaskStatusHistoryTableReady = true;
+}
+
+function toValidDate(value: unknown): Date | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+async function recordTaskStatusTransition(input: {
+  db: DbClient;
+  mapId: string;
+  trialId: string;
+  taskId: string;
+  fromStatus: TaskStatus | null;
+  toStatus: TaskStatus;
+  changedBy?: number | null;
+  reason?: string | null;
+  source?: string;
+  changedAt?: Date;
+}) {
+  const changedAt = input.changedAt ?? new Date();
+
+  try {
+    await ensureMapTaskStatusHistoryTable(input.db);
+
+    const openIntervals = await input.db
+      .select({
+        id: mapTaskStatusHistory.id,
+        enteredAt: mapTaskStatusHistory.enteredAt,
+      })
+      .from(mapTaskStatusHistory)
+      .where(and(eq(mapTaskStatusHistory.taskId, input.taskId), isNull(mapTaskStatusHistory.exitedAt)));
+
+    for (const interval of openIntervals) {
+      const enteredAt = toValidDate(interval.enteredAt);
+      const durationSeconds = enteredAt
+        ? Math.max(0, Math.floor((changedAt.getTime() - enteredAt.getTime()) / 1000))
+        : null;
+      await input.db
+        .update(mapTaskStatusHistory)
+        .set({
+          exitedAt: changedAt,
+          durationSeconds,
+        })
+        .where(eq(mapTaskStatusHistory.id, interval.id));
+    }
+
+    await input.db.insert(mapTaskStatusHistory).values({
+      id: randomUUID(),
+      mapId: input.mapId,
+      trialId: input.trialId,
+      taskId: input.taskId,
+      fromStatus: input.fromStatus,
+      toStatus: input.toStatus,
+      reason: input.reason ?? null,
+      source: input.source ?? "status_change",
+      changedBy: input.changedBy ?? null,
+      enteredAt: changedAt,
+      exitedAt: null,
+      durationSeconds: null,
+      createdAt: changedAt,
+    });
+  } catch (error) {
+    console.warn("[map.status-history] failed to persist transition", error);
+  }
+}
+
+async function recordTaskStatusTransitions(input: {
+  db: DbClient;
+  mapId: string;
+  trialId: string;
+  changes: Array<{ taskId: string; fromStatus: TaskStatus | null; toStatus: TaskStatus }>;
+  changedBy?: number | null;
+  reason?: string | null;
+  source?: string;
+  changedAt?: Date;
+}) {
+  for (const change of input.changes) {
+    await recordTaskStatusTransition({
+      db: input.db,
+      mapId: input.mapId,
+      trialId: input.trialId,
+      taskId: change.taskId,
+      fromStatus: change.fromStatus,
+      toStatus: change.toStatus,
+      changedBy: input.changedBy ?? null,
+      reason: input.reason ?? null,
+      source: input.source ?? "status_change",
+      changedAt: input.changedAt,
+    });
+  }
+}
+
 async function trackCreatedEntityEvent(input: {
   eventType: "map_created" | "phase_created" | "task_created";
   userId?: number | null;
@@ -1582,6 +1706,8 @@ export const mapRouter = router({
             schedulingContext,
             legacyTask.suggestedDate
           );
+          const importedStatus: TaskStatus = legacyTask.status === "completed" ? "confirmed" : "suggested";
+          const importedAt = new Date();
 
           await insertMapTaskWithFallback(
             db,
@@ -1593,7 +1719,7 @@ export const mapRouter = router({
               description: null,
             category,
             priority,
-            status: legacyTask.status === "completed" ? "confirmed" : "suggested",
+            status: importedStatus,
             blockedReason: null,
             blockedSince: null,
             assignedRole,
@@ -1613,11 +1739,23 @@ export const mapRouter = router({
             isCustom: false,
               tags: [],
               protocolRefs,
-              createdAt: new Date(),
-              updatedAt: new Date(),
+              createdAt: importedAt,
+              updatedAt: importedAt,
             },
             "importLegacyScaffold:legacyTask"
           );
+
+          await recordTaskStatusTransition({
+            db,
+            mapId: targetMap.id,
+            trialId: targetMap.trialId,
+            taskId: newTaskId,
+            fromStatus: null,
+            toStatus: importedStatus,
+            changedBy: ctx.user.id,
+            source: "map_import",
+            changedAt: importedAt,
+          });
 
           createdMapTasks.push({
             id: newTaskId,
@@ -1775,6 +1913,7 @@ export const mapRouter = router({
               `${phaseForTask?.name ?? ""} ${inputTask.section ?? ""} ${inputTask.name}`,
               null
             );
+        const importedAt = new Date();
         await insertMapTaskWithFallback(
           db,
           {
@@ -1805,11 +1944,22 @@ export const mapRouter = router({
           isCustom: false,
             tags: [],
             protocolRefs,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: importedAt,
+            updatedAt: importedAt,
           },
           "importLegacyScaffold:autoTask"
         );
+        await recordTaskStatusTransition({
+          db,
+          mapId: targetMap.id,
+          trialId: targetMap.trialId,
+          taskId: id,
+          fromStatus: null,
+          toStatus: "suggested",
+          changedBy: ctx.user.id,
+          source: "map_import",
+          changedAt: importedAt,
+        });
         createdMapTasks.push({
           id,
           phaseId: inputTask.phaseId,
@@ -2492,17 +2642,36 @@ export const mapRouter = router({
         });
       }
 
+      const changedAt = new Date();
+      const confirmedTasks = tasks.filter((task) => task.status === "confirmed");
+
       await db
         .update(mapTasks)
-        .set({ status: "todo", updatedAt: new Date() })
+        .set({ status: "todo", updatedAt: changedAt })
         .where(and(eq(mapTasks.mapId, map.id), eq(mapTasks.status, "confirmed")));
+
+      if (confirmedTasks.length > 0) {
+        await recordTaskStatusTransitions({
+          db,
+          mapId: map.id,
+          trialId: map.trialId,
+          changes: confirmedTasks.map((task) => ({
+            taskId: task.id,
+            fromStatus: "confirmed",
+            toStatus: "todo",
+          })),
+          changedBy: ctx.user.id,
+          source: "map_launch",
+          changedAt,
+        });
+      }
 
       await db
         .update(executionMaps)
         .set({
           status: "active",
-          launchedAt: new Date(),
-          updatedAt: new Date(),
+          launchedAt: changedAt,
+          updatedAt: changedAt,
         })
         .where(eq(executionMaps.id, map.id));
 
@@ -2538,15 +2707,30 @@ export const mapRouter = router({
       }
 
       const suggestedRows = await db
-        .select({ id: mapTasks.id })
+        .select({ id: mapTasks.id, status: mapTasks.status })
         .from(mapTasks)
         .where(and(eq(mapTasks.mapId, map.id), eq(mapTasks.status, "suggested")));
 
       if (suggestedRows.length > 0) {
+        const changedAt = new Date();
         await db
           .update(mapTasks)
-          .set({ status: "confirmed", updatedAt: new Date() })
+          .set({ status: "confirmed", updatedAt: changedAt })
           .where(and(eq(mapTasks.mapId, map.id), eq(mapTasks.status, "suggested")));
+
+        await recordTaskStatusTransitions({
+          db,
+          mapId: map.id,
+          trialId: map.trialId,
+          changes: suggestedRows.map((task) => ({
+            taskId: task.id,
+            fromStatus: task.status as TaskStatus,
+            toStatus: "confirmed",
+          })),
+          changedBy: ctx.user.id,
+          source: "bulk_confirm",
+          changedAt,
+        });
 
         await trackMapEvent({
           mapId: map.id,
@@ -2899,6 +3083,7 @@ export const mapRouter = router({
         .orderBy(desc(mapTasks.orderInPhase))
         .limit(1);
       const id = randomUUID();
+      const changedAt = new Date();
 
       await insertMapTaskWithFallback(
         db,
@@ -2923,14 +3108,26 @@ export const mapRouter = router({
         canvasY: input.task.canvasY ?? null,
         createdBy: input.task.createdBy,
         aiConfidence: input.task.aiConfidence ?? null,
-        isCustom: input.task.isCustom,
+          isCustom: input.task.isCustom,
           tags: input.task.tags,
           protocolRefs: input.task.protocolRefs,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: changedAt,
+          updatedAt: changedAt,
         },
         "createTask"
       );
+
+      await recordTaskStatusTransition({
+        db,
+        mapId: map.id,
+        trialId: map.trialId,
+        taskId: id,
+        fromStatus: null,
+        toStatus: input.task.status,
+        changedBy: ctx.user.id,
+        source: "task_create",
+        changedAt,
+      });
 
       await trackMapEvent({
         mapId: map.id,
@@ -3128,15 +3325,16 @@ export const mapRouter = router({
         });
       }
 
+      const changedAt = new Date();
       const updates: Record<string, unknown> = {
         status: input.status,
-        updatedAt: new Date(),
+        updatedAt: changedAt,
       };
       if (task.status === "todo" && input.status === "in_progress" && !task.startDate) {
-        updates.startDate = new Date();
+        updates.startDate = changedAt;
       }
       if (input.status === "done") {
-        updates.completedDate = new Date();
+        updates.completedDate = changedAt;
       }
       if (input.status === "blocked") {
         if (!input.reason?.trim()) {
@@ -3146,7 +3344,7 @@ export const mapRouter = router({
           });
         }
         updates.blockedReason = input.reason.trim();
-        updates.blockedSince = new Date();
+        updates.blockedSince = changedAt;
       }
       if (task.status === "blocked" && input.status === "in_progress") {
         updates.blockedReason = null;
@@ -3154,6 +3352,19 @@ export const mapRouter = router({
       }
 
       await db.update(mapTasks).set(updates).where(eq(mapTasks.id, task.id));
+
+      await recordTaskStatusTransition({
+        db,
+        mapId: map.id,
+        trialId: map.trialId,
+        taskId: task.id,
+        fromStatus: task.status as TaskStatus,
+        toStatus: input.status as TaskStatus,
+        changedBy: ctx.user.id,
+        reason: input.reason ?? null,
+        source: "status_change",
+        changedAt,
+      });
 
       const eventType =
         input.status === "in_progress"
@@ -3536,5 +3747,70 @@ export const mapRouter = router({
       if (!input.eventTypes?.length) return base;
       const wanted = new Set(input.eventTypes);
       return base.filter((row) => wanted.has(row.eventType));
+    }),
+
+  getTaskStatusDurations: protectedProcedure
+    .input(
+      z.object({
+        mapId: z.string(),
+        taskId: z.string().optional(),
+        limit: z.number().min(1).max(5000).optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+
+      await ensureMapTaskStatusHistoryTable(db);
+
+      const historyRows = await db
+        .select()
+        .from(mapTaskStatusHistory)
+        .where(
+          input.taskId
+            ? and(eq(mapTaskStatusHistory.mapId, input.mapId), eq(mapTaskStatusHistory.taskId, input.taskId))
+            : eq(mapTaskStatusHistory.mapId, input.mapId)
+        )
+        .orderBy(desc(mapTaskStatusHistory.enteredAt))
+        .limit(input.limit ?? 1000);
+
+      const now = new Date();
+      const statusSeconds: Record<TaskStatus, number> = {
+        suggested: 0,
+        confirmed: 0,
+        todo: 0,
+        in_progress: 0,
+        blocked: 0,
+        waiting: 0,
+        done: 0,
+        skipped: 0,
+        cancelled: 0,
+      };
+
+      const normalizedRows = historyRows.map((row) => {
+        const enteredAt = toValidDate(row.enteredAt) ?? now;
+        const exitedAt = toValidDate(row.exitedAt);
+        const durationSeconds =
+          typeof row.durationSeconds === "number"
+            ? row.durationSeconds
+            : Math.max(
+                0,
+                Math.floor(((exitedAt ?? now).getTime() - enteredAt.getTime()) / 1000)
+              );
+
+        statusSeconds[row.toStatus as TaskStatus] += durationSeconds;
+
+        return {
+          ...row,
+          enteredAt,
+          exitedAt,
+          durationSeconds,
+        };
+      });
+
+      return {
+        rows: normalizedRows,
+        statusSeconds,
+      };
     }),
 });

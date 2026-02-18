@@ -16,6 +16,7 @@ import {
   mapPhaseTransitions,
   mapPhases,
   mapTaskDependencies,
+  mapTaskStatusHistory,
   mapTasks,
   mapTelemetryEvents,
   messages,
@@ -886,6 +887,7 @@ const SNAPSHOT_ROW_KEYS = [
   "mapPhaseTransitions",
   "protocolMapSections",
   "mapTelemetryEvents",
+  "mapTaskStatusHistory",
   "conversations",
   "conversationParticipants",
   "threads",
@@ -943,6 +945,28 @@ const DEMO_MODE_DEFAULTS_TABLE_SQL = `
 `;
 
 let demoModeDefaultsTableReady = false;
+let mapTaskStatusHistoryTableReady = false;
+
+const MAP_TASK_STATUS_HISTORY_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS map_task_status_history (
+    id varchar(36) NOT NULL PRIMARY KEY,
+    mapId varchar(36) NOT NULL,
+    trialId varchar(50) NOT NULL,
+    taskId varchar(36) NOT NULL,
+    fromStatus enum('suggested','confirmed','todo','in_progress','blocked','waiting','done','skipped','cancelled') NULL,
+    toStatus enum('suggested','confirmed','todo','in_progress','blocked','waiting','done','skipped','cancelled') NOT NULL,
+    reason text NULL,
+    source varchar(32) NOT NULL DEFAULT 'status_change',
+    changedBy int NULL,
+    enteredAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    exitedAt timestamp NULL,
+    durationSeconds int NULL,
+    createdAt timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_task_status_history_map_task_entered (mapId, taskId, enteredAt),
+    KEY idx_task_status_history_trial_entered (trialId, enteredAt),
+    KEY idx_task_status_history_task_open (taskId, exitedAt)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`;
 
 function emptySnapshotRows(): SnapshotRows {
   return {
@@ -964,6 +988,7 @@ function emptySnapshotRows(): SnapshotRows {
     mapPhaseTransitions: [],
     protocolMapSections: [],
     mapTelemetryEvents: [],
+    mapTaskStatusHistory: [],
     conversations: [],
     conversationParticipants: [],
     threads: [],
@@ -1070,6 +1095,12 @@ async function ensureDemoModeDefaultsTable(db: DbClient) {
   if (demoModeDefaultsTableReady) return;
   await db.execute(sql.raw(DEMO_MODE_DEFAULTS_TABLE_SQL));
   demoModeDefaultsTableReady = true;
+}
+
+async function ensureMapTaskStatusHistoryTable(db: DbClient) {
+  if (mapTaskStatusHistoryTableReady) return;
+  await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+  mapTaskStatusHistoryTableReady = true;
 }
 
 async function readSavedModeSnapshot(
@@ -1326,6 +1357,22 @@ async function collectModeRows(
           .from(mapTelemetryEvents)
           .where(inArray(mapTelemetryEvents.trialId, trialIds));
 
+  const mapTaskStatusHistoryRows =
+    mapIds.length > 0
+      ? await tx
+          .select()
+          .from(mapTaskStatusHistory)
+          .where(
+            or(
+              inArray(mapTaskStatusHistory.mapId, mapIds),
+              inArray(mapTaskStatusHistory.trialId, trialIds)
+            )
+          )
+      : await tx
+          .select()
+          .from(mapTaskStatusHistory)
+          .where(inArray(mapTaskStatusHistory.trialId, trialIds));
+
   const conversationRows = await tx
     .select()
     .from(conversations)
@@ -1506,6 +1553,7 @@ async function collectModeRows(
       mapPhaseTransitions: mapPhaseTransitionRows,
       protocolMapSections: protocolMapSectionRows,
       mapTelemetryEvents: mapTelemetryRows,
+      mapTaskStatusHistory: mapTaskStatusHistoryRows,
       conversations: conversationRows,
       conversationParticipants: conversationParticipantRows,
       threads: threadRows,
@@ -1546,6 +1594,7 @@ async function captureModeSnapshot(
 ): Promise<DemoModeSnapshot> {
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
+  await ensureMapTaskStatusHistoryTable(db);
   const rows = await db.transaction(async (tx) => {
     const collected = await collectModeRows(tx, mode);
     return collected.rows;
@@ -1564,6 +1613,7 @@ async function restoreModeSnapshot(
 ) {
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
+  await ensureMapTaskStatusHistoryTable(db);
   const rows = normalizeSnapshotRows(snapshot.rows);
   await db.transaction(async (tx) => {
     await insertSnapshotRows(tx, trials, rows.trials, {
@@ -1634,6 +1684,9 @@ async function restoreModeSnapshot(
       dateFields: ["createdAt"],
       jsonFields: ["payload"],
     });
+    await insertSnapshotRows(tx, mapTaskStatusHistory, rows.mapTaskStatusHistory, {
+      dateFields: ["enteredAt", "exitedAt", "createdAt"],
+    });
     await insertSnapshotRows(tx, conversations, rows.conversations, {
       dateFields: ["createdAt", "updatedAt"],
     });
@@ -1692,6 +1745,7 @@ async function restoreModeSnapshot(
 async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
+  await ensureMapTaskStatusHistoryTable(db);
 
   await db.transaction(async (tx) => {
     const collected = await collectModeRows(tx, mode);
@@ -1763,6 +1817,9 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
 
     if (mapTaskIds.length > 0) {
       await tx
+        .delete(mapTaskStatusHistory)
+        .where(inArray(mapTaskStatusHistory.taskId, mapTaskIds));
+      await tx
         .delete(mapTaskDependencies)
         .where(
           or(
@@ -1794,6 +1851,14 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
         .delete(protocolMapSections)
         .where(inArray(protocolMapSections.mapId, mapIds));
       await tx
+        .delete(mapTaskStatusHistory)
+        .where(
+          or(
+            inArray(mapTaskStatusHistory.mapId, mapIds),
+            inArray(mapTaskStatusHistory.trialId, trialIds)
+          )
+        );
+      await tx
         .delete(mapTelemetryEvents)
         .where(
           or(
@@ -1805,6 +1870,9 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
         .delete(executionMaps)
         .where(inArray(executionMaps.id, mapIds));
     } else {
+      await tx
+        .delete(mapTaskStatusHistory)
+        .where(inArray(mapTaskStatusHistory.trialId, trialIds));
       await tx
         .delete(mapTelemetryEvents)
         .where(inArray(mapTelemetryEvents.trialId, trialIds));
@@ -2059,6 +2127,7 @@ async function seedModeOperationalData(
 ) {
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
+  await ensureMapTaskStatusHistoryTable(db);
 
   const now = new Date();
   const seededTrials = data.map((trial, index) => ({
@@ -2555,6 +2624,36 @@ async function seedModeOperationalData(
   }
   if (mapTaskInserts.length > 0) {
     await db.insert(mapTasks).values(mapTaskInserts);
+  }
+
+  const trialIdByMapId = new Map(mapInserts.map((map) => [map.id, map.trialId]));
+  const mapTaskStatusHistoryInserts: Array<typeof mapTaskStatusHistory.$inferInsert> = mapTaskInserts.map((task) => {
+    const trialId = trialIdByMapId.get(task.mapId) ?? task.mapId;
+    const toStatus = (task.status ?? "suggested") as NonNullable<typeof task.status>;
+    const enteredAt =
+      toStatus === "blocked" && task.blockedSince
+        ? task.blockedSince
+        : toStatus === "done" && task.completedDate
+        ? task.completedDate
+        : task.updatedAt ?? task.createdAt ?? now;
+    return {
+      id: `${task.id}-h1`,
+      mapId: task.mapId,
+      trialId,
+      taskId: task.id,
+      fromStatus: null,
+      toStatus,
+      reason: task.blockedReason ?? null,
+      source: "seed",
+      changedBy: createdBy,
+      enteredAt,
+      exitedAt: null,
+      durationSeconds: null,
+      createdAt: enteredAt,
+    };
+  });
+  if (mapTaskStatusHistoryInserts.length > 0) {
+    await db.insert(mapTaskStatusHistory).values(mapTaskStatusHistoryInserts);
   }
 
   const mapDependencyInserts: Array<typeof mapTaskDependencies.$inferInsert> = [];

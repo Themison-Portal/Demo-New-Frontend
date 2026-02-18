@@ -464,6 +464,33 @@ export const mapTelemetryEvents = mysqlTable(
   })
 );
 
+/**
+ * durable task status ledger (entered/exited windows per status).
+ */
+export const mapTaskStatusHistory = mysqlTable(
+  "map_task_status_history",
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    mapId: varchar("mapId", { length: 36 }).notNull(),
+    trialId: varchar("trialId", { length: 50 }).notNull(),
+    taskId: varchar("taskId", { length: 36 }).notNull(),
+    fromStatus: taskStatusEnum,
+    toStatus: taskStatusEnum.notNull(),
+    reason: text("reason"),
+    source: varchar("source", { length: 32 }).default("status_change").notNull(),
+    changedBy: int("changedBy"),
+    enteredAt: timestamp("enteredAt").defaultNow().notNull(),
+    exitedAt: timestamp("exitedAt"),
+    durationSeconds: int("durationSeconds"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => ({
+    mapTaskEnteredIdx: index("idx_task_status_history_map_task_entered").on(table.mapId, table.taskId, table.enteredAt),
+    trialEnteredIdx: index("idx_task_status_history_trial_entered").on(table.trialId, table.enteredAt),
+    taskOpenIdx: index("idx_task_status_history_task_open").on(table.taskId, table.exitedAt),
+  })
+);
+
 export type ExecutionMap = typeof executionMaps.$inferSelect;
 export type InsertExecutionMap = typeof executionMaps.$inferInsert;
 
@@ -484,6 +511,9 @@ export type InsertProtocolMapSection = typeof protocolMapSections.$inferInsert;
 
 export type MapTelemetryEvent = typeof mapTelemetryEvents.$inferSelect;
 export type InsertMapTelemetryEvent = typeof mapTelemetryEvents.$inferInsert;
+
+export type MapTaskStatusHistory = typeof mapTaskStatusHistory.$inferSelect;
+export type InsertMapTaskStatusHistory = typeof mapTaskStatusHistory.$inferInsert;
 
 /**
  * Protocol chunks - section-aware chunks for local context retrieval and citation grounding.
