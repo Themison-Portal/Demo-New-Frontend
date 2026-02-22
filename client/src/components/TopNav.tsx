@@ -275,6 +275,8 @@ export function TopNav() {
   const getBreadcrumb = () => {
     if (location === '/') return { section: 'General', page: 'Home' };
     if (location.startsWith('/home2')) return { section: 'General', sectionHref: '/', page: 'Home 2', pageHref: '/home2' };
+    if (location.startsWith('/home3')) return { section: 'General', sectionHref: '/', page: 'Home 3', pageHref: '/home3' };
+    if (location.startsWith('/home4')) return { section: 'General', sectionHref: '/', page: 'Home 4', pageHref: '/home4' };
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) {
       const trialId = location.split('/')[2]?.toLowerCase();
       const trial = trials.find(t => t.id === trialId);
@@ -334,6 +336,8 @@ export function TopNav() {
   const getBreadcrumbIcon = () => {
     if (location === '/') return Home;
     if (location.startsWith('/home2')) return Home;
+    if (location.startsWith('/home3')) return Home;
+    if (location.startsWith('/home4')) return Home;
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) return Brain;
     if (location.startsWith('/trial/')) return FlaskConical;
     if (location.startsWith('/workspace')) return FlaskConical;
