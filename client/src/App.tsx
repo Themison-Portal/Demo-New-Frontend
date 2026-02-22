@@ -16,6 +16,7 @@ import { TrialElements } from "./components/icons/TrialElements";
 import { AnalyticsIcon } from "./components/icons/AnalyticsIcon";
 import { BudgetIntelligenceIcon } from "./components/icons/BudgetIntelligenceIcon";
 import Overview from "./pages/Overview";
+import Home2 from "./pages/Home2";
 import { TrialWorkspace } from "./pages/TrialWorkspace";
 import TrialDetail from "./pages/TrialDetail";
 import DocumentAIAssistant from "./pages/DocumentAIAssistant";
@@ -45,6 +46,7 @@ const iconMap: Record<string, any> = {
   "/integrations": Puzzle,
   "/notifications": Bell,
   "/settings": SettingsIcon,
+  "/home2": Home,
 };
 
 // Breadcrumb configuration for each route
@@ -99,6 +101,10 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
   "/settings": [
     { label: "Configuration", href: "/" },
     { label: "Settings" },
+  ],
+  "/home2": [
+    { label: "General", href: "/" },
+    { label: "Home 2" },
   ],
 };
 
@@ -156,6 +162,7 @@ function Router() {
         <Route path="/">
           {() => <Overview />}
         </Route>
+        <Route path="/home2" component={Home2} />
         <Route path="/workspace" component={TrialWorkspace} />
         <Route path="/trial-workspace" component={TrialWorkspace} />
         <Route path="/trial/:id/assistant">{(params) => (

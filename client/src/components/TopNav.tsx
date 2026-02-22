@@ -274,6 +274,7 @@ export function TopNav() {
   // Get breadcrumb based on current location (returns section, page, and optional subpage)
   const getBreadcrumb = () => {
     if (location === '/') return { section: 'General', page: 'Home' };
+    if (location.startsWith('/home2')) return { section: 'General', sectionHref: '/', page: 'Home 2', pageHref: '/home2' };
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) {
       const trialId = location.split('/')[2]?.toLowerCase();
       const trial = trials.find(t => t.id === trialId);
@@ -332,6 +333,7 @@ export function TopNav() {
   // Get breadcrumb icon based on current location
   const getBreadcrumbIcon = () => {
     if (location === '/') return Home;
+    if (location.startsWith('/home2')) return Home;
     if (location.startsWith('/trial/') && location.endsWith('/assistant')) return Brain;
     if (location.startsWith('/trial/')) return FlaskConical;
     if (location.startsWith('/workspace')) return FlaskConical;

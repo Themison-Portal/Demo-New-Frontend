@@ -362,6 +362,17 @@ export default function Overview() {
         })}
       </div>
 
+      <section className="mb-6 overflow-hidden rounded-lg border border-[#DDE2EF] bg-transparent">
+        <iframe
+          src="https://my.spline.design/particleaibraincopycopy-HKDz858gzcKxD2SysKCQOoyn/"
+          title="AI Brain Visualization"
+          className="h-[320px] w-full"
+          frameBorder="0"
+          loading="lazy"
+          allow="autoplay; fullscreen"
+        />
+      </section>
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Card className="relative min-h-[430px] overflow-hidden border-[#DDE5FF] shadow-none lg:col-span-4">
           <div
