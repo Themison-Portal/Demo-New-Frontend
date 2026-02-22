@@ -1260,6 +1260,8 @@ const taskPatchSchema = z
     suggestedAssignee: z.string().nullable().optional(),
     suggestedDate: z.string().datetime().nullable().optional(),
     dueDate: z.string().datetime().nullable().optional(),
+    blockedReason: z.string().nullable().optional(),
+    blockedSince: z.string().datetime().nullable().optional(),
     estimatedDuration: z.number().nullable().optional(),
     conditionalNote: z.string().nullable().optional(),
     canvasX: z.number().nullable().optional(),
@@ -3049,6 +3051,8 @@ export const mapRouter = router({
           suggestedAssignee: z.string().nullable().optional(),
           suggestedDate: z.string().datetime().nullable().optional(),
           dueDate: z.string().datetime().nullable().optional(),
+          blockedReason: z.string().nullable().optional(),
+          blockedSince: z.string().datetime().nullable().optional(),
           estimatedDuration: z.number().nullable().optional(),
           conditionalNote: z.string().nullable().optional(),
           canvasX: z.number().nullable().optional(),
@@ -3084,6 +3088,22 @@ export const mapRouter = router({
         .limit(1);
       const id = randomUUID();
       const changedAt = new Date();
+      const normalizedTaskStatus: TaskStatus =
+        input.task.status === "waiting" ? "blocked" : input.task.status;
+      const normalizedBlockedReason = truncateString(input.task.blockedReason ?? null, 4000);
+      const normalizedBlockedSince = input.task.blockedSince ? new Date(input.task.blockedSince) : null;
+
+      if (
+        (normalizedTaskStatus === "blocked" ||
+          normalizedTaskStatus === "cancelled" ||
+          normalizedTaskStatus === "skipped") &&
+        !normalizedBlockedReason
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${normalizedTaskStatus} status requires a reason`,
+        });
+      }
 
       await insertMapTaskWithFallback(
         db,
@@ -3092,22 +3112,27 @@ export const mapRouter = router({
           phaseId: input.phaseId,
           mapId: map.id,
           name: input.task.name,
-        description: input.task.description ?? null,
-        category: input.task.category,
-        priority: input.task.priority,
-        status: input.task.status,
-        assignedRole: input.task.assignedRole ?? null,
-        assignedUserId: input.task.assignedUserId ?? null,
-        suggestedAssignee: input.task.suggestedAssignee ?? null,
-        suggestedDate: input.task.suggestedDate ? new Date(input.task.suggestedDate) : null,
-        dueDate: input.task.dueDate ? new Date(input.task.dueDate) : null,
-        estimatedDuration: input.task.estimatedDuration ?? null,
-        conditionalNote: input.task.conditionalNote ?? null,
-        orderInPhase: (last?.orderInPhase ?? -1) + 1,
-        canvasX: input.task.canvasX ?? null,
-        canvasY: input.task.canvasY ?? null,
-        createdBy: input.task.createdBy,
-        aiConfidence: input.task.aiConfidence ?? null,
+          description: input.task.description ?? null,
+          category: input.task.category,
+          priority: input.task.priority,
+          status: normalizedTaskStatus,
+          blockedReason: normalizedBlockedReason,
+          blockedSince:
+            normalizedTaskStatus === "blocked"
+              ? normalizedBlockedSince ?? changedAt
+              : null,
+          assignedRole: input.task.assignedRole ?? null,
+          assignedUserId: input.task.assignedUserId ?? null,
+          suggestedAssignee: input.task.suggestedAssignee ?? null,
+          suggestedDate: input.task.suggestedDate ? new Date(input.task.suggestedDate) : null,
+          dueDate: input.task.dueDate ? new Date(input.task.dueDate) : null,
+          estimatedDuration: input.task.estimatedDuration ?? null,
+          conditionalNote: input.task.conditionalNote ?? null,
+          orderInPhase: (last?.orderInPhase ?? -1) + 1,
+          canvasX: input.task.canvasX ?? null,
+          canvasY: input.task.canvasY ?? null,
+          createdBy: input.task.createdBy,
+          aiConfidence: input.task.aiConfidence ?? null,
           isCustom: input.task.isCustom,
           tags: input.task.tags,
           protocolRefs: input.task.protocolRefs,
@@ -3123,7 +3148,7 @@ export const mapRouter = router({
         trialId: map.trialId,
         taskId: id,
         fromStatus: null,
-        toStatus: input.task.status,
+        toStatus: normalizedTaskStatus,
         changedBy: ctx.user.id,
         source: "task_create",
         changedAt,
@@ -3136,7 +3161,7 @@ export const mapRouter = router({
         userId: ctx.user.id,
         targetId: id,
         targetType: "task",
-        payload: { status: input.task.status, category: input.task.category },
+        payload: { status: normalizedTaskStatus, category: input.task.category },
       });
 
       await trackCreatedEntityEvent({
@@ -3148,7 +3173,7 @@ export const mapRouter = router({
         mapId: map.id,
         payload: {
           phaseId: input.phaseId,
-          status: input.task.status,
+          status: normalizedTaskStatus,
           category: input.task.category,
           createdBy: input.task.createdBy,
           isCustom: input.task.isCustom,
@@ -3206,6 +3231,16 @@ export const mapRouter = router({
             ? task.dueDate
             : input.updates.dueDate
             ? new Date(input.updates.dueDate)
+            : null,
+        blockedReason:
+          input.updates.blockedReason === undefined
+            ? task.blockedReason
+            : truncateString(input.updates.blockedReason, 4000),
+        blockedSince:
+          input.updates.blockedSince === undefined
+            ? task.blockedSince
+            : input.updates.blockedSince
+            ? new Date(input.updates.blockedSince)
             : null,
         estimatedDuration:
           input.updates.estimatedDuration === undefined
@@ -3316,37 +3351,48 @@ export const mapRouter = router({
       if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found" });
       const [map] = await db.select().from(executionMaps).where(eq(executionMaps.id, task.mapId)).limit(1);
       if (!map) throw new TRPCError({ code: "NOT_FOUND", message: "Map not found" });
+      const nextStatus: TaskStatus = input.status === "waiting" ? "blocked" : input.status;
 
       const allowed = VALID_STATUS_TRANSITIONS[task.status];
-      if (!allowed.includes(input.status)) {
+      if (!allowed.includes(nextStatus)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: `Invalid task status transition: ${task.status} -> ${input.status}`,
+          message: `Invalid task status transition: ${task.status} -> ${nextStatus}`,
         });
       }
 
       const changedAt = new Date();
       const updates: Record<string, unknown> = {
-        status: input.status,
+        status: nextStatus,
         updatedAt: changedAt,
       };
-      if (task.status === "todo" && input.status === "in_progress" && !task.startDate) {
+      if (task.status === "todo" && nextStatus === "in_progress" && !task.startDate) {
         updates.startDate = changedAt;
       }
-      if (input.status === "done") {
+      if (nextStatus === "done") {
         updates.completedDate = changedAt;
       }
-      if (input.status === "blocked") {
-        if (!input.reason?.trim()) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Blocked status requires a reason",
-          });
-        }
-        updates.blockedReason = input.reason.trim();
-        updates.blockedSince = changedAt;
+      const normalizedReason = truncateString(input.reason?.trim() ?? null, 4000);
+      const statusRequiresReason =
+        nextStatus === "blocked" || nextStatus === "cancelled" || nextStatus === "skipped";
+      if (statusRequiresReason && !normalizedReason) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `${nextStatus} status requires a reason`,
+        });
       }
-      if (task.status === "blocked" && input.status === "in_progress") {
+      if (nextStatus === "blocked") {
+        updates.blockedReason = normalizedReason;
+        updates.blockedSince = changedAt;
+      } else if (nextStatus === "cancelled" || nextStatus === "skipped") {
+        updates.blockedReason = normalizedReason;
+        updates.blockedSince = null;
+      } else if (
+        task.status === "blocked" ||
+        task.status === "waiting" ||
+        task.status === "cancelled" ||
+        task.status === "skipped"
+      ) {
         updates.blockedReason = null;
         updates.blockedSince = null;
       }
@@ -3359,21 +3405,21 @@ export const mapRouter = router({
         trialId: map.trialId,
         taskId: task.id,
         fromStatus: task.status as TaskStatus,
-        toStatus: input.status as TaskStatus,
+        toStatus: nextStatus,
         changedBy: ctx.user.id,
-        reason: input.reason ?? null,
+        reason: normalizedReason,
         source: "status_change",
         changedAt,
       });
 
       const eventType =
-        input.status === "in_progress"
-          ? task.status === "blocked"
+        nextStatus === "in_progress"
+          ? task.status === "blocked" || task.status === "waiting"
             ? "task.unblocked"
             : "task.started"
-          : input.status === "done"
+          : nextStatus === "done"
           ? "task.completed"
-          : input.status === "blocked"
+          : nextStatus === "blocked"
           ? "task.blocked"
           : "kanban.card_moved";
 
@@ -3386,8 +3432,8 @@ export const mapRouter = router({
         targetType: "task",
         payload: {
           fromStatus: task.status,
-          toStatus: input.status,
-          reason: input.reason ?? null,
+          toStatus: nextStatus,
+          reason: normalizedReason,
         },
       });
       return { success: true } as const;

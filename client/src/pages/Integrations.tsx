@@ -279,7 +279,7 @@ export default function Integrations() {
         </p>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 h-11 pl-5 pr-2 py-0 flex items-center gap-6">
+      <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
         <div className="flex items-center gap-2">
           <button
             type="button"

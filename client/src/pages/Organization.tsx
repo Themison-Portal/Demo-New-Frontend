@@ -199,32 +199,34 @@ export default function Organization() {
     <div className="h-full overflow-y-auto">
       {/* Tabs Navigation Bar */}
       <div className="bg-[#F9FAFB] px-8 pt-3 pb-1 sticky top-0 z-40">
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-2 flex items-center gap-1">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  setActiveTab(tab.id);
-                  logEvent({
-                    eventType: "feature_used",
-                    action: "switch_tab",
-                    entityType: "organization_tab",
-                    entityId: tab.id,
-                  });
-                }}
-                className={`flex items-center gap-2 px-3 py-1 text-xs transition-colors rounded ${
-                  activeTab === tab.id
-                    ? "text-blue-600 bg-[#F3F4F6]"
-                    : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"
-                }`}
-              >
-                <Icon className="h-4 w-4" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
+        <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    logEvent({
+                      eventType: "feature_used",
+                      action: "switch_tab",
+                      entityType: "organization_tab",
+                      entityId: tab.id,
+                    });
+                  }}
+                  className={`flex items-center gap-2 whitespace-nowrap rounded px-3 py-1.5 text-xs transition-colors ${
+                    activeTab === tab.id
+                      ? "text-blue-700 bg-blue-50"
+                      : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 

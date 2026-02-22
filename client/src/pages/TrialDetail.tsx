@@ -2500,7 +2500,7 @@ export default function TrialDetail() {
       }`}
     >
       <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
-        <div className="bg-white rounded-lg border border-gray-200 px-5 py-2 flex items-center gap-6">
+        <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
           <button
             onClick={() => {
               logEvent({

@@ -38,7 +38,7 @@ import {
   trials,
 } from "../drizzle/schema";
 import { toDemoId, type DemoMode } from "./_core/demoMode";
-import { inArray, like, or, sql } from "drizzle-orm";
+import { eq, inArray, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
 const DEFAULT_CATEGORIES = [
@@ -105,9 +105,9 @@ const SAMPLE_TRIALS_BASE: TrialSeed[] = [
     status: "recruiting",
     sponsor: "Roche",
     location: "Basel, Switzerland",
-    enrolledPatients: 8,
-    targetPatients: 30,
-    completionPercentage: 27,
+    enrolledPatients: 120,
+    targetPatients: 150,
+    completionPercentage: 80,
   },
   {
     id: "ghi-789",
@@ -1357,21 +1357,27 @@ async function collectModeRows(
           .from(mapTelemetryEvents)
           .where(inArray(mapTelemetryEvents.trialId, trialIds));
 
-  const mapTaskStatusHistoryRows =
-    mapIds.length > 0
-      ? await tx
-          .select()
-          .from(mapTaskStatusHistory)
-          .where(
-            or(
-              inArray(mapTaskStatusHistory.mapId, mapIds),
-              inArray(mapTaskStatusHistory.trialId, trialIds)
+  let mapTaskStatusHistoryRows: typeof mapTaskStatusHistory.$inferSelect[] = [];
+  try {
+    mapTaskStatusHistoryRows =
+      mapIds.length > 0
+        ? await tx
+            .select()
+            .from(mapTaskStatusHistory)
+            .where(
+              or(
+                inArray(mapTaskStatusHistory.mapId, mapIds),
+                inArray(mapTaskStatusHistory.trialId, trialIds)
+              )
             )
-          )
-      : await tx
-          .select()
-          .from(mapTaskStatusHistory)
-          .where(inArray(mapTaskStatusHistory.trialId, trialIds));
+        : await tx
+            .select()
+            .from(mapTaskStatusHistory)
+            .where(inArray(mapTaskStatusHistory.trialId, trialIds));
+  } catch (error) {
+    console.warn("[demo] mapTaskStatusHistory read skipped due to schema compatibility issue.", error);
+    mapTaskStatusHistoryRows = [];
+  }
 
   const conversationRows = await tx
     .select()
@@ -1816,9 +1822,13 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
       .where(inArray(collabTelemetryEvents.trialId, trialIds));
 
     if (mapTaskIds.length > 0) {
-      await tx
-        .delete(mapTaskStatusHistory)
-        .where(inArray(mapTaskStatusHistory.taskId, mapTaskIds));
+      try {
+        await tx
+          .delete(mapTaskStatusHistory)
+          .where(inArray(mapTaskStatusHistory.taskId, mapTaskIds));
+      } catch (error) {
+        console.warn("[demo] mapTaskStatusHistory cleanup by task skipped due to schema compatibility issue.", error);
+      }
       await tx
         .delete(mapTaskDependencies)
         .where(
@@ -1850,14 +1860,18 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
       await tx
         .delete(protocolMapSections)
         .where(inArray(protocolMapSections.mapId, mapIds));
-      await tx
-        .delete(mapTaskStatusHistory)
-        .where(
-          or(
-            inArray(mapTaskStatusHistory.mapId, mapIds),
-            inArray(mapTaskStatusHistory.trialId, trialIds)
-          )
-        );
+      try {
+        await tx
+          .delete(mapTaskStatusHistory)
+          .where(
+            or(
+              inArray(mapTaskStatusHistory.mapId, mapIds),
+              inArray(mapTaskStatusHistory.trialId, trialIds)
+            )
+          );
+      } catch (error) {
+        console.warn("[demo] mapTaskStatusHistory cleanup by map skipped due to schema compatibility issue.", error);
+      }
       await tx
         .delete(mapTelemetryEvents)
         .where(
@@ -1870,9 +1884,13 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
         .delete(executionMaps)
         .where(inArray(executionMaps.id, mapIds));
     } else {
-      await tx
-        .delete(mapTaskStatusHistory)
-        .where(inArray(mapTaskStatusHistory.trialId, trialIds));
+      try {
+        await tx
+          .delete(mapTaskStatusHistory)
+          .where(inArray(mapTaskStatusHistory.trialId, trialIds));
+      } catch (error) {
+        console.warn("[demo] mapTaskStatusHistory cleanup by trial skipped due to schema compatibility issue.", error);
+      }
       await tx
         .delete(mapTelemetryEvents)
         .where(inArray(mapTelemetryEvents.trialId, trialIds));
@@ -2117,6 +2135,287 @@ function resolveMapTaskStatus(
   if (phaseIndex === 1 && taskIndex === 1) return "in_progress";
   if (phaseIndex === 2 && taskIndex === 2) return "blocked";
   return "todo";
+}
+
+function isMapTaskDoneStatus(status: string | null | undefined) {
+  const token = String(status || "").toLowerCase();
+  return token === "done" || token === "skipped" || token === "cancelled";
+}
+
+function computeSeedTaskTimelineDateSet({
+  mode,
+  seedKey,
+  status,
+  now,
+}: {
+  mode: "sample" | "full";
+  seedKey: string;
+  status: string | null | undefined;
+  now: Date;
+}) {
+  const token = String(status || "todo").toLowerCase();
+  const hash = stableHash(`${mode}:${seedKey}:${token}`);
+  const done = isMapTaskDoneStatus(token);
+
+  const openMaxWeeks = mode === "full" ? 10 : 8;
+  const doneMaxWeeks = mode === "full" ? 10 : 9;
+
+  let createdWeeksAgo = 0;
+  let completedWeeksAgo: number | null = null;
+
+  if (done) {
+    completedWeeksAgo = 1 + (hash % doneMaxWeeks);
+    createdWeeksAgo = Math.min(11, completedWeeksAgo + 1 + (hash % 2));
+  } else if (token === "blocked" || token === "waiting") {
+    createdWeeksAgo = 2 + (hash % Math.max(2, openMaxWeeks - 1));
+  } else if (token === "in_progress") {
+    createdWeeksAgo = 1 + (hash % Math.max(2, openMaxWeeks - 2));
+  } else if (token === "suggested" || token === "confirmed") {
+    createdWeeksAgo = hash % 3;
+  } else {
+    createdWeeksAgo = hash % (openMaxWeeks + 1);
+  }
+
+  const createdAt = addDays(now, -(createdWeeksAgo * 7 + (hash % 6)));
+  let completedDate: Date | null = null;
+  let updatedAt = addDays(createdAt, 1 + ((hash >> 1) % 4));
+
+  if (completedWeeksAgo !== null) {
+    completedDate = addDays(now, -(completedWeeksAgo * 7 + ((hash >> 3) % 5)));
+    if (completedDate.getTime() < createdAt.getTime()) {
+      completedDate = addDays(createdAt, 1 + ((hash >> 5) % 3));
+    }
+    updatedAt = completedDate;
+  } else {
+    const recentFloor = addDays(now, -(token === "blocked" || token === "waiting" ? 3 : 5));
+    if (updatedAt.getTime() < recentFloor.getTime()) updatedAt = recentFloor;
+    if (updatedAt.getTime() < createdAt.getTime()) updatedAt = createdAt;
+  }
+
+  if (updatedAt.getTime() > now.getTime()) updatedAt = new Date(now);
+  return { createdAt, updatedAt, completedDate };
+}
+
+function startOfIsoWeek(source: Date) {
+  const date = new Date(source.getFullYear(), source.getMonth(), source.getDate());
+  const day = date.getDay();
+  const daysFromMonday = (day + 6) % 7;
+  date.setDate(date.getDate() - daysFromMonday);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function parseSeedOrdinal(seedKey: string, suffix: "t" | "ph") {
+  const match = String(seedKey).match(new RegExp(`-${suffix}(\\d+)$`, "i"));
+  if (!match) return 0;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return parsed - 1;
+}
+
+function computeSeedTaskScheduleDateSet({
+  mode,
+  mapId,
+  seedKey,
+  status,
+  now,
+  timeline,
+}: {
+  mode: "sample" | "full";
+  mapId: string;
+  seedKey: string;
+  status: string | null | undefined;
+  now: Date;
+  timeline: { completedDate: Date | null };
+}) {
+  const token = String(status || "todo").toLowerCase();
+  const hash = stableHash(`${mode}:${mapId}:${seedKey}:${token}`);
+  const done = isMapTaskDoneStatus(token);
+  const currentWeekStart = startOfIsoWeek(now);
+
+  if (done) {
+    const completionDate = timeline.completedDate ?? addDays(now, -(7 + (hash % 35)));
+    const dueDate = addDays(completionDate, -(1 + (hash % 3)));
+    const suggestedDate = addDays(dueDate, -(2 + ((hash >> 2) % 4)));
+    const startDate = addDays(suggestedDate, 1);
+    return {
+      suggestedDate,
+      dueDate,
+      startDate,
+    };
+  }
+
+  const taskOrdinal = parseSeedOrdinal(seedKey, "t");
+  const phaseIndex = Math.floor(taskOrdinal / MAP_TASK_BLUEPRINT.length);
+  const taskIndex = taskOrdinal % MAP_TASK_BLUEPRINT.length;
+  const trialShiftWeeks = stableHash(`${mode}:${mapId}:trial`) % 3;
+
+  let weekOffset = trialShiftWeeks + phaseIndex * 4 + taskIndex;
+  if (token === "blocked" || token === "waiting") {
+    weekOffset = Math.min(weekOffset, 2 + (hash % 2));
+  } else if (token === "in_progress") {
+    weekOffset = Math.min(weekOffset, 3 + (hash % 2));
+  } else if (token === "suggested" || token === "confirmed") {
+    weekOffset = Math.max(weekOffset, 2 + phaseIndex * 2 + (hash % 2));
+  }
+
+  weekOffset = Math.max(0, Math.min(11, weekOffset));
+  const weekStart = addDays(currentWeekStart, weekOffset * 7);
+  const dueDate = addDays(weekStart, hash % 5);
+  const suggestedLeadDays =
+    token === "in_progress"
+      ? 2
+      : token === "blocked" || token === "waiting"
+      ? 1
+      : 3 + ((hash >> 3) % 3);
+  const suggestedDate = addDays(dueDate, -suggestedLeadDays);
+  const startDate = token === "in_progress" ? addDays(suggestedDate, 1) : null;
+
+  return {
+    suggestedDate,
+    dueDate,
+    startDate,
+  };
+}
+
+function computeSeedPhaseWindowDateSet({
+  mode,
+  mapId,
+  phaseId,
+  now,
+}: {
+  mode: "sample" | "full";
+  mapId: string;
+  phaseId: string;
+  now: Date;
+}) {
+  const phaseOrdinal = parseSeedOrdinal(phaseId, "ph");
+  const hash = stableHash(`${mode}:${mapId}:${phaseId}`);
+  const currentWeekStart = startOfIsoWeek(now);
+  const trialShiftWeeks = stableHash(`${mode}:${mapId}:phase`) % 3;
+  const weekOffset = Math.max(0, Math.min(11, trialShiftWeeks + phaseOrdinal * 4 + (hash % 2)));
+  const windowStart = addDays(currentWeekStart, weekOffset * 7);
+  const estimatedDate = addDays(windowStart, 2 + (hash % 2));
+  const windowEnd = addDays(windowStart, 5);
+  return {
+    estimatedDate,
+    windowStart,
+    windowEnd,
+  };
+}
+
+async function rebalanceSeedTaskTimelines(
+  mode: "sample" | "full",
+  dbClient?: DbClient
+) {
+  try {
+    const db = dbClient ?? await getDb();
+    if (!db) throw new Error("Database not available");
+
+    const maps = await db
+      .select({ id: executionMaps.id })
+      .from(executionMaps)
+      .where(like(executionMaps.id, `${mode}-map-%`));
+    const mapIds = maps.map((row) => row.id);
+    if (mapIds.length === 0) return false;
+
+    const rows = await db
+      .select({
+        id: mapTasks.id,
+        status: mapTasks.status,
+        mapId: mapTasks.mapId,
+      })
+      .from(mapTasks)
+      .where(inArray(mapTasks.mapId, mapIds));
+
+    const seededRows = rows.filter((row) => /^.+-t\d{2,}$/i.test(String(row.id)));
+    if (seededRows.length === 0) return false;
+
+    const now = new Date();
+    let canWriteHistory = true;
+    try {
+      await ensureMapTaskStatusHistoryTable(db);
+    } catch {
+      canWriteHistory = false;
+    }
+
+    for (const row of seededRows) {
+      const dates = computeSeedTaskTimelineDateSet({
+        mode,
+        seedKey: row.id,
+        status: row.status,
+        now,
+      });
+      const scheduleDates = computeSeedTaskScheduleDateSet({
+        mode,
+        mapId: row.mapId,
+        seedKey: row.id,
+        status: row.status,
+        now,
+        timeline: dates,
+      });
+
+      await db
+        .update(mapTasks)
+        .set({
+          createdAt: dates.createdAt,
+          updatedAt: dates.updatedAt,
+          completedDate: dates.completedDate,
+          suggestedDate: scheduleDates.suggestedDate,
+          dueDate: scheduleDates.dueDate,
+          startDate: scheduleDates.startDate,
+        })
+        .where(eq(mapTasks.id, row.id));
+
+      if (canWriteHistory) {
+        const historyAnchor = dates.completedDate ?? dates.updatedAt;
+        try {
+          await db
+            .update(mapTaskStatusHistory)
+            .set({
+              enteredAt: historyAnchor,
+              createdAt: historyAnchor,
+            })
+            .where(eq(mapTaskStatusHistory.taskId, row.id));
+        } catch {
+          canWriteHistory = false;
+        }
+      }
+    }
+
+    const phaseRows = await db
+      .select({
+        id: mapPhases.id,
+        mapId: mapPhases.mapId,
+      })
+      .from(mapPhases)
+      .where(inArray(mapPhases.mapId, mapIds));
+
+    const seededPhaseRows = phaseRows.filter((row) => /^.+-ph\d+$/i.test(String(row.id)));
+    for (const row of seededPhaseRows) {
+      const windowDates = computeSeedPhaseWindowDateSet({
+        mode,
+        mapId: row.mapId,
+        phaseId: row.id,
+        now,
+      });
+
+      await db
+        .update(mapPhases)
+        .set({
+          estimatedDate: windowDates.estimatedDate,
+          windowStart: windowDates.windowStart,
+          windowEnd: windowDates.windowEnd,
+          updatedAt: now,
+        })
+        .where(eq(mapPhases.id, row.id));
+    }
+
+    return true;
+  } catch (error) {
+    console.warn(`[demo] ${mode} task timeline rebalance skipped due to compatibility issue.`, error);
+    return false;
+  }
 }
 
 async function seedModeOperationalData(
@@ -2577,6 +2876,19 @@ async function seedModeOperationalData(
             : SEED_ASSIGNEE_IDS[(trial.index + runningIndex) % SEED_ASSIGNEE_IDS.length];
         const assignedRole = MAP_ROLE_ROTATION[(trial.index + runningIndex) % MAP_ROLE_ROTATION.length];
         const createdByMode = (runningIndex + trial.index) % 5 === 0 ? "user" : "ai";
+        const timeline =
+          mode === "sample" || mode === "full"
+            ? computeSeedTaskTimelineDateSet({
+                mode,
+                seedKey: taskId,
+                status,
+                now,
+              })
+            : {
+                createdAt: addDays(now, -(11 + trial.index + phaseIndex)),
+                updatedAt: addDays(now, -(1 + (trial.index % 3))),
+                completedDate: isCompleted ? addDays(suggestedDate, 2) : null,
+              };
 
         mapTaskInserts.push({
           id: taskId,
@@ -2596,7 +2908,7 @@ async function seedModeOperationalData(
           dueDate,
           estimatedDuration: 1 + ((phaseIndex + taskIndex) % 3),
           startDate: status === "in_progress" || isCompleted ? suggestedDate : null,
-          completedDate: isCompleted ? addDays(suggestedDate, 2) : null,
+          completedDate: timeline.completedDate,
           orderInPhase: taskIndex,
           canvasX: 130 + phaseIndex * 340,
           canvasY: 130 + taskIndex * 130,
@@ -2613,8 +2925,8 @@ async function seedModeOperationalData(
               confidence: 0.84,
             },
           ],
-          createdAt: addDays(now, -(11 + trial.index + phaseIndex)),
-          updatedAt: addDays(now, -(1 + (trial.index % 3))),
+          createdAt: timeline.createdAt,
+          updatedAt: timeline.updatedAt,
         });
       }
     }
@@ -2987,7 +3299,14 @@ export const demoRouter = router({
           ctx.user.id,
           db
         );
-        return { ok: true, mode: "sample" as const, ...result, backfilledOperationalData };
+        const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("sample", db);
+        return {
+          ok: true,
+          mode: "sample" as const,
+          ...result,
+          backfilledOperationalData,
+          rebalancedTaskTimelines,
+        };
       }
 
       const existing = await db
@@ -3004,7 +3323,14 @@ export const demoRouter = router({
           ctx.user.id,
           db
         );
-        return { ok: true, mode: "sample" as const, ...result, backfilledOperationalData };
+        const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("sample", db);
+        return {
+          ok: true,
+          mode: "sample" as const,
+          ...result,
+          backfilledOperationalData,
+          rebalancedTaskTimelines,
+        };
       }
 
       const backfilledOperationalData = await ensureModeOperationalSeed(
@@ -3013,11 +3339,13 @@ export const demoRouter = router({
         ctx.user.id,
         db
       );
+      const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("sample", db);
       return {
         ok: true,
         mode: "sample" as const,
         restoredFromSavedDefault: false,
         backfilledOperationalData,
+        rebalancedTaskTimelines,
       };
     }),
 
@@ -3036,7 +3364,14 @@ export const demoRouter = router({
           ctx.user.id,
           db
         );
-        return { ok: true, mode: "full" as const, ...result, backfilledOperationalData };
+        const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("full", db);
+        return {
+          ok: true,
+          mode: "full" as const,
+          ...result,
+          backfilledOperationalData,
+          rebalancedTaskTimelines,
+        };
       }
 
       const existing = await db
@@ -3053,7 +3388,14 @@ export const demoRouter = router({
           ctx.user.id,
           db
         );
-        return { ok: true, mode: "full" as const, ...result, backfilledOperationalData };
+        const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("full", db);
+        return {
+          ok: true,
+          mode: "full" as const,
+          ...result,
+          backfilledOperationalData,
+          rebalancedTaskTimelines,
+        };
       }
 
       const backfilledOperationalData = await ensureModeOperationalSeed(
@@ -3062,11 +3404,13 @@ export const demoRouter = router({
         ctx.user.id,
         db
       );
+      const rebalancedTaskTimelines = await rebalanceSeedTaskTimelines("full", db);
       return {
         ok: true,
         mode: "full" as const,
         restoredFromSavedDefault: false,
         backfilledOperationalData,
+        rebalancedTaskTimelines,
       };
     }),
 

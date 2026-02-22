@@ -3865,27 +3865,33 @@ Output rules:
 
   const renderTopNav = () => (
     <div className="bg-[#F9FAFB] px-8 pt-3 pb-1">
-      <div className="bg-white rounded-lg border border-gray-200 pl-6 pr-2 py-2 flex items-center gap-6">
+      <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
         {(() => {
           const backHref = trialId ? `/trial/${trialId}` : "/trial-workspace";
-          const backLabel = trialId ? "Trial Overview" : "All Trials";
+          const backLabel = trialId ? "Trial Overview" : "Back";
           return (
         <button
-          onClick={() => navigate(backHref)}
-          className="flex items-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors pr-6 border-r border-gray-200"
+          onClick={() => {
+            if (typeof window !== "undefined" && window.history.length > 1) {
+              window.history.back();
+              return;
+            }
+            navigate(backHref);
+          }}
+          className="flex items-center gap-2 border-r border-gray-200 pr-5 text-xs text-gray-500 transition-colors hover:text-gray-700"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>{backLabel}</span>
         </button>
           );
         })()}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab("ai-assistant")}
-            className={`flex items-center gap-2 px-3 py-1 text-xs transition-colors rounded ${
+            className={`flex items-center gap-2 whitespace-nowrap rounded px-3 py-1.5 text-xs transition-colors ${
               activeTab === "ai-assistant"
-                ? "text-blue-600 bg-[#F3F4F6]"
-                : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"
+                ? "text-blue-700 bg-blue-50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
             }`}
           >
             <Brain className="w-4 h-4" />
@@ -3893,10 +3899,10 @@ Output rules:
           </button>
           <button
             onClick={() => setActiveTab("response-archive")}
-            className={`flex items-center gap-2 px-3 py-1 text-xs transition-colors rounded ${
+            className={`flex items-center gap-2 whitespace-nowrap rounded px-3 py-1.5 text-xs transition-colors ${
               activeTab === "response-archive"
-                ? "text-blue-600 bg-[#F3F4F6]"
-                : "text-gray-400 hover:text-gray-600 hover:bg-gray-50"
+                ? "text-blue-700 bg-blue-50"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
             }`}
           >
             <Archive className="w-4 h-4" />

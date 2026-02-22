@@ -4761,7 +4761,7 @@ function MonthlyChannelAreaPanel({
   );
 }
 
-export default function Analytics({ embedded = false }: { embedded?: boolean } = {}) {
+export default function AnalyticsHidden({ embedded = false }: { embedded?: boolean } = {}) {
   const { state, getCurrentDataMode } = useDemoState();
   const [location, setLocation] = useLocation();
   const isHomePage = location === "/";

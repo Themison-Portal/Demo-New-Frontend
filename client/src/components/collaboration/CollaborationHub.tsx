@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -75,6 +75,7 @@ function normalizeLookupKey(value: string | null | undefined) {
 
 const SAMPLE_STATE_STORAGE_KEY = "themison-demo-state-sample";
 const SAMPLE_DEFAULT_STATE_STORAGE_KEY = "themison-demo-state-default-sample";
+const COLLAB_CARD_BOTTOM_GAP_STORAGE_KEY = "ui:collab_card_bottom_gap_px";
 
 function stableHash(value: string) {
   let hash = 0;
@@ -231,12 +232,33 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   });
   const [selectedThreadTrialId, setSelectedThreadTrialId] = useState(trialId);
   const [threadSearch, setThreadSearch] = useState("");
+  const collaborationCardRef = useRef<HTMLDivElement | null>(null);
 
   useRealtimeCollab(trialId);
 
   useEffect(() => {
     setDataMode(dataMode);
   }, [dataMode, setDataMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const persistBottomGap = () => {
+      const cardRect = collaborationCardRef.current?.getBoundingClientRect();
+      if (!cardRect) return;
+      const gap = Math.max(0, Math.round(window.innerHeight - cardRect.bottom));
+      window.localStorage.setItem(COLLAB_CARD_BOTTOM_GAP_STORAGE_KEY, String(gap));
+    };
+
+    persistBottomGap();
+    const timeoutId = window.setTimeout(persistBottomGap, 120);
+    window.addEventListener("resize", persistBottomGap);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener("resize", persistBottomGap);
+    };
+  }, [detailMode, showCompose]);
 
   useEffect(() => {
     if (trialId) {
@@ -821,7 +843,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="shrink-0">
-        <div className="flex h-11 items-center gap-6 rounded-lg border border-gray-200 bg-white px-5 py-0">
+        <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
           <button
             type="button"
             onClick={() => navigate("/trial-workspace")}
@@ -891,7 +913,10 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
       </div>
 
       <div className="min-h-0 flex-1">
-        <div className="flex h-full min-h-0 overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div
+          ref={collaborationCardRef}
+          className="flex h-full min-h-0 overflow-hidden rounded-lg border border-gray-200 bg-white"
+        >
         {isInboxMode ? (
           <>
             <aside className="flex w-[200px] min-w-[200px] flex-col border-r border-gray-100 bg-white">

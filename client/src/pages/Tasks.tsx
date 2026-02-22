@@ -15,7 +15,6 @@ import {
   ListTodo,
   PlayCircle,
   AlertTriangle,
-  PauseCircle,
   CheckCircle2,
   CircleDot,
   Maximize2,
@@ -74,7 +73,7 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
   todo: "To do",
   in_progress: "In progress",
   blocked: "Blocked",
-  waiting: "Waiting",
+  waiting: "Blocked",
   done: "Done",
   skipped: "Skipped",
   cancelled: "Cancelled",
@@ -86,7 +85,7 @@ const STATUS_BADGE: Record<TaskStatus, string> = {
   todo: "bg-slate-100 text-slate-700",
   in_progress: "bg-blue-100 text-blue-700",
   blocked: "bg-red-100 text-red-700",
-  waiting: "bg-violet-100 text-violet-700",
+  waiting: "bg-red-100 text-red-700",
   done: "bg-emerald-100 text-emerald-700",
   skipped: "bg-zinc-100 text-zinc-600",
   cancelled: "bg-zinc-100 text-zinc-600",
@@ -98,7 +97,7 @@ const STATUS_HEADER_PILL: Record<TaskStatus, string> = {
   todo: "bg-slate-100 text-slate-700",
   in_progress: "bg-blue-100 text-blue-700",
   blocked: "bg-red-100 text-red-700",
-  waiting: "bg-violet-100 text-violet-700",
+  waiting: "bg-red-100 text-red-700",
   done: "bg-emerald-100 text-emerald-700",
   skipped: "bg-zinc-100 text-zinc-600",
   cancelled: "bg-zinc-100 text-zinc-600",
@@ -110,7 +109,7 @@ const STATUS_COLUMN_ICON: Record<TaskStatus, LucideIcon> = {
   todo: ListTodo,
   in_progress: PlayCircle,
   blocked: AlertTriangle,
-  waiting: PauseCircle,
+  waiting: AlertTriangle,
   done: CheckCircle2,
   skipped: SkipForward,
   cancelled: XCircle,
@@ -120,7 +119,6 @@ const TASK_STATUS_OPTIONS: TaskStatus[] = [
   "todo",
   "in_progress",
   "blocked",
-  "waiting",
   "done",
   "skipped",
   "cancelled",
@@ -159,6 +157,557 @@ const ASSIGNED_ROLE_OPTIONS = [
   "custom",
 ] as const;
 
+type BlockedReasonCategory = "External" | "Internal" | "Patient" | "System/Data" | "Scheduled/Timing" | "Other";
+
+type BlockedReasonOption = {
+  category: BlockedReasonCategory;
+  value: string;
+  label: string;
+  definition: string;
+};
+
+const BLOCKED_REASON_OPTIONS: BlockedReasonOption[] = [
+  {
+    category: "External",
+    value: "awaiting_sponsor_cro_response",
+    label: "Awaiting sponsor/CRO response",
+    definition: "Waiting for clarification, query answer, or decision from sponsor/CRO",
+  },
+  {
+    category: "External",
+    value: "awaiting_sponsor_cro_approval",
+    label: "Awaiting sponsor/CRO approval",
+    definition: "Document, amendment, or formal approval pending",
+  },
+  {
+    category: "External",
+    value: "awaiting_vendor_delivery",
+    label: "Awaiting vendor delivery",
+    definition: "Kits, supplies, logistics, or third-party delivery delay",
+  },
+  {
+    category: "External",
+    value: "awaiting_central_lab_imaging_result",
+    label: "Awaiting central lab/imaging result",
+    definition: "Result pending from external lab or imaging provider",
+  },
+  {
+    category: "External",
+    value: "awaiting_regulatory_irb_feedback",
+    label: "Awaiting regulatory/IRB feedback",
+    definition: "Waiting for response, feedback, or request resolution from regulatory or IRB body",
+  },
+  {
+    category: "Internal",
+    value: "awaiting_pi_sign_off",
+    label: "Awaiting PI sign-off",
+    definition: "Task requires PI review or medical decision",
+  },
+  {
+    category: "Internal",
+    value: "awaiting_internal_department_handoff",
+    label: "Awaiting internal department handoff",
+    definition: "Waiting on lab/imaging/pathology/pharmacy or other hospital department",
+  },
+  {
+    category: "Internal",
+    value: "awaiting_internal_admin_contracting",
+    label: "Awaiting internal admin/contracting",
+    definition: "Waiting on finance, legal, or contracting processes",
+  },
+  {
+    category: "Internal",
+    value: "resource_constraint",
+    label: "Resource constraint",
+    definition: "Staffing, room, or equipment unavailable",
+  },
+  {
+    category: "Internal",
+    value: "awaiting_training_certification",
+    label: "Awaiting training/certification",
+    definition: "Required delegation, role training, or certification is not yet complete",
+  },
+  {
+    category: "Patient",
+    value: "patient_scheduling_issue",
+    label: "Patient scheduling issue",
+    definition: "Patient reschedule, no-show, or availability issue",
+  },
+  {
+    category: "Patient",
+    value: "patient_adherence_issue",
+    label: "Patient adherence issue",
+    definition: "Compliance or participation-related delay",
+  },
+  {
+    category: "Patient",
+    value: "consent_pending",
+    label: "Consent pending",
+    definition: "Patient has not yet signed consent",
+  },
+  {
+    category: "System/Data",
+    value: "system_access_issue",
+    label: "System access issue",
+    definition: "User credential or system access problem",
+  },
+  {
+    category: "System/Data",
+    value: "source_data_not_available",
+    label: "Source data not available",
+    definition: "Medical record or source documentation incomplete",
+  },
+  {
+    category: "Scheduled/Timing",
+    value: "protocol_mandated_waiting_period",
+    label: "Protocol-mandated waiting period",
+    definition: "Washout, observation window, or follow-up interval is still in effect",
+  },
+  {
+    category: "Scheduled/Timing",
+    value: "scheduled_visit_not_yet_due",
+    label: "Scheduled visit not yet due",
+    definition: "Visit window has not opened yet based on protocol schedule",
+  },
+  {
+    category: "Scheduled/Timing",
+    value: "sample_result_processing_in_progress",
+    label: "Sample/result processing in progress",
+    definition: "Specimen or result processing is in progress and not yet available",
+  },
+  {
+    category: "Scheduled/Timing",
+    value: "regulatory_ethics_review_in_progress",
+    label: "Regulatory/ethics review in progress",
+    definition: "Known review cycle underway; awaiting expected timeline completion",
+  },
+  {
+    category: "Scheduled/Timing",
+    value: "amendment_under_review",
+    label: "Amendment under review",
+    definition: "Protocol amendment review is active and action must wait for outcome",
+  },
+  {
+    category: "Other",
+    value: "other_unclear",
+    label: "Other / unclear",
+    definition: "Use only if none of the above apply",
+  },
+];
+
+const BLOCKED_REASON_CATEGORY_ORDER: BlockedReasonCategory[] = [
+  "External",
+  "Internal",
+  "Patient",
+  "System/Data",
+  "Scheduled/Timing",
+  "Other",
+];
+
+const BLOCKED_REASON_BY_VALUE = new Map(BLOCKED_REASON_OPTIONS.map((option) => [option.value, option]));
+
+type BlockerEntityValue =
+  | "sponsor"
+  | "cro"
+  | "vendor"
+  | "pi"
+  | "lab"
+  | "imaging"
+  | "pathology"
+  | "pharmacy"
+  | "radiology"
+  | "finance_legal"
+  | "patient"
+  | "internal_team"
+  | "other";
+
+const BLOCKER_ENTITY_OPTIONS: Array<{ value: BlockerEntityValue; label: string }> = [
+  { value: "sponsor", label: "Sponsor" },
+  { value: "cro", label: "CRO" },
+  { value: "vendor", label: "Vendor" },
+  { value: "pi", label: "PI" },
+  { value: "lab", label: "Lab" },
+  { value: "imaging", label: "Imaging" },
+  { value: "pathology", label: "Pathology" },
+  { value: "pharmacy", label: "Pharmacy" },
+  { value: "radiology", label: "Radiology" },
+  { value: "finance_legal", label: "Finance/Legal" },
+  { value: "patient", label: "Patient" },
+  { value: "internal_team", label: "Internal Team" },
+  { value: "other", label: "Other" },
+];
+
+const BLOCKER_ENTITY_SET = new Set(BLOCKER_ENTITY_OPTIONS.map((option) => option.value));
+const BLOCKER_ENTITY_LABEL_BY_VALUE = new Map(BLOCKER_ENTITY_OPTIONS.map((option) => [option.value, option.label]));
+const BLOCKER_META_PREFIX = "__blocker_meta_v1__:";
+const CANCELLED_REASON_META_PREFIX = "__cancelled_reason_v1__:";
+const SKIPPED_REASON_META_PREFIX = "__skipped_reason_v1__:";
+
+type CancelledReasonCategory = "Protocol/Study" | "Patient" | "Administrative" | "Other";
+type SkippedReasonCategory = "Patient" | "Clinical" | "Administrative" | "Other";
+
+type OutcomeReasonOption<TCategory extends string> = {
+  category: TCategory;
+  value: string;
+  label: string;
+  definition: string;
+};
+
+const CANCELLED_REASON_OPTIONS: Array<OutcomeReasonOption<CancelledReasonCategory>> = [
+  {
+    category: "Protocol/Study",
+    value: "protocol_amendment_removed_requirement",
+    label: "Protocol amendment removed requirement",
+    definition: "Task is no longer required due to updated protocol/amendment scope",
+  },
+  {
+    category: "Protocol/Study",
+    value: "trial_terminated_closed",
+    label: "Trial terminated/closed",
+    definition: "Study or site is closed and task is permanently no longer applicable",
+  },
+  {
+    category: "Protocol/Study",
+    value: "study_put_on_clinical_hold",
+    label: "Study put on clinical hold",
+    definition: "Task cancelled due to clinical hold decision",
+  },
+  {
+    category: "Patient",
+    value: "patient_withdrawn_from_study",
+    label: "Patient withdrawn from study",
+    definition: "Task cancelled because participant withdrew consent/participation",
+  },
+  {
+    category: "Patient",
+    value: "patient_lost_to_follow_up",
+    label: "Patient lost to follow-up",
+    definition: "Task cancelled because participant cannot be reached/retained",
+  },
+  {
+    category: "Patient",
+    value: "screen_failure",
+    label: "Screen failure",
+    definition: "Task cancelled because participant failed screening eligibility",
+  },
+  {
+    category: "Administrative",
+    value: "duplicate_task_created_in_error",
+    label: "Duplicate task (created in error)",
+    definition: "Task cancelled because another equivalent task already exists",
+  },
+  {
+    category: "Administrative",
+    value: "task_created_in_error",
+    label: "Task created in error",
+    definition: "Task should not have been created",
+  },
+  {
+    category: "Administrative",
+    value: "sponsor_directive_to_cancel",
+    label: "Sponsor directive to cancel",
+    definition: "Sponsor instructed cancellation of this task",
+  },
+  {
+    category: "Other",
+    value: "other_unclear",
+    label: "Other / unclear",
+    definition: "Use only if none of the above apply",
+  },
+];
+
+const SKIPPED_REASON_OPTIONS: Array<OutcomeReasonOption<SkippedReasonCategory>> = [
+  {
+    category: "Patient",
+    value: "patient_no_show",
+    label: "Patient no-show",
+    definition: "Participant did not attend the scheduled activity",
+  },
+  {
+    category: "Patient",
+    value: "visit_window_missed_expired",
+    label: "Visit window missed/expired",
+    definition: "Required protocol window elapsed before task could be completed",
+  },
+  {
+    category: "Patient",
+    value: "patient_temporarily_unavailable",
+    label: "Patient temporarily unavailable (hospitalized, traveling)",
+    definition: "Temporary patient unavailability prevented task execution",
+  },
+  {
+    category: "Patient",
+    value: "patient_declined_procedure",
+    label: "Patient declined procedure",
+    definition: "Patient refused the specific procedure/task",
+  },
+  {
+    category: "Clinical",
+    value: "not_applicable_per_eligibility_protocol_criteria",
+    label: "Not applicable per eligibility/protocol criteria",
+    definition: "Task was not applicable based on protocol criteria",
+  },
+  {
+    category: "Clinical",
+    value: "pi_clinical_decision",
+    label: "PI clinical decision",
+    definition: "Principal investigator made a clinical decision to skip",
+  },
+  {
+    category: "Clinical",
+    value: "contraindication_identified",
+    label: "Contraindication identified",
+    definition: "Clinical contraindication prevented performing the task",
+  },
+  {
+    category: "Clinical",
+    value: "adverse_event_precluded_procedure",
+    label: "Adverse event precluded procedure",
+    definition: "Safety event prevented execution of task",
+  },
+  {
+    category: "Administrative",
+    value: "superseded_by_updated_task",
+    label: "Superseded by updated task",
+    definition: "Task was replaced by updated workflow",
+  },
+  {
+    category: "Administrative",
+    value: "covered_by_another_team_member_visit",
+    label: "Covered by another team member/visit",
+    definition: "Task outcome was effectively captured elsewhere",
+  },
+  {
+    category: "Administrative",
+    value: "deprioritized_by_site_management",
+    label: "Deprioritized by site management",
+    definition: "Site-level prioritization decision deferred performance",
+  },
+  {
+    category: "Other",
+    value: "other_unclear",
+    label: "Other / unclear",
+    definition: "Use only if none of the above apply",
+  },
+];
+
+const CANCELLED_REASON_CATEGORY_ORDER: CancelledReasonCategory[] = [
+  "Protocol/Study",
+  "Patient",
+  "Administrative",
+  "Other",
+];
+
+const SKIPPED_REASON_CATEGORY_ORDER: SkippedReasonCategory[] = [
+  "Patient",
+  "Clinical",
+  "Administrative",
+  "Other",
+];
+
+const CANCELLED_REASON_BY_VALUE = new Map(CANCELLED_REASON_OPTIONS.map((option) => [option.value, option]));
+const SKIPPED_REASON_BY_VALUE = new Map(SKIPPED_REASON_OPTIONS.map((option) => [option.value, option]));
+
+type TaskBlockerMeta = {
+  reasonCode: string | null;
+  waitingOn: BlockerEntityValue | null;
+  requiresInputFrom: BlockerEntityValue[];
+  fallbackReason: string | null;
+  expectedResolutionDate: string | null;
+};
+
+function toDateInputToken(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toBlockerEntityValue(value: unknown): BlockerEntityValue | null {
+  if (typeof value !== "string") return null;
+  const token = value.trim().toLowerCase().replace(/\s+/g, "_") as BlockerEntityValue;
+  return BLOCKER_ENTITY_SET.has(token) ? token : null;
+}
+
+function normalizeBlockerEntityList(value: unknown): BlockerEntityValue[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<BlockerEntityValue>();
+  const normalized: BlockerEntityValue[] = [];
+  for (const entry of value) {
+    const token = toBlockerEntityValue(entry);
+    if (!token || seen.has(token)) continue;
+    seen.add(token);
+    normalized.push(token);
+  }
+  return normalized;
+}
+
+type OutcomeReasonMeta = {
+  reasonCode: string | null;
+  fallbackReason: string | null;
+};
+
+function parseOutcomeReasonMeta(
+  rawReason: string | null | undefined,
+  prefix: string,
+  reasonLookup: Map<string, unknown>
+): OutcomeReasonMeta {
+  const value = String(rawReason || "").trim();
+  if (!value) return { reasonCode: null, fallbackReason: null };
+
+  if (value.startsWith(prefix)) {
+    try {
+      const decoded = JSON.parse(value.slice(prefix.length)) as Record<string, unknown>;
+      const reasonCodeRaw = typeof decoded.reasonCode === "string" ? decoded.reasonCode.trim() : "";
+      const reasonCode = reasonCodeRaw && reasonLookup.has(reasonCodeRaw) ? reasonCodeRaw : null;
+      const fallbackReason =
+        typeof decoded.fallbackReason === "string" && decoded.fallbackReason.trim().length > 0
+          ? decoded.fallbackReason.trim()
+          : null;
+      return { reasonCode, fallbackReason };
+    } catch {
+      return { reasonCode: null, fallbackReason: null };
+    }
+  }
+
+  if (
+    value.startsWith(BLOCKER_META_PREFIX) ||
+    value.startsWith(CANCELLED_REASON_META_PREFIX) ||
+    value.startsWith(SKIPPED_REASON_META_PREFIX)
+  ) {
+    return { reasonCode: null, fallbackReason: null };
+  }
+
+  return { reasonCode: null, fallbackReason: value };
+}
+
+function encodeOutcomeReasonMeta(
+  meta: {
+    reasonCode?: string | null;
+    fallbackReason?: string | null;
+  },
+  prefix: string,
+  reasonLookup: Map<string, unknown>
+): string | null {
+  const reasonCodeRaw = typeof meta.reasonCode === "string" ? meta.reasonCode.trim() : "";
+  const reasonCode = reasonCodeRaw && reasonLookup.has(reasonCodeRaw) ? reasonCodeRaw : null;
+  const fallbackReason =
+    typeof meta.fallbackReason === "string" && meta.fallbackReason.trim().length > 0
+      ? meta.fallbackReason.trim()
+      : null;
+  if (!reasonCode && !fallbackReason) return null;
+  return `${prefix}${JSON.stringify({ reasonCode, fallbackReason })}`;
+}
+
+function parseCancelledReasonMeta(rawReason?: string | null): OutcomeReasonMeta {
+  return parseOutcomeReasonMeta(rawReason, CANCELLED_REASON_META_PREFIX, CANCELLED_REASON_BY_VALUE);
+}
+
+function parseSkippedReasonMeta(rawReason?: string | null): OutcomeReasonMeta {
+  return parseOutcomeReasonMeta(rawReason, SKIPPED_REASON_META_PREFIX, SKIPPED_REASON_BY_VALUE);
+}
+
+function toOutcomeReasonLabel<TCategory extends string>(
+  meta: OutcomeReasonMeta,
+  reasonLookup: Map<string, OutcomeReasonOption<TCategory>>
+): string | null {
+  if (meta.reasonCode) {
+    const option = reasonLookup.get(meta.reasonCode);
+    if (option) {
+      if (meta.reasonCode === "other_unclear" && meta.fallbackReason) {
+        return `${option.label} (${meta.fallbackReason})`;
+      }
+      return option.label;
+    }
+  }
+  return meta.fallbackReason;
+}
+
+function parseTaskBlockerMeta(rawReason?: string | null): TaskBlockerMeta {
+  const value = String(rawReason || "").trim();
+  if (!value) {
+    return {
+      reasonCode: null,
+      waitingOn: null,
+      requiresInputFrom: [],
+      fallbackReason: null,
+      expectedResolutionDate: null,
+    };
+  }
+
+  if (value.startsWith(BLOCKER_META_PREFIX)) {
+    try {
+      const decoded = JSON.parse(value.slice(BLOCKER_META_PREFIX.length)) as Record<string, unknown>;
+      const reasonCodeRaw = typeof decoded.reasonCode === "string" ? decoded.reasonCode.trim() : "";
+      const reasonCode = reasonCodeRaw && BLOCKED_REASON_BY_VALUE.has(reasonCodeRaw) ? reasonCodeRaw : null;
+      const waitingOn = toBlockerEntityValue(decoded.waitingOn);
+      const requiresInputFrom = normalizeBlockerEntityList(decoded.requiresInputFrom);
+      const fallbackReason =
+        typeof decoded.fallbackReason === "string" && decoded.fallbackReason.trim().length > 0
+          ? decoded.fallbackReason.trim()
+          : null;
+      const expectedResolutionDate = toDateInputToken(decoded.expectedResolutionDate);
+      return { reasonCode, waitingOn, requiresInputFrom, fallbackReason, expectedResolutionDate };
+    } catch {
+      // Fall through and treat as legacy plain text reason.
+    }
+  }
+
+  if (value.startsWith(CANCELLED_REASON_META_PREFIX) || value.startsWith(SKIPPED_REASON_META_PREFIX)) {
+    return {
+      reasonCode: null,
+      waitingOn: null,
+      requiresInputFrom: [],
+      fallbackReason: null,
+      expectedResolutionDate: null,
+    };
+  }
+
+  return {
+    reasonCode: null,
+    waitingOn: null,
+    requiresInputFrom: [],
+    fallbackReason: value,
+    expectedResolutionDate: null,
+  };
+}
+
+function encodeTaskBlockerMeta(meta: {
+  reasonCode?: string | null;
+  waitingOn?: string | null;
+  requiresInputFrom?: string[];
+  fallbackReason?: string | null;
+  expectedResolutionDate?: string | null;
+}): string | null {
+  const reasonCodeRaw = typeof meta.reasonCode === "string" ? meta.reasonCode.trim() : "";
+  const reasonCode = reasonCodeRaw && BLOCKED_REASON_BY_VALUE.has(reasonCodeRaw) ? reasonCodeRaw : null;
+  const waitingOn = toBlockerEntityValue(meta.waitingOn);
+  const requiresInputFrom = normalizeBlockerEntityList(meta.requiresInputFrom).filter((value) => value !== waitingOn);
+  const fallbackReason =
+    typeof meta.fallbackReason === "string" && meta.fallbackReason.trim().length > 0
+      ? meta.fallbackReason.trim()
+      : null;
+  const expectedResolutionDate = toDateInputToken(meta.expectedResolutionDate);
+
+  if (!reasonCode && !waitingOn && requiresInputFrom.length === 0 && !fallbackReason && !expectedResolutionDate) {
+    return null;
+  }
+
+  return `${BLOCKER_META_PREFIX}${JSON.stringify({
+    reasonCode,
+    waitingOn,
+    requiresInputFrom,
+    fallbackReason,
+    expectedResolutionDate,
+  })}`;
+}
+
 type TaskModalMode = "create" | "edit";
 
 type TaskFormState = {
@@ -172,6 +721,16 @@ type TaskFormState = {
   assignedRole: string;
   assigneeMemberId: string;
   dueDate: string;
+  blockedReasonCode: string;
+  blockedFallbackReason: string;
+  blockedSinceDate: string;
+  expectedResolutionDate: string;
+  cancelledReasonCode: string;
+  cancelledFallbackReason: string;
+  skippedReasonCode: string;
+  skippedFallbackReason: string;
+  waitingOn: string;
+  requiresInputFrom: string[];
   sourceSection: string;
   sourcePage: string;
   sourceText: string;
@@ -377,6 +936,16 @@ function toStatusLabel(status: TaskStatus): string {
   return STATUS_LABELS[status] || status;
 }
 
+function toDisplayStatus(status: TaskStatus): TaskStatus {
+  return status === "waiting" ? "blocked" : status;
+}
+
+function normalizeStatusFilterValue(value: string): string {
+  const normalized = value.toLowerCase().trim();
+  if (!normalized) return normalized;
+  return normalized === "waiting" ? "blocked" : normalized;
+}
+
 function toDateLabel(value?: string | null): string {
   const parsed = parseDate(value);
   if (!parsed) return "No date";
@@ -422,7 +991,7 @@ export default function Tasks() {
   }, [location]);
 
   const trialFromQuery = params.get("trialId")?.toLowerCase() ?? ALL_SCOPE;
-  const filterFromQuery = params.get("filter")?.toLowerCase() ?? "";
+  const filterFromQuery = normalizeStatusFilterValue(params.get("filter")?.toLowerCase() ?? "");
 
   const [view, setView] = useState<TaskManagerView>("kanban");
   const [search, setSearch] = useState("");
@@ -465,6 +1034,16 @@ export default function Tasks() {
     assignedRole: "",
     assigneeMemberId: "",
     dueDate: "",
+    blockedReasonCode: "",
+    blockedFallbackReason: "",
+    blockedSinceDate: "",
+    expectedResolutionDate: "",
+    cancelledReasonCode: "",
+    cancelledFallbackReason: "",
+    skippedReasonCode: "",
+    skippedFallbackReason: "",
+    waitingOn: "",
+    requiresInputFrom: [],
     sourceSection: "",
     sourcePage: "",
     sourceText: "",
@@ -774,7 +1353,8 @@ export default function Tasks() {
   const filteredTasks = useMemo(() => {
     const term = normalize(search);
     return tasks.filter((task) => {
-      if (statusFilter !== "all" && task.status !== statusFilter) return false;
+      const displayStatus = toDisplayStatus(task.status);
+      if (statusFilter !== "all" && displayStatus !== statusFilter) return false;
       const taskAssignee = task.assignedRole ? String(task.assignedRole) : "unassigned";
       if (assigneeFilter !== "all" && taskAssignee !== assigneeFilter) return false;
       const taskPriority = String(task.priority || "none");
@@ -798,7 +1378,7 @@ export default function Tasks() {
           task.description || "",
           task.assignedRole || "",
           task.priority,
-          task.status,
+          displayStatus,
           phaseName,
           trialText,
           protocolText,
@@ -832,10 +1412,74 @@ export default function Tasks() {
     [dependencies, filteredTaskIds]
   );
 
+  const blockerMetaByTaskId = useMemo(() => {
+    const lookup = new Map<string, TaskBlockerMeta>();
+    for (const task of tasks) {
+      lookup.set(task.id, parseTaskBlockerMeta(task.blockedReason));
+    }
+    return lookup;
+  }, [tasks]);
+
+  const cancelledMetaByTaskId = useMemo(() => {
+    const lookup = new Map<string, OutcomeReasonMeta>();
+    for (const task of tasks) {
+      lookup.set(task.id, parseCancelledReasonMeta(task.blockedReason));
+    }
+    return lookup;
+  }, [tasks]);
+
+  const skippedMetaByTaskId = useMemo(() => {
+    const lookup = new Map<string, OutcomeReasonMeta>();
+    for (const task of tasks) {
+      lookup.set(task.id, parseSkippedReasonMeta(task.blockedReason));
+    }
+    return lookup;
+  }, [tasks]);
+
+  const getTaskBlockedReasonLabel = (task: Task) => {
+    const meta = blockerMetaByTaskId.get(task.id) ?? parseTaskBlockerMeta(task.blockedReason);
+    return toOutcomeReasonLabel(meta, BLOCKED_REASON_BY_VALUE);
+  };
+
+  const getTaskBlockedReasonCategory = (task: Task): BlockedReasonCategory | null => {
+    const meta = blockerMetaByTaskId.get(task.id) ?? parseTaskBlockerMeta(task.blockedReason);
+    if (!meta.reasonCode) return null;
+    return BLOCKED_REASON_BY_VALUE.get(meta.reasonCode)?.category ?? null;
+  };
+
+  const getTaskCancelledReasonLabel = (task: Task) => {
+    const meta = cancelledMetaByTaskId.get(task.id) ?? parseCancelledReasonMeta(task.blockedReason);
+    return toOutcomeReasonLabel(meta, CANCELLED_REASON_BY_VALUE);
+  };
+
+  const getTaskSkippedReasonLabel = (task: Task) => {
+    const meta = skippedMetaByTaskId.get(task.id) ?? parseSkippedReasonMeta(task.blockedReason);
+    return toOutcomeReasonLabel(meta, SKIPPED_REASON_BY_VALUE);
+  };
+
+  const getTaskWaitingOnLabel = (task: Task) => {
+    const meta = blockerMetaByTaskId.get(task.id) ?? parseTaskBlockerMeta(task.blockedReason);
+    if (!meta.waitingOn) return null;
+    return BLOCKER_ENTITY_LABEL_BY_VALUE.get(meta.waitingOn) ?? titleCase(meta.waitingOn);
+  };
+
+  const getTaskRequiresInputLabels = (task: Task) => {
+    const meta = blockerMetaByTaskId.get(task.id) ?? parseTaskBlockerMeta(task.blockedReason);
+    return meta.requiresInputFrom
+      .map((value) => BLOCKER_ENTITY_LABEL_BY_VALUE.get(value) ?? titleCase(value))
+      .filter(Boolean);
+  };
+
+  const getTaskExpectedResolutionDate = (task: Task) => {
+    const meta = blockerMetaByTaskId.get(task.id) ?? parseTaskBlockerMeta(task.blockedReason);
+    return meta.expectedResolutionDate;
+  };
+
   const statusesForKanban = useMemo(() => {
     const anyActiveMap = maps.some((map) => map.status === "active");
-    const base = anyActiveMap ? KANBAN_COLUMNS_ACTIVE : KANBAN_COLUMNS_WIZARD;
-    const extras = Array.from(new Set(filteredTasks.map((task) => task.status))).filter(
+    const baseRaw = anyActiveMap ? KANBAN_COLUMNS_ACTIVE : KANBAN_COLUMNS_WIZARD;
+    const base = baseRaw.filter((status) => status !== "waiting") as TaskStatus[];
+    const extras = Array.from(new Set(filteredTasks.map((task) => toDisplayStatus(task.status)))).filter(
       (status) => !base.includes(status)
     );
     return [...base, ...(extras as TaskStatus[])];
@@ -845,8 +1489,9 @@ export default function Tasks() {
     const grouped: Record<string, Task[]> = {};
     for (const status of statusesForKanban) grouped[status] = [];
     for (const task of filteredTasks) {
-      if (!grouped[task.status]) grouped[task.status] = [];
-      grouped[task.status].push(task);
+      const displayStatus = toDisplayStatus(task.status);
+      if (!grouped[displayStatus]) grouped[displayStatus] = [];
+      grouped[displayStatus].push(task);
     }
     return grouped;
   }, [filteredTasks, statusesForKanban]);
@@ -1258,7 +1903,7 @@ export default function Tasks() {
   const topMetrics = useMemo(() => {
     const total = filteredTasks.length;
     const completed = filteredTasks.filter((task) => task.status === "done").length;
-    const blocked = filteredTasks.filter((task) => task.status === "blocked").length;
+    const blocked = filteredTasks.filter((task) => toDisplayStatus(task.status) === "blocked").length;
     const overdue = filteredTasks.filter((task) => Boolean(getDeadlineState(task)?.overdue)).length;
     const dueSoon = filteredTasks.filter((task) => {
       if (TERMINAL_TASK_STATUSES.has(task.status)) return false;
@@ -1421,6 +2066,16 @@ export default function Tasks() {
       assignedRole: "",
       assigneeMemberId: "",
       dueDate: "",
+      blockedReasonCode: "",
+      blockedFallbackReason: "",
+      blockedSinceDate: "",
+      expectedResolutionDate: "",
+      cancelledReasonCode: "",
+      cancelledFallbackReason: "",
+      skippedReasonCode: "",
+      skippedFallbackReason: "",
+      waitingOn: "",
+      requiresInputFrom: [],
       sourceSection: "",
       sourcePage: "",
       sourceText: "",
@@ -1429,6 +2084,10 @@ export default function Tasks() {
   };
 
   const openEditTaskModal = (task: Task) => {
+    const displayStatus = toDisplayStatus((task.status as TaskStatus) || "todo");
+    const blockerMeta = parseTaskBlockerMeta(task.blockedReason);
+    const cancelledMeta = parseCancelledReasonMeta(task.blockedReason);
+    const skippedMeta = parseSkippedReasonMeta(task.blockedReason);
     const trialId = taskTrialById.get(task.id) || "";
     const sourceRef = (task.protocolRefs || [])[0] as unknown as Record<string, unknown> | undefined;
     const sourcePageRaw = sourceRef?.page;
@@ -1459,11 +2118,26 @@ export default function Tasks() {
       trialId,
       phaseId: task.phaseId,
       category: (task.category as TaskCategory) || "custom",
-      status: (task.status as TaskStatus) || "todo",
+      status: displayStatus,
       priority: (task.priority as TaskPriority) || "medium",
       assignedRole: String(task.assignedRole || ""),
       assigneeMemberId: memberForAssignee ? String(memberForAssignee.id) : "",
       dueDate: toDateInputValue(task.dueDate || task.suggestedDate),
+      blockedReasonCode:
+        displayStatus === "blocked" ? blockerMeta.reasonCode ?? (blockerMeta.fallbackReason ? "other_unclear" : "") : "",
+      blockedFallbackReason: displayStatus === "blocked" ? blockerMeta.fallbackReason ?? "" : "",
+      blockedSinceDate: toDateInputValue(task.blockedSince),
+      expectedResolutionDate: displayStatus === "blocked" ? blockerMeta.expectedResolutionDate ?? "" : "",
+      cancelledReasonCode:
+        displayStatus === "cancelled"
+          ? cancelledMeta.reasonCode ?? (cancelledMeta.fallbackReason ? "other_unclear" : "")
+          : "",
+      cancelledFallbackReason: displayStatus === "cancelled" ? cancelledMeta.fallbackReason ?? "" : "",
+      skippedReasonCode:
+        displayStatus === "skipped" ? skippedMeta.reasonCode ?? (skippedMeta.fallbackReason ? "other_unclear" : "") : "",
+      skippedFallbackReason: displayStatus === "skipped" ? skippedMeta.fallbackReason ?? "" : "",
+      waitingOn: displayStatus === "blocked" ? blockerMeta.waitingOn ?? "" : "",
+      requiresInputFrom: displayStatus === "blocked" ? blockerMeta.requiresInputFrom ?? [] : [],
       sourceSection: String(sourceRef?.section || ""),
       sourcePage,
       sourceText: String(sourceRef?.extractedText || ""),
@@ -1533,6 +2207,78 @@ export default function Tasks() {
           },
         ]
       : [];
+    const blockerStatus = taskForm.status === "blocked";
+    const cancelledStatus = taskForm.status === "cancelled";
+    const skippedStatus = taskForm.status === "skipped";
+    const blockerReasonOption = BLOCKED_REASON_BY_VALUE.get(taskForm.blockedReasonCode);
+    const cancelledReasonOption = CANCELLED_REASON_BY_VALUE.get(taskForm.cancelledReasonCode);
+    const skippedReasonOption = SKIPPED_REASON_BY_VALUE.get(taskForm.skippedReasonCode);
+    const blockedSinceIso = taskForm.blockedSinceDate ? toIsoDateTime(taskForm.blockedSinceDate) : null;
+    const blockedReasonPayload = blockerStatus
+      ? encodeTaskBlockerMeta({
+          reasonCode: blockerReasonOption ? blockerReasonOption.value : null,
+          waitingOn: taskForm.waitingOn || null,
+          requiresInputFrom: taskForm.requiresInputFrom,
+          fallbackReason:
+            taskForm.blockedReasonCode === "other_unclear"
+              ? taskForm.blockedFallbackReason || "Other / unclear blocker"
+              : null,
+          expectedResolutionDate: taskForm.expectedResolutionDate || null,
+        })
+      : null;
+    const cancelledReasonPayload = cancelledStatus
+      ? encodeOutcomeReasonMeta(
+          {
+            reasonCode: cancelledReasonOption ? cancelledReasonOption.value : null,
+            fallbackReason:
+              taskForm.cancelledReasonCode === "other_unclear"
+                ? taskForm.cancelledFallbackReason || "Other / unclear cancellation reason"
+                : null,
+          },
+          CANCELLED_REASON_META_PREFIX,
+          CANCELLED_REASON_BY_VALUE
+        )
+      : null;
+    const skippedReasonPayload = skippedStatus
+      ? encodeOutcomeReasonMeta(
+          {
+            reasonCode: skippedReasonOption ? skippedReasonOption.value : null,
+            fallbackReason:
+              taskForm.skippedReasonCode === "other_unclear"
+                ? taskForm.skippedFallbackReason || "Other / unclear skip reason"
+                : null,
+          },
+          SKIPPED_REASON_META_PREFIX,
+          SKIPPED_REASON_BY_VALUE
+        )
+      : null;
+    const statusReasonPayload = blockedReasonPayload ?? cancelledReasonPayload ?? skippedReasonPayload;
+    const statusRequiresReason = blockerStatus || cancelledStatus || skippedStatus;
+
+    if (taskForm.status === "blocked" && !blockerReasonOption) {
+      toast.error("Blocked reason is required when status is Blocked.");
+      return;
+    }
+    if (taskForm.status === "blocked" && taskForm.blockedReasonCode === "other_unclear" && !taskForm.blockedFallbackReason.trim()) {
+      toast.error("Please add a note for 'Other / unclear' blocker reason.");
+      return;
+    }
+    if (cancelledStatus && !cancelledReasonOption) {
+      toast.error("Cancelled reason is required when status is Cancelled.");
+      return;
+    }
+    if (cancelledStatus && taskForm.cancelledReasonCode === "other_unclear" && !taskForm.cancelledFallbackReason.trim()) {
+      toast.error("Please add a note for 'Other / unclear' cancelled reason.");
+      return;
+    }
+    if (skippedStatus && !skippedReasonOption) {
+      toast.error("Skipped reason is required when status is Skipped.");
+      return;
+    }
+    if (skippedStatus && taskForm.skippedReasonCode === "other_unclear" && !taskForm.skippedFallbackReason.trim()) {
+      toast.error("Please add a note for 'Other / unclear' skipped reason.");
+      return;
+    }
 
     try {
       if (taskModalMode === "create") {
@@ -1550,6 +2296,8 @@ export default function Tasks() {
             suggestedAssignee: selectedMember?.name || null,
             suggestedDate: dueDateIso,
             dueDate: dueDateIso,
+            blockedReason: statusReasonPayload,
+            blockedSince: blockerStatus ? blockedSinceIso : null,
             createdBy: "user",
             isCustom: true,
             protocolRefs,
@@ -1577,16 +2325,29 @@ export default function Tasks() {
             suggestedAssignee: selectedMember?.name || null,
             suggestedDate: dueDateIso,
             dueDate: dueDateIso,
+            blockedReason: statusReasonPayload,
+            blockedSince: blockerStatus ? blockedSinceIso : null,
             protocolRefs,
             isCustom: true,
             createdBy: "user",
           },
         });
-        if (existing.status !== taskForm.status) {
+        const statusChanged = existing.status !== taskForm.status;
+        const statusChangedToBlocked = statusChanged && blockerStatus;
+        if (statusChanged) {
           await changeTaskStatusMutation.mutateAsync({
             taskId,
             status: taskForm.status,
-            ...(taskForm.status === "blocked" ? { reason: "Blocked from task editor" } : {}),
+            ...(statusRequiresReason ? { reason: statusReasonPayload ?? `${toStatusLabel(taskForm.status)} from task editor` } : {}),
+          });
+        }
+        if (statusChangedToBlocked && blockerStatus) {
+          await updateTaskMutation.mutateAsync({
+            taskId,
+            updates: {
+              blockedReason: blockedReasonPayload,
+              blockedSince: blockedSinceIso,
+            },
           });
         }
         if (existing.phaseId !== taskForm.phaseId) {
@@ -1646,10 +2407,46 @@ export default function Tasks() {
       return;
     }
     try {
+      const currentBlockerMeta = parseTaskBlockerMeta(task.blockedReason);
+      const dragBlockedReason =
+        encodeTaskBlockerMeta({
+          reasonCode: currentBlockerMeta.reasonCode ?? "resource_constraint",
+          waitingOn: currentBlockerMeta.waitingOn ?? "internal_team",
+          requiresInputFrom: currentBlockerMeta.requiresInputFrom ?? [],
+          fallbackReason: currentBlockerMeta.fallbackReason ?? null,
+        }) ?? "Blocked via Kanban board";
+      const currentCancelledMeta = parseCancelledReasonMeta(task.blockedReason);
+      const dragCancelledReason =
+        encodeOutcomeReasonMeta(
+          {
+            reasonCode: currentCancelledMeta.reasonCode ?? "other_unclear",
+            fallbackReason: currentCancelledMeta.fallbackReason ?? "Cancelled via Kanban board",
+          },
+          CANCELLED_REASON_META_PREFIX,
+          CANCELLED_REASON_BY_VALUE
+        ) ?? "Cancelled via Kanban board";
+      const currentSkippedMeta = parseSkippedReasonMeta(task.blockedReason);
+      const dragSkippedReason =
+        encodeOutcomeReasonMeta(
+          {
+            reasonCode: currentSkippedMeta.reasonCode ?? "other_unclear",
+            fallbackReason: currentSkippedMeta.fallbackReason ?? "Skipped via Kanban board",
+          },
+          SKIPPED_REASON_META_PREFIX,
+          SKIPPED_REASON_BY_VALUE
+        ) ?? "Skipped via Kanban board";
+      const dragReason =
+        nextStatus === "blocked"
+          ? dragBlockedReason
+          : nextStatus === "cancelled"
+          ? dragCancelledReason
+          : nextStatus === "skipped"
+          ? dragSkippedReason
+          : null;
       await changeTaskStatusMutation.mutateAsync({
         taskId: task.id,
         status: nextStatus,
-        ...(nextStatus === "blocked" ? { reason: "Blocked via Kanban board" } : {}),
+        ...(dragReason ? { reason: dragReason } : {}),
       });
       toast.success(`Moved to ${toStatusLabel(nextStatus)}.`);
     } finally {
@@ -1713,11 +2510,23 @@ export default function Tasks() {
               </div>
             <div className="flex-1 min-h-0 p-3 space-y-2 overflow-y-auto">
               {(tasksByStatus[status] || []).map((task) => {
+                const displayStatus = toDisplayStatus(task.status);
                 const phase = phaseById.get(task.phaseId);
                 const dependencyCount = visibleDependencies.filter(
                   (dep) => dep.targetTaskId === task.id || dep.sourceTaskId === task.id
                 ).length;
                 const deadlineState = getDeadlineState(task);
+                const blockedReasonLabel = getTaskBlockedReasonLabel(task);
+                const blockedCategory = getTaskBlockedReasonCategory(task);
+                const cancelledReasonLabel = getTaskCancelledReasonLabel(task);
+                const skippedReasonLabel = getTaskSkippedReasonLabel(task);
+                const waitingOnLabel = getTaskWaitingOnLabel(task);
+                const requiresInputLabels = getTaskRequiresInputLabels(task);
+                const expectedResolutionDate = getTaskExpectedResolutionDate(task);
+                const expectedResolutionParsed = expectedResolutionDate ? parseDate(`${expectedResolutionDate}T12:00:00`) : null;
+                const expectedResolutionOverdue = Boolean(
+                  expectedResolutionParsed && startOfDay(expectedResolutionParsed).getTime() < startOfDay(new Date()).getTime()
+                );
                 return (
                   <div
                     key={task.id}
@@ -1750,9 +2559,9 @@ export default function Tasks() {
                         </span>
                       ) : null}
                       <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_BADGE[task.status]}`}
+                        className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_BADGE[displayStatus]}`}
                       >
-                        {toStatusLabel(task.status)}
+                        {toStatusLabel(displayStatus)}
                       </span>
                       {task.priority ? (
                         <span className="inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
@@ -1765,6 +2574,49 @@ export default function Tasks() {
                         </span>
                       ) : null}
                     </div>
+                    {displayStatus === "blocked" ? (
+                      <div className="mt-2 space-y-1 text-[11px] text-gray-600">
+                        {blockedReasonLabel ? (
+                          <div className={blockedCategory === "Scheduled/Timing" ? "text-blue-700" : ""}>
+                            <span className="font-medium text-gray-700">Blocked reason:</span> {blockedReasonLabel}
+                          </div>
+                        ) : null}
+                        {waitingOnLabel ? (
+                          <div>
+                            <span className="font-medium text-gray-700">Waiting on:</span> {waitingOnLabel}
+                          </div>
+                        ) : null}
+                        {requiresInputLabels.length > 0 ? (
+                          <div>
+                            <span className="font-medium text-gray-700">Requires input:</span>{" "}
+                            {requiresInputLabels.join(", ")}
+                          </div>
+                        ) : null}
+                        {task.blockedSince ? (
+                          <div>
+                            <span className="font-medium text-gray-700">Blocked since:</span>{" "}
+                            {toDateLabel(task.blockedSince)}
+                          </div>
+                        ) : null}
+                        {expectedResolutionDate ? (
+                          <div className={expectedResolutionOverdue ? "text-red-700" : ""}>
+                            <span className="font-medium text-gray-700">Expected resolution:</span>{" "}
+                            {toDateLabel(`${expectedResolutionDate}T12:00:00`)}
+                            {expectedResolutionOverdue ? " (past due)" : ""}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {displayStatus === "cancelled" && cancelledReasonLabel ? (
+                      <div className="mt-2 text-[11px] text-gray-600">
+                        <span className="font-medium text-gray-700">Cancelled reason:</span> {cancelledReasonLabel}
+                      </div>
+                    ) : null}
+                    {displayStatus === "skipped" && skippedReasonLabel ? (
+                      <div className="mt-2 text-[11px] text-gray-600">
+                        <span className="font-medium text-gray-700">Skipped reason:</span> {skippedReasonLabel}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
@@ -1987,9 +2839,21 @@ export default function Tasks() {
 
               <div className="space-y-2">
                 {phaseTasks.map((task) => {
+                  const displayStatus = toDisplayStatus(task.status);
                   const dependencyCount = visibleDependencies.filter((dep) => dep.targetTaskId === task.id).length;
                   const deadlineState = getDeadlineState(task);
                   const primaryRef = (task.protocolRefs || [])[0];
+                  const blockedReasonLabel = getTaskBlockedReasonLabel(task);
+                  const blockedCategory = getTaskBlockedReasonCategory(task);
+                  const cancelledReasonLabel = getTaskCancelledReasonLabel(task);
+                  const skippedReasonLabel = getTaskSkippedReasonLabel(task);
+                  const waitingOnLabel = getTaskWaitingOnLabel(task);
+                  const requiresInputLabels = getTaskRequiresInputLabels(task);
+                  const expectedResolutionDate = getTaskExpectedResolutionDate(task);
+                  const expectedResolutionParsed = expectedResolutionDate ? parseDate(`${expectedResolutionDate}T12:00:00`) : null;
+                  const expectedResolutionOverdue = Boolean(
+                    expectedResolutionParsed && startOfDay(expectedResolutionParsed).getTime() < startOfDay(new Date()).getTime()
+                  );
                   return (
                     <div
                       key={`list-task-${task.id}`}
@@ -2046,6 +2910,49 @@ export default function Tasks() {
                             </span>
                           ) : null}
                         </div>
+                        {displayStatus === "blocked" ? (
+                          <div className="mt-2 space-y-1 text-xs text-gray-600">
+                            {blockedReasonLabel ? (
+                              <div className={blockedCategory === "Scheduled/Timing" ? "text-blue-700" : ""}>
+                                <span className="font-medium text-gray-700">Blocked reason:</span> {blockedReasonLabel}
+                              </div>
+                            ) : null}
+                            {waitingOnLabel ? (
+                              <div>
+                                <span className="font-medium text-gray-700">Waiting on:</span> {waitingOnLabel}
+                              </div>
+                            ) : null}
+                            {requiresInputLabels.length > 0 ? (
+                              <div>
+                                <span className="font-medium text-gray-700">Requires input:</span>{" "}
+                                {requiresInputLabels.join(", ")}
+                              </div>
+                            ) : null}
+                            {task.blockedSince ? (
+                              <div>
+                                <span className="font-medium text-gray-700">Blocked since:</span>{" "}
+                                {toDateLabel(task.blockedSince)}
+                              </div>
+                            ) : null}
+                            {expectedResolutionDate ? (
+                              <div className={expectedResolutionOverdue ? "text-red-700" : ""}>
+                                <span className="font-medium text-gray-700">Expected resolution:</span>{" "}
+                                {toDateLabel(`${expectedResolutionDate}T12:00:00`)}
+                                {expectedResolutionOverdue ? " (past due)" : ""}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {displayStatus === "cancelled" && cancelledReasonLabel ? (
+                          <div className="mt-2 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Cancelled reason:</span> {cancelledReasonLabel}
+                          </div>
+                        ) : null}
+                        {displayStatus === "skipped" && skippedReasonLabel ? (
+                          <div className="mt-2 text-xs text-gray-600">
+                            <span className="font-medium text-gray-700">Skipped reason:</span> {skippedReasonLabel}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="shrink-0 flex flex-wrap items-center justify-end gap-1.5">
@@ -2054,8 +2961,8 @@ export default function Tasks() {
                             {deadlineState.label}
                           </span>
                         ) : null}
-                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_BADGE[task.status]}`}>
-                          {toStatusLabel(task.status)}
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS_BADGE[displayStatus]}`}>
+                          {toStatusLabel(displayStatus)}
                         </span>
                         {dependencyCount > 0 ? (
                           <span className="inline-flex rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700">
@@ -2549,13 +3456,13 @@ export default function Tasks() {
             className="h-8 rounded-md border border-gray-200 bg-white px-3 text-xs min-w-[165px]"
             value={statusFilter}
             onChange={(event) => {
-              const nextStatus = event.target.value;
+              const nextStatus = normalizeStatusFilterValue(event.target.value);
               setStatusFilter(nextStatus);
               updateTaskRouteParams({ status: nextStatus });
             }}
           >
             <option value="all">All Statuses</option>
-            {Array.from(new Set(tasks.map((task) => task.status))).map((status) => (
+            {Array.from(new Set(tasks.map((task) => toDisplayStatus(task.status)))).map((status) => (
               <option key={status} value={status}>
                 {toStatusLabel(status)}
               </option>
@@ -2823,9 +3730,22 @@ export default function Tasks() {
                 <select
                   className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
                   value={taskForm.status}
-                  onChange={(event) =>
-                    setTaskForm((prev) => ({ ...prev, status: event.target.value as TaskStatus }))
-                  }
+                  onChange={(event) => {
+                    const nextStatus = event.target.value as TaskStatus;
+                    setTaskForm((prev) => {
+                      const enteringBlockedState =
+                        nextStatus === "blocked" &&
+                        prev.status !== "blocked";
+
+                      return {
+                        ...prev,
+                        status: nextStatus,
+                        blockedSinceDate: enteringBlockedState
+                          ? toDateInputValue(new Date().toISOString())
+                          : prev.blockedSinceDate,
+                      };
+                    });
+                  }}
                 >
                   {TASK_STATUS_OPTIONS.map((status) => (
                     <option key={status} value={status}>
@@ -2852,6 +3772,262 @@ export default function Tasks() {
                 </select>
               </div>
             </div>
+
+            {taskForm.status === "blocked" ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">Blocker Details</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-gray-900">
+                      Blocked Reason {taskForm.status === "blocked" ? "*" : ""}
+                    </label>
+                    <select
+                      className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                      value={taskForm.blockedReasonCode}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({ ...prev, blockedReasonCode: event.target.value }))
+                      }
+                    >
+                      <option value="">Select blocker reason</option>
+                      {BLOCKED_REASON_CATEGORY_ORDER.map((category) => {
+                        const options = BLOCKED_REASON_OPTIONS.filter((option) => option.category === category);
+                        if (options.length === 0) return null;
+                        return (
+                          <optgroup key={category} label={category}>
+                            {options.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
+                    </select>
+                    {taskForm.blockedReasonCode && BLOCKED_REASON_BY_VALUE.get(taskForm.blockedReasonCode) ? (
+                      <p className="text-xs text-gray-600">
+                        {BLOCKED_REASON_BY_VALUE.get(taskForm.blockedReasonCode)?.definition}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-900">Waiting On (Primary blocker)</label>
+                    <select
+                      className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                      value={taskForm.waitingOn}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({
+                          ...prev,
+                          waitingOn: event.target.value,
+                          requiresInputFrom: prev.requiresInputFrom.filter((value) => value !== event.target.value),
+                        }))
+                      }
+                    >
+                      <option value="">Not specified</option>
+                      {BLOCKER_ENTITY_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-600">
+                      This is the one party whose action would unblock the task right now.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-gray-900">
+                      Requires Input From (Additional contributors)
+                    </label>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      {BLOCKER_ENTITY_OPTIONS.map((option) => {
+                        const checked = taskForm.requiresInputFrom.includes(option.value);
+                        const isPrimaryWaitingOn = taskForm.waitingOn === option.value;
+                        return (
+                          <label
+                            key={option.value}
+                            className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs ${
+                              isPrimaryWaitingOn
+                                ? "border-gray-200 bg-gray-100 text-gray-400"
+                                : "border-gray-200 bg-white text-gray-700"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-gray-300"
+                              checked={checked}
+                              disabled={isPrimaryWaitingOn}
+                              onChange={(event) => {
+                                const nextChecked = event.target.checked;
+                                setTaskForm((prev) => ({
+                                  ...prev,
+                                  requiresInputFrom: nextChecked
+                                    ? Array.from(
+                                        new Set([
+                                          ...prev.requiresInputFrom,
+                                          option.value,
+                                        ])
+                                      )
+                                    : prev.requiresInputFrom.filter((value) => value !== option.value),
+                                }));
+                              }}
+                            />
+                            {option.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-gray-600">
+                      Use this for supporting parties that must contribute, but are not the current bottleneck.
+                    </p>
+                  </div>
+
+                  {taskForm.blockedReasonCode === "other_unclear" ? (
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-sm font-medium text-gray-900">Other blocker note *</label>
+                      <Input
+                        value={taskForm.blockedFallbackReason}
+                        onChange={(event) =>
+                          setTaskForm((prev) => ({ ...prev, blockedFallbackReason: event.target.value }))
+                        }
+                        placeholder="Describe the blocker in one sentence"
+                      />
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-900">Blocked Since</label>
+                    <Input
+                      type="date"
+                      value={taskForm.blockedSinceDate}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({ ...prev, blockedSinceDate: event.target.value }))
+                      }
+                      placeholder="Auto-set when blocked"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-900">Expected Resolution</label>
+                    <Input
+                      type="date"
+                      value={taskForm.expectedResolutionDate}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({ ...prev, expectedResolutionDate: event.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {taskForm.status === "cancelled" ? (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50/40 p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">Cancellation Details</h4>
+                <p className="text-xs text-gray-600">
+                  This task is no longer required and will not be completed.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-gray-900">Cancelled Reason *</label>
+                    <select
+                      className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                      value={taskForm.cancelledReasonCode}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({ ...prev, cancelledReasonCode: event.target.value }))
+                      }
+                    >
+                      <option value="">Select cancelled reason</option>
+                      {CANCELLED_REASON_CATEGORY_ORDER.map((category) => {
+                        const options = CANCELLED_REASON_OPTIONS.filter((option) => option.category === category);
+                        if (options.length === 0) return null;
+                        return (
+                          <optgroup key={category} label={category}>
+                            {options.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
+                    </select>
+                    {taskForm.cancelledReasonCode && CANCELLED_REASON_BY_VALUE.get(taskForm.cancelledReasonCode) ? (
+                      <p className="text-xs text-gray-600">
+                        {CANCELLED_REASON_BY_VALUE.get(taskForm.cancelledReasonCode)?.definition}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {taskForm.cancelledReasonCode === "other_unclear" ? (
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-sm font-medium text-gray-900">Other cancellation note *</label>
+                      <Input
+                        value={taskForm.cancelledFallbackReason}
+                        onChange={(event) =>
+                          setTaskForm((prev) => ({ ...prev, cancelledFallbackReason: event.target.value }))
+                        }
+                        placeholder="Describe why this task was cancelled"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {taskForm.status === "skipped" ? (
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50/40 p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-gray-900">Skipped Details</h4>
+                <p className="text-xs text-gray-600">
+                  This task was due but was not performed. It may need to be rescheduled.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2 md:col-span-2">
+                    <label className="text-sm font-medium text-gray-900">Skipped Reason *</label>
+                    <select
+                      className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                      value={taskForm.skippedReasonCode}
+                      onChange={(event) =>
+                        setTaskForm((prev) => ({ ...prev, skippedReasonCode: event.target.value }))
+                      }
+                    >
+                      <option value="">Select skipped reason</option>
+                      {SKIPPED_REASON_CATEGORY_ORDER.map((category) => {
+                        const options = SKIPPED_REASON_OPTIONS.filter((option) => option.category === category);
+                        if (options.length === 0) return null;
+                        return (
+                          <optgroup key={category} label={category}>
+                            {options.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
+                    </select>
+                    {taskForm.skippedReasonCode && SKIPPED_REASON_BY_VALUE.get(taskForm.skippedReasonCode) ? (
+                      <p className="text-xs text-gray-600">
+                        {SKIPPED_REASON_BY_VALUE.get(taskForm.skippedReasonCode)?.definition}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  {taskForm.skippedReasonCode === "other_unclear" ? (
+                    <div className="space-y-2 md:col-span-2">
+                      <label className="text-sm font-medium text-gray-900">Other skipped note *</label>
+                      <Input
+                        value={taskForm.skippedFallbackReason}
+                        onChange={(event) =>
+                          setTaskForm((prev) => ({ ...prev, skippedFallbackReason: event.target.value }))
+                        }
+                        placeholder="Describe why this task was skipped"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">

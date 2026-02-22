@@ -22,6 +22,7 @@ import DocumentAIAssistant from "./pages/DocumentAIAssistant";
 import Tasks from "./pages/Tasks";
 import Collaboration from "./pages/Collaboration";
 import Analytics from "./pages/Analytics";
+import AnalyticsHidden from "./pages/AnalyticsHidden";
 import BudgetIntelligence from "./pages/BudgetIntelligence";
 import Organization from "./pages/Organization";
 import Integrations from "./pages/Integrations";
@@ -38,6 +39,7 @@ const iconMap: Record<string, any> = {
   "/tasks": LayoutGrid,
   "/collaboration": MessageChatSquare,
   "/analytics": AnalyticsIcon,
+  "/analytics-hidden": AnalyticsIcon,
   "/budget-intelligence": BudgetIntelligenceIcon,
   "/organization": Building,
   "/integrations": Puzzle,
@@ -71,6 +73,10 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
     { label: "Collaboration Hub" },
   ],
   "/analytics": [
+    { label: "Workspace", href: "/" },
+    { label: "Analytics Dashboard" },
+  ],
+  "/analytics-hidden": [
     { label: "Workspace", href: "/" },
     { label: "Analytics Dashboard" },
   ],
@@ -148,12 +154,7 @@ function Router() {
     <DashboardLayout breadcrumbs={breadcrumbs} breadcrumbIcon={breadcrumbIcon}>
       <Switch>
         <Route path="/">
-          {() => (
-            <>
-              <Overview />
-              <Analytics embedded />
-            </>
-          )}
+          {() => <Overview />}
         </Route>
         <Route path="/workspace" component={TrialWorkspace} />
         <Route path="/trial-workspace" component={TrialWorkspace} />
@@ -170,6 +171,7 @@ function Router() {
         <Route path="/tasks" component={Tasks} />
         <Route path="/collaboration" component={Collaboration} />
         <Route path="/analytics">{() => <Analytics />}</Route>
+        <Route path="/analytics-hidden">{() => <AnalyticsHidden />}</Route>
         <Route path="/budget-intelligence" component={BudgetIntelligence} />
         <Route path="/organization" component={Organization} />
         <Route path="/integrations" component={Integrations} />
