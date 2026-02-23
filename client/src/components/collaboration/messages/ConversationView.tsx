@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { CollaborationMessage, Conversation } from "@/types/collaboration";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,41 @@ export function ConversationView({
   onSend,
   onStructuredSend,
 }: ConversationViewProps) {
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
+  const previousConversationIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const conversationId = conversation?.id || null;
+    if (!conversationId) {
+      previousConversationIdRef.current = null;
+      shouldAutoScrollRef.current = true;
+      return;
+    }
+
+    const viewport = scrollViewportRef.current;
+    if (!viewport) return;
+
+    const conversationChanged = previousConversationIdRef.current !== conversationId;
+    previousConversationIdRef.current = conversationId;
+    if (!conversationChanged && !shouldAutoScrollRef.current) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const node = scrollViewportRef.current;
+      if (!node) return;
+      node.scrollTop = node.scrollHeight;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [conversation?.id, messages.length, aiIsTyping]);
+
+  const handleScroll = () => {
+    const viewport = scrollViewportRef.current;
+    if (!viewport) return;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    shouldAutoScrollRef.current = distanceFromBottom <= 96;
+  };
+
   if (!conversation) {
     return (
       <div className="flex h-full items-center justify-center bg-white text-sm text-gray-500">
@@ -142,7 +178,11 @@ export function ConversationView({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-white px-6 py-5">
+      <div
+        ref={scrollViewportRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto bg-white px-6 py-5"
+      >
         <div className="space-y-7">
           {orderedMessages.map((message, index) => {
             const previous = orderedMessages[index - 1];

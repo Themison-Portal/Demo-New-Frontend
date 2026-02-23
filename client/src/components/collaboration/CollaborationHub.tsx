@@ -76,6 +76,7 @@ function normalizeLookupKey(value: string | null | undefined) {
 const SAMPLE_STATE_STORAGE_KEY = "themison-demo-state-sample";
 const SAMPLE_DEFAULT_STATE_STORAGE_KEY = "themison-demo-state-default-sample";
 const COLLAB_CARD_BOTTOM_GAP_STORAGE_KEY = "ui:collab_card_bottom_gap_px";
+const QUICK_CONVERSATION_INTENT_KEY = "themison:quick-conversation-intent";
 
 function stableHash(value: string) {
   let hash = 0;
@@ -165,7 +166,7 @@ function getAnchorIcon(anchorType: ThreadAnchorType) {
 }
 
 export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { state: demoState } = useDemoState();
   const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: dataMode });
   const setDataMode = useCollaborationStore((store) => store.setDataMode);
@@ -233,6 +234,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   const [selectedThreadTrialId, setSelectedThreadTrialId] = useState(trialId);
   const [threadSearch, setThreadSearch] = useState("");
   const collaborationCardRef = useRef<HTMLDivElement | null>(null);
+  const quickComposeHandledRef = useRef<string | null>(null);
 
   useRealtimeCollab(trialId);
 
@@ -512,6 +514,17 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     [availableMembers, selectedNewConversationMemberId]
   );
 
+  const collaborationRouteParams = useMemo(() => {
+    const params = new URLSearchParams(
+      typeof window !== "undefined" ? window.location.search : ""
+    );
+    return {
+      layer: params.get("layer"),
+      compose: params.get("compose"),
+      memberId: params.get("memberId"),
+    };
+  }, [location]);
+
   const openNewConversationDraft = () => {
     setShowCompose(false);
     setDetailMode("conversation");
@@ -521,6 +534,84 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     setSelectedNewConversationMemberId(null);
     setNewConversationQuery("");
   };
+
+  useEffect(() => {
+    const hasRouteIntent =
+      collaborationRouteParams.layer === "messages" || collaborationRouteParams.compose === "new";
+    let fallbackMemberId = "";
+
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem(QUICK_CONVERSATION_INTENT_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { memberId?: unknown; at?: unknown; layer?: unknown; compose?: unknown };
+          const intentAgeMs = typeof parsed.at === "number" ? Date.now() - parsed.at : Number.POSITIVE_INFINITY;
+          if (
+            intentAgeMs <= 5 * 60 * 1000 &&
+            (parsed.layer === "messages" || parsed.compose === "new")
+          ) {
+            fallbackMemberId = typeof parsed.memberId === "string" ? parsed.memberId : "";
+          }
+        }
+      } catch {
+        fallbackMemberId = "";
+      }
+    }
+
+    if (!hasRouteIntent && !fallbackMemberId) {
+      return;
+    }
+
+    if (collaborationRouteParams.layer === "messages" || fallbackMemberId) {
+      setActiveLayer("messages");
+      setDetailMode("conversation");
+      setShowCompose(false);
+    }
+
+    const memberId = String(collaborationRouteParams.memberId || fallbackMemberId || "").trim();
+    if (!memberId) return;
+    if (quickComposeHandledRef.current === memberId) return;
+
+    const targetMember = availableMembers.find((member) => member.id === memberId);
+    if (!targetMember) return;
+
+    const targetEmail = normalizeLookupKey(targetMember.email);
+    const targetName = normalizeLookupKey(targetMember.name);
+    const existingConversation = conversations.find((conversation) => {
+      if (conversation.type !== "direct") return false;
+      const other = getOtherConversationParticipant(conversation, currentUserId);
+      if (!other) return false;
+      const otherEmail = normalizeLookupKey(other.user?.email);
+      const otherName = normalizeLookupKey(other.user?.name);
+      if (targetEmail && otherEmail === targetEmail) return true;
+      return Boolean(targetName && otherName === targetName);
+    });
+
+    setActiveLayer("messages");
+    setDetailMode("conversation");
+    setShowCompose(false);
+
+    if (existingConversation) {
+      setIsNewConversationDraft(false);
+      setSelectedNewConversationMemberId(null);
+      setNewConversationQuery("");
+      setActiveConversation(existingConversation.id);
+    } else {
+      setIsNewConversationDraft(true);
+      setActiveConversation(null);
+      setSelectedNewConversationMemberId(targetMember.id);
+      setNewConversationQuery("");
+    }
+
+    quickComposeHandledRef.current = memberId;
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(QUICK_CONVERSATION_INTENT_KEY);
+      } catch {
+        // Ignore storage failures.
+      }
+    }
+  }, [availableMembers, collaborationRouteParams, conversations, currentUserId, setActiveConversation, setActiveLayer]);
 
   const selectDraftMember = (member: TeamMember) => {
     setSelectedNewConversationMemberId(member.id);
