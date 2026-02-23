@@ -72,6 +72,8 @@ interface TaskScaffoldViewProps {
   onOpenProtocolPage?: (page: number | null | undefined, sectionName: string) => void;
   view?: "list" | "timeline" | "canvas";
   onViewChange?: (view: "list" | "timeline" | "canvas") => void;
+  timelineStartDate?: Date | string | null;
+  timelineEndDate?: Date | string | null;
 }
 
 function getISOWeek(date: Date): number {
@@ -89,6 +91,7 @@ function SortableSection({
   linkedTaskCount,
   linkedPhaseCount,
   onToggle,
+  onSelectOnly,
   onEdit,
   onOpenSource,
 }: {
@@ -97,6 +100,7 @@ function SortableSection({
   linkedTaskCount: number;
   linkedPhaseCount: number;
   onToggle: () => void;
+  onSelectOnly: () => void;
   onEdit: () => void;
   onOpenSource?: () => void;
 }) {
@@ -128,14 +132,29 @@ function SortableSection({
         title={`${linkedTaskCount} task${linkedTaskCount === 1 ? "" : "s"} across ${linkedPhaseCount} phase${
           linkedPhaseCount === 1 ? "" : "s"
         }`}
+        role="button"
+        tabIndex={0}
+        onClick={onSelectOnly}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelectOnly();
+          }
+        }}
       >
-        <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
+        <div
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing"
+          onClick={(event) => event.stopPropagation()}
+        >
           <GripVertical className="h-4 w-4 text-gray-300" />
         </div>
         <input
           type="checkbox"
           checked={isSelected}
           onChange={onToggle}
+          onClick={(event) => event.stopPropagation()}
           className="rounded border-gray-300"
         />
         <div className="flex-1 flex items-center justify-between">
@@ -156,14 +175,20 @@ function SortableSection({
         </div>
         <button
           type="button"
-          onClick={onOpenSource}
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenSource?.();
+          }}
           className="p-1 rounded hover:bg-gray-100 transition-colors"
           aria-label={`Open protocol source for ${section.name}`}
         >
           <LinkIcon className="h-3.5 w-3.5 text-gray-400" />
         </button>
         <button
-          onClick={onEdit}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit();
+          }}
           className="p-1 hover:bg-gray-200 rounded transition-colors opacity-0 group-hover:opacity-100"
           aria-label="Edit section"
         >
@@ -332,6 +357,8 @@ export function TaskScaffoldView({
   onOpenProtocolPage,
   view,
   onViewChange,
+  timelineStartDate,
+  timelineEndDate,
 }: TaskScaffoldViewProps) {
   const [internalView, setInternalView] = useState<"list" | "timeline" | "canvas">("list");
   const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
@@ -368,7 +395,26 @@ export function TaskScaffoldView({
   };
   const parseMaybeDate = (value: unknown): Date | null => {
     if (!value) return null;
-    const date = value instanceof Date ? value : new Date(String(value));
+    const parseDateOnlyLocal = (input: string): Date | null => {
+      const trimmed = String(input || "").trim();
+      const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return null;
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+      const parsed = new Date(year, month - 1, day);
+      if (
+        parsed.getFullYear() !== year ||
+        parsed.getMonth() !== month - 1 ||
+        parsed.getDate() !== day
+      ) {
+        return null;
+      }
+      return parsed;
+    };
+    const date =
+      value instanceof Date ? value : parseDateOnlyLocal(String(value)) ?? new Date(String(value));
     if (Number.isNaN(date.getTime())) return null;
     return date;
   };
@@ -510,6 +556,10 @@ export function TaskScaffoldView({
     setSelectedSections(newSelected);
   };
 
+  const selectOnlySection = (sectionId: string) => {
+    setSelectedSections(new Set([sectionId]));
+  };
+
   const sectionById = useMemo(() => new Map(reorderedSections.map((section) => [section.id, section])), [reorderedSections]);
 
   const selectedSectionList = useMemo(
@@ -566,7 +616,7 @@ export function TaskScaffoldView({
     for (const section of reorderedSections) {
       const explicit = section.linkedTaskIds?.length;
       const count =
-        typeof explicit === "number" && explicit > 0
+        typeof explicit === "number"
           ? explicit
           : reorderedPhases.reduce((sum, phase) => {
               return (
@@ -580,6 +630,7 @@ export function TaskScaffoldView({
   }, [reorderedSections, reorderedPhases, fallbackTaskMatchesSection]);
 
   const timelineRows = useMemo(() => {
+    const trialStartAnchor = parseMaybeDate(timelineStartDate);
     const explicitDates = visiblePhases
       .flatMap((phase) =>
         phase.tasks.flatMap((task) => [
@@ -589,7 +640,9 @@ export function TaskScaffoldView({
         ])
       )
       .filter(Boolean) as Date[];
-    const anchorDate = explicitDates.length
+    const anchorDate = trialStartAnchor
+      ? startOfDay(trialStartAnchor)
+      : explicitDates.length
       ? startOfDay(
           explicitDates.reduce((min, current) => (current < min ? current : min), explicitDates[0])
         )
@@ -600,29 +653,36 @@ export function TaskScaffoldView({
         const taskContextText = `${task.protocolReference?.section || ""} ${task.protocolReference?.extractedText || ""}`;
         const timing = inferPhaseTimingWindow(phase.name, phaseIndex, taskContextText);
         const startExplicit = parseMaybeDate(task.startDate) || parseMaybeDate(task.suggestedDate);
-        const due = parseMaybeDate(task.dueDate);
-        const staggerDays = Math.floor(taskIndex / 6);
-        const fallbackStart = addDays(anchorDate, timing.startOffset + staggerDays);
-        const fallbackEnd = addDays(anchorDate, timing.endOffset + staggerDays);
-        const explicitAnchor = startExplicit ? startOfDay(startExplicit) : due ? startOfDay(due) : null;
-        const relativeStartOffset = timing.startOffset - timing.anchorOffset;
-        const relativeEndOffset = timing.endOffset - timing.anchorOffset;
-        const explicitWindowStart = explicitAnchor ? addDays(explicitAnchor, relativeStartOffset) : null;
-        const explicitWindowEnd = explicitAnchor ? addDays(explicitAnchor, relativeEndOffset) : null;
+        const dueExplicit = parseMaybeDate(task.dueDate);
+        const hasExplicitDates = Boolean(startExplicit || dueExplicit);
 
-        const start = startOfDay(explicitWindowStart || startExplicit || due || fallbackStart);
-        const fallbackDurationDays = Math.max(
-          1,
-          Math.ceil((Math.max(30, Number(task.estimatedDuration || 30)) || 30) / 480)
-        );
-        const endCandidate = due
-          ? startOfDay(due)
-          : explicitWindowEnd
-          ? explicitWindowEnd
-          : fallbackEnd >= fallbackStart
-          ? fallbackEnd
-          : addDays(start, fallbackDurationDays - 1);
-        const end = endCandidate < start ? start : endCandidate;
+        let start: Date;
+        let end: Date;
+
+        if (hasExplicitDates) {
+          const resolvedStart = startExplicit ?? dueExplicit ?? startOfDay(new Date());
+          const resolvedEnd = dueExplicit ?? startExplicit ?? resolvedStart;
+          start = startOfDay(resolvedStart);
+          end = startOfDay(resolvedEnd);
+        } else {
+          const staggerDays = Math.floor(taskIndex / 6);
+          const fallbackStart = addDays(anchorDate, timing.startOffset + staggerDays);
+          const fallbackEnd = addDays(anchorDate, timing.endOffset + staggerDays);
+          const fallbackDurationDays = Math.max(
+            1,
+            Math.ceil((Math.max(30, Number(task.estimatedDuration || 30)) || 30) / 480)
+          );
+          start = startOfDay(fallbackStart);
+          const endCandidate =
+            fallbackEnd >= fallbackStart
+              ? fallbackEnd
+              : addDays(start, fallbackDurationDays - 1);
+          end = endCandidate < start ? start : endCandidate;
+        }
+
+        if (end < start) {
+          end = start;
+        }
         const spanDays = Math.max(1, diffDays(start, end) + 1);
         return {
           task,
@@ -637,10 +697,29 @@ export function TaskScaffoldView({
     );
     rows.sort((a, b) => a.ts - b.ts || a.phaseName.localeCompare(b.phaseName) || a.task.name.localeCompare(b.task.name));
     return rows;
-  }, [visiblePhases]);
+  }, [visiblePhases, timelineStartDate]);
 
   const timelineBounds = useMemo(() => {
     const datedRows = timelineRows.filter((row) => row.start && row.end);
+    const trialStart = parseMaybeDate(timelineStartDate);
+    const trialEnd = parseMaybeDate(timelineEndDate);
+
+    if (trialStart || trialEnd) {
+      const fallbackAnchor = startOfDay(new Date());
+      const minStart = datedRows.length
+        ? datedRows.reduce((min, row) => (row.start! < min ? row.start! : min), datedRows[0].start!)
+        : fallbackAnchor;
+      const maxEnd = datedRows.length
+        ? datedRows.reduce((max, row) => (row.end! > max ? row.end! : max), datedRows[0].end!)
+        : addDays(fallbackAnchor, 21);
+      const startBase = trialStart ? startOfDay(trialStart) : minStart;
+      const rawEndBase = trialEnd ? startOfDay(trialEnd) : maxEnd;
+      const endBase = rawEndBase < startBase ? startBase : rawEndBase;
+      const start = addDays(startBase, -2);
+      const end = addDays(endBase, 2);
+      return { start, end, totalDays: Math.max(1, diffDays(start, end) + 1) };
+    }
+
     if (!datedRows.length) {
       const today = startOfDay(new Date());
       const start = addDays(today, -3);
@@ -652,7 +731,7 @@ export function TaskScaffoldView({
     const start = addDays(minStart, -2);
     const end = addDays(maxEnd, 2);
     return { start, end, totalDays: Math.max(1, diffDays(start, end) + 1) };
-  }, [timelineRows]);
+  }, [timelineRows, timelineStartDate, timelineEndDate]);
 
   const timelineDays = useMemo(
     () =>
@@ -845,6 +924,7 @@ export function TaskScaffoldView({
                   linkedTaskCount={sectionTaskCounts.get(section.id) ?? 0}
                   linkedPhaseCount={section.linkedPhaseIds?.length ?? 0}
                   onToggle={() => toggleSection(section.id)}
+                  onSelectOnly={() => selectOnlySection(section.id)}
                   onOpenSource={() => onOpenProtocolPage?.(section.pageStart, section.name)}
                   onEdit={() => toast("Edit section: " + section.name)}
                 />

@@ -1,7 +1,16 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { protocols, fileSearchStores, fileSearchDocuments, documentCategories, trials, users, protocolChunks } from "../drizzle/schema";
+import {
+  protocols,
+  fileSearchStores,
+  fileSearchDocuments,
+  documentCategories,
+  trials,
+  users,
+  protocolChunks,
+  telemetryEvents,
+} from "../drizzle/schema";
 import { eq, like, notLike, inArray, and, or, desc } from "drizzle-orm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
@@ -97,6 +106,52 @@ export const documentsRouter = router({
         return acc;
       }, {});
 
+      const protocolEntityIds = protocolIds.map((id) => String(id));
+      const vectorIndexEventTypes = [
+        "document_vector_index_started",
+        "document_vector_index_completed",
+        "document_vector_index_failed",
+        "document_processing_retried",
+      ] as const;
+      const vectorIndexTelemetryRows = protocolEntityIds.length
+        ? await db
+            .select({
+              entityId: telemetryEvents.entityId,
+              eventType: telemetryEvents.eventType,
+              createdAt: telemetryEvents.createdAt,
+              payload: telemetryEvents.payload,
+            })
+            .from(telemetryEvents)
+            .where(
+              and(
+                eq(telemetryEvents.entityType, "protocol"),
+                inArray(telemetryEvents.entityId, protocolEntityIds),
+                inArray(telemetryEvents.eventType, [...vectorIndexEventTypes])
+              )
+            )
+            .orderBy(desc(telemetryEvents.createdAt))
+        : [];
+
+      const latestVectorIndexEventByProtocol = new Map<
+        string,
+        {
+          eventType: string;
+          createdAt: Date;
+          payload: unknown;
+        }
+      >();
+      for (const row of vectorIndexTelemetryRows) {
+        const entityId = String(row.entityId || "").trim();
+        if (!entityId) continue;
+        if (!latestVectorIndexEventByProtocol.has(entityId)) {
+          latestVectorIndexEventByProtocol.set(entityId, {
+            eventType: row.eventType,
+            createdAt: row.createdAt,
+            payload: row.payload,
+          });
+        }
+      }
+
       const docsWithStatus = await Promise.all(
         docs.map(async (doc) => {
           const fileSearchDoc = await db
@@ -105,9 +160,26 @@ export const documentsRouter = router({
             .where(eq(fileSearchDocuments.protocolId, doc.id))
             .limit(1);
 
+          const latestVectorEvent = latestVectorIndexEventByProtocol.get(String(doc.id));
+          const hasFileSearchIndex = fileSearchDoc.length > 0;
+          let indexStatus: "indexed" | "processing" | "failed" = hasFileSearchIndex
+            ? "indexed"
+            : "processing";
+          let indexFailureReason: string | null = null;
+          if (!hasFileSearchIndex && latestVectorEvent?.eventType === "document_vector_index_failed") {
+            indexStatus = "failed";
+            const payload = latestVectorEvent.payload as Record<string, unknown> | null;
+            const reason =
+              payload && typeof payload.reason === "string" ? payload.reason.trim() : "";
+            indexFailureReason = reason || "Indexing failed. Retry processing.";
+          }
+
           return {
             ...doc,
-            isIndexed: fileSearchDoc.length > 0,
+            isIndexed: hasFileSearchIndex,
+            indexStatus,
+            indexFailureReason,
+            indexUpdatedAt: latestVectorEvent?.createdAt ?? null,
             contextIndexed: (chunkCountByProtocol[doc.id] ?? 0) > 0,
             contextChunkCount: chunkCountByProtocol[doc.id] ?? 0,
             uploaderName: uploaderNameById.get(doc.uploadedBy) || `User ${doc.uploadedBy}`,
@@ -365,6 +437,20 @@ export const documentsRouter = router({
           }
 
           try {
+            await logTelemetryEvent({
+              eventType: "document_vector_index_started",
+              action: "started",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+
             // Get or create File Search Store for this trial
             let store = await db
               .select()
@@ -412,9 +498,39 @@ export const documentsRouter = router({
               displayName: input.filename,
             });
 
+            await logTelemetryEvent({
+              eventType: "document_vector_index_completed",
+              action: "completed",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                storeId,
+                documentName,
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+
             console.log(`✅ Document ${input.filename} automatically uploaded to File Search Store`);
           } catch (error) {
             console.error(`❌ Failed to auto-upload ${input.filename} to File Search:`, error);
+            await logTelemetryEvent({
+              eventType: "document_vector_index_failed",
+              action: "failed",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                reason: error instanceof Error ? error.message : String(error),
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
           }
         })();
       }
@@ -611,6 +727,11 @@ export const documentsRouter = router({
       }
 
       const protocol = doc[0];
+      const normalizedMode = protocol.trialId.startsWith("building:")
+        ? "building"
+        : protocol.trialId.startsWith("full:")
+        ? "full"
+        : "sample";
 
       // Check if already indexed
       const existingFileSearchDoc = await db
@@ -656,22 +777,70 @@ export const documentsRouter = router({
       }
 
       // Download file from S3 and upload to File Search Store
-      const response = await fetch(protocol.fileUrl);
-      const buffer = Buffer.from(await response.arrayBuffer());
-
-      const documentName = await uploadToVectorStore(
-        buffer,
-        protocol.filename,
-        storeName
-      );
-
-      // Track the uploaded document
-      await db.insert(fileSearchDocuments).values({
-        storeId,
-        protocolId: protocol.id,
-        documentName,
-        displayName: protocol.filename,
+      await logTelemetryEvent({
+        eventType: "document_vector_index_started",
+        action: "started",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(protocol.id),
+        payload: {
+          trialId: protocol.trialId,
+          filename: protocol.filename,
+          demoMode: normalizedMode,
+        },
+        aiInvolved: true,
       });
+
+      try {
+        const response = await fetch(protocol.fileUrl);
+        const buffer = Buffer.from(await response.arrayBuffer());
+
+        const documentName = await uploadToVectorStore(
+          buffer,
+          protocol.filename,
+          storeName
+        );
+
+        // Track the uploaded document
+        await db.insert(fileSearchDocuments).values({
+          storeId,
+          protocolId: protocol.id,
+          documentName,
+          displayName: protocol.filename,
+        });
+
+        await logTelemetryEvent({
+          eventType: "document_vector_index_completed",
+          action: "completed",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocol.id),
+          payload: {
+            trialId: protocol.trialId,
+            filename: protocol.filename,
+            storeId,
+            documentName,
+            demoMode: normalizedMode,
+          },
+          aiInvolved: true,
+        });
+      } catch (error) {
+        await logTelemetryEvent({
+          eventType: "document_vector_index_failed",
+          action: "failed",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocol.id),
+          payload: {
+            trialId: protocol.trialId,
+            filename: protocol.filename,
+            reason: error instanceof Error ? error.message : String(error),
+            demoMode: normalizedMode,
+          },
+          aiInvolved: true,
+        });
+        throw error;
+      }
 
       try {
         const chunkResult = await ingestProtocolContextChunks({

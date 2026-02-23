@@ -23,7 +23,7 @@ import {
   knowledgeGraphNodes,
   knowledgeGraphEdges,
 } from "../drizzle/schema";
-import { and, desc, eq, inArray, like, notLike } from "drizzle-orm";
+import { and, desc, eq, inArray, like, ne, notLike } from "drizzle-orm";
 import { toDemoId, serializeTrial, resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 
@@ -51,6 +51,88 @@ function parseSampleSizeToTarget(sampleSize?: string | null) {
   const parsed = Number.parseInt(digitsOnly, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
   return parsed;
+}
+
+function startOfDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function diffDays(start: Date, end: Date) {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((endUtc - startUtc) / msPerDay);
+}
+
+function parseDateOnlyLocal(value: string): Date | null {
+  const trimmed = String(value || "").trim();
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseMaybeDate(value: unknown): Date | null {
+  if (!value) return null;
+  const parsed =
+    value instanceof Date ? value : parseDateOnlyLocal(String(value)) ?? new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  return startOfDay(parsed);
+}
+
+function sameCalendarDay(a: Date | null, b: Date | null) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function rebaseDateToTrialWindow(
+  value: Date,
+  sourceStart: Date,
+  sourceEnd: Date | null,
+  targetStart: Date,
+  targetEnd: Date | null
+) {
+  const sourceStartDay = startOfDay(sourceStart);
+  const targetStartDay = startOfDay(targetStart);
+  const sourceValueDay = startOfDay(value);
+
+  if (sourceEnd && targetEnd) {
+    const sourceEndDay = startOfDay(sourceEnd);
+    const targetEndDay = startOfDay(targetEnd);
+    const sourceSpanDays = diffDays(sourceStartDay, sourceEndDay);
+    if (sourceSpanDays > 0) {
+      const targetSpanDays = Math.max(0, diffDays(targetStartDay, targetEndDay));
+      const sourceOffsetDays = diffDays(sourceStartDay, sourceValueDay);
+      const ratio = sourceOffsetDays / sourceSpanDays;
+      const targetOffsetDays = Math.round(ratio * targetSpanDays);
+      return addDays(targetStartDay, targetOffsetDays);
+    }
+  }
+
+  const shiftDays = diffDays(sourceStartDay, targetStartDay);
+  return addDays(sourceValueDay, shiftDays);
 }
 
 export const trialsRouter = router({
@@ -1137,6 +1219,15 @@ export const trialsRouter = router({
       const { id, demoMode, ...updates } = input;
       const mode = (demoMode ?? "sample") as DemoMode;
       const resolvedId = await resolveTrialId(db, mode, id, mode !== "building");
+
+      const [trialBeforeUpdate] = await db
+        .select({
+          startDate: trials.startDate,
+          endDate: trials.endDate,
+        })
+        .from(trials)
+        .where(eq(trials.id, resolvedId))
+        .limit(1);
       
       // Convert date strings to Date objects if provided
       const processedUpdates: any = {};
@@ -1169,12 +1260,12 @@ export const trialsRouter = router({
       if (updates.targetPatients === undefined && updates.sampleSize !== undefined) {
         const inferredTarget = parseSampleSizeToTarget(updates.sampleSize);
         if (inferredTarget !== undefined) {
-          const [existingTrial] = await db
+          const [existingTrialTarget] = await db
             .select({ targetPatients: trials.targetPatients })
             .from(trials)
             .where(eq(trials.id, resolvedId))
             .limit(1);
-          const currentTarget = Number(existingTrial?.targetPatients || 0);
+          const currentTarget = Number(existingTrialTarget?.targetPatients || 0);
           if (currentTarget <= 0) {
             processedUpdates.targetPatients = inferredTarget;
           }
@@ -1182,10 +1273,18 @@ export const trialsRouter = router({
       }
       if (updates.completionPercentage !== undefined) processedUpdates.completionPercentage = updates.completionPercentage;
       if (updates.startDate) {
-        processedUpdates.startDate = new Date(updates.startDate);
+        const parsedStartDate = parseMaybeDate(updates.startDate);
+        if (!parsedStartDate) {
+          throw new Error("Invalid start date. Please use YYYY-MM-DD format.");
+        }
+        processedUpdates.startDate = parsedStartDate;
       }
       if (updates.endDate) {
-        processedUpdates.endDate = new Date(updates.endDate);
+        const parsedEndDate = parseMaybeDate(updates.endDate);
+        if (!parsedEndDate) {
+          throw new Error("Invalid end date. Please use YYYY-MM-DD format.");
+        }
+        processedUpdates.endDate = parsedEndDate;
       }
 
       const mutableUpdates: Record<string, unknown> = { ...processedUpdates };
@@ -1247,6 +1346,188 @@ export const trialsRouter = router({
         .where(eq(trials.id, resolvedId))
         .limit(1);
 
+      const previousStartDate = parseMaybeDate(trialBeforeUpdate?.startDate ?? null);
+      const previousEndDate = parseMaybeDate(trialBeforeUpdate?.endDate ?? null);
+      const nextStartDate = parseMaybeDate(updatedTrial?.startDate ?? null);
+      const nextEndDate = parseMaybeDate(updatedTrial?.endDate ?? null);
+
+      const startDateChanged = updates.startDate !== undefined && !sameCalendarDay(previousStartDate, nextStartDate);
+      const endDateChanged = updates.endDate !== undefined && !sameCalendarDay(previousEndDate, nextEndDate);
+      const hasTimelineDateUpdateInput = updates.startDate !== undefined || updates.endDate !== undefined;
+
+      if (updatedTrial && hasTimelineDateUpdateInput && (nextStartDate || nextEndDate)) {
+        const activeMaps = await db
+          .select({ id: executionMaps.id })
+          .from(executionMaps)
+          .where(and(eq(executionMaps.trialId, resolvedId), ne(executionMaps.status, "archived")));
+
+        const terminalStatuses = new Set(["done", "skipped", "cancelled"]);
+
+        for (const mapRow of activeMaps) {
+          const mapTaskRows = await db
+            .select({
+              id: mapTasks.id,
+              phaseId: mapTasks.phaseId,
+              startDate: mapTasks.startDate,
+              suggestedDate: mapTasks.suggestedDate,
+              dueDate: mapTasks.dueDate,
+              status: mapTasks.status,
+              createdBy: mapTasks.createdBy,
+              isCustom: mapTasks.isCustom,
+            })
+            .from(mapTasks)
+            .where(eq(mapTasks.mapId, mapRow.id));
+
+          if (mapTaskRows.length === 0) {
+            continue;
+          }
+
+          const allTaskDates = mapTaskRows
+            .flatMap((taskRow) => [
+              parseMaybeDate(taskRow.startDate),
+              parseMaybeDate(taskRow.suggestedDate),
+              parseMaybeDate(taskRow.dueDate),
+            ])
+            .filter(Boolean) as Date[];
+
+          if (allTaskDates.length === 0) {
+            continue;
+          }
+
+          const inferredSourceStart = allTaskDates.reduce(
+            (min, current) => (current < min ? current : min),
+            allTaskDates[0]
+          );
+          const inferredSourceEnd = allTaskDates.reduce(
+            (max, current) => (current > max ? current : max),
+            allTaskDates[0]
+          );
+
+          const sourceStart = previousStartDate ?? inferredSourceStart;
+          const sourceEnd = previousEndDate ?? inferredSourceEnd;
+          const targetStart = nextStartDate ?? sourceStart;
+          const targetEnd = nextEndDate ?? sourceEnd;
+
+          for (const taskRow of mapTaskRows) {
+            const normalizedStatus = String(taskRow.status || "").toLowerCase();
+            const shouldRebaseTask =
+              taskRow.createdBy === "ai" &&
+              !taskRow.isCustom &&
+              !terminalStatuses.has(normalizedStatus);
+
+            if (!shouldRebaseTask) {
+              continue;
+            }
+
+            const currentStartDate = parseMaybeDate(taskRow.startDate);
+            const currentSuggestedDate = parseMaybeDate(taskRow.suggestedDate);
+            const currentDueDate = parseMaybeDate(taskRow.dueDate);
+
+            if (!currentStartDate && !currentSuggestedDate && !currentDueDate) {
+              continue;
+            }
+
+            let rebasedStartDate = currentStartDate
+              ? rebaseDateToTrialWindow(
+                  currentStartDate,
+                  sourceStart,
+                  sourceEnd,
+                  targetStart,
+                  targetEnd
+                )
+              : null;
+            let rebasedSuggestedDate = currentSuggestedDate
+              ? rebaseDateToTrialWindow(
+                  currentSuggestedDate,
+                  sourceStart,
+                  sourceEnd,
+                  targetStart,
+                  targetEnd
+                )
+              : null;
+            let rebasedDueDate = currentDueDate
+              ? rebaseDateToTrialWindow(
+                  currentDueDate,
+                  sourceStart,
+                  sourceEnd,
+                  targetStart,
+                  targetEnd
+                )
+              : null;
+
+            if (rebasedStartDate && rebasedDueDate && rebasedDueDate < rebasedStartDate) {
+              rebasedDueDate = rebasedStartDate;
+            }
+            if (!rebasedStartDate && rebasedSuggestedDate && rebasedDueDate && rebasedDueDate < rebasedSuggestedDate) {
+              rebasedDueDate = rebasedSuggestedDate;
+            }
+
+            const didChange =
+              !sameCalendarDay(currentStartDate, rebasedStartDate) ||
+              !sameCalendarDay(currentSuggestedDate, rebasedSuggestedDate) ||
+              !sameCalendarDay(currentDueDate, rebasedDueDate);
+
+            if (!didChange) {
+              continue;
+            }
+
+            await db
+              .update(mapTasks)
+              .set({
+                startDate: rebasedStartDate,
+                suggestedDate: rebasedSuggestedDate,
+                dueDate: rebasedDueDate,
+                updatedAt: new Date(),
+              })
+              .where(eq(mapTasks.id, taskRow.id));
+          }
+
+          const refreshedDateRows = await db
+            .select({
+              phaseId: mapTasks.phaseId,
+              startDate: mapTasks.startDate,
+              suggestedDate: mapTasks.suggestedDate,
+              dueDate: mapTasks.dueDate,
+            })
+            .from(mapTasks)
+            .where(eq(mapTasks.mapId, mapRow.id));
+
+          const phaseRows = await db
+            .select({ id: mapPhases.id })
+            .from(mapPhases)
+            .where(eq(mapPhases.mapId, mapRow.id));
+
+          const phaseDateBounds = new Map<string, { start: Date; end: Date }>();
+          for (const row of refreshedDateRows) {
+            const startCandidate = parseMaybeDate(row.startDate) ?? parseMaybeDate(row.suggestedDate);
+            const endCandidate = parseMaybeDate(row.dueDate) ?? startCandidate;
+            if (!startCandidate || !endCandidate) continue;
+
+            const existingBounds = phaseDateBounds.get(row.phaseId);
+            if (!existingBounds) {
+              phaseDateBounds.set(row.phaseId, { start: startCandidate, end: endCandidate });
+              continue;
+            }
+
+            if (startCandidate < existingBounds.start) existingBounds.start = startCandidate;
+            if (endCandidate > existingBounds.end) existingBounds.end = endCandidate;
+          }
+
+          for (const phaseRow of phaseRows) {
+            const bounds = phaseDateBounds.get(phaseRow.id);
+            await db
+              .update(mapPhases)
+              .set({
+                estimatedDate: bounds?.start ?? null,
+                windowStart: bounds?.start ?? null,
+                windowEnd: bounds?.end ?? null,
+                updatedAt: new Date(),
+              })
+              .where(eq(mapPhases.id, phaseRow.id));
+          }
+        }
+      }
+
       await logTelemetryEvent({
         eventType: "trial_edited",
         action: "edited",
@@ -1255,6 +1536,8 @@ export const trialsRouter = router({
         payload: {
           updates,
           demoMode: mode,
+          timelineDateChanged: startDateChanged || endDateChanged,
+          timelineDateInputProvided: hasTimelineDateUpdateInput,
         },
       });
 

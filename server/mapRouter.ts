@@ -508,7 +508,14 @@ function inferSectionTypeFromName(
   }
   if (normalized.includes("safety") || normalized.includes("ae")) return "safety";
   if (normalized.includes("medication") || normalized.includes("drug")) return "medication";
-  if (normalized.includes("random")) return "randomization";
+  if (
+    normalized.includes("random") ||
+    normalized.includes("enroll") ||
+    normalized.includes("enrol") ||
+    normalized.includes("irt")
+  ) {
+    return "randomization";
+  }
   if (normalized.includes("lab")) return "lab";
   if (normalized.includes("procedure") || normalized.includes("visit")) return "procedure";
   return "custom";
@@ -557,15 +564,45 @@ function addDays(date: Date, offset: number): Date {
   return next;
 }
 
+function parseDateOnlyLocal(value: string): Date | null {
+  const trimmed = String(value || "").trim();
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
 function parseMaybeDate(value: Date | string | null | undefined): Date | null {
   if (!value) return null;
-  const parsed = value instanceof Date ? value : new Date(String(value));
+  const parsed =
+    value instanceof Date ? value : parseDateOnlyLocal(String(value)) ?? new Date(String(value));
   if (Number.isNaN(parsed.getTime())) return null;
   return startOfDay(parsed);
 }
 
 function inferPhaseOffsetDays(phaseName: string, phaseIndex: number): number {
   const text = String(phaseName || "").toLowerCase();
+
+  if (/(site feasibility|feasibility|site selection|startup|start up)/.test(text)) return -120;
+  if (/(regulatory submission|site activation|activation|irb|iec|ethic|submission|approval)/.test(text)) return -60;
+  if (/(pre[- ]?screen|prescreen|enroll|enrol|recruit)/.test(text)) return -21;
+  if (/(randomi[sz]ation|irt|allocation)/.test(text)) return 0;
+  if (/(treatment period)/.test(text)) return 14;
+  if (/(follow[- ]?up period)/.test(text)) return 90;
+  if (/(exit visit)/.test(text)) return 120;
+  if (/(lplv|last patient last visit)/.test(text)) return 140;
+  if (/(close ?out|site study closure|study closure)/.test(text)) return 160;
 
   const cXdY = text.match(/c(?:ycle)?\s*(\d+)\s*d(?:ay)?\s*(\d+)/i);
   if (cXdY) {
@@ -688,10 +725,35 @@ function deriveTaskSchedule(
   phaseName: string,
   phaseIndex: number,
   contextText: string,
-  explicitSuggestedDate: Date | string | null | undefined
+  explicitSuggestedDate: Date | string | null | undefined,
+  trialEndDate?: Date | null
 ) {
+  const normalizedContext = normalizeText(`${phaseName} ${contextText}`);
   const timing = inferTimingWindow(phaseName, phaseIndex, contextText);
   const explicitAnchor = parseMaybeDate(explicitSuggestedDate);
+
+  if (!explicitAnchor && trialEndDate) {
+    const endAnchor = startOfDay(trialEndDate);
+    if (/(close ?out|site study closure|study closure)/.test(normalizedContext)) {
+      const suggestedDate = addDays(endAnchor, 14);
+      const startDate = suggestedDate;
+      const dueDate = addDays(suggestedDate, 14);
+      return { suggestedDate, startDate, dueDate };
+    }
+    if (/(lplv|last patient last visit)/.test(normalizedContext)) {
+      const suggestedDate = endAnchor;
+      const startDate = suggestedDate;
+      const dueDate = suggestedDate;
+      return { suggestedDate, startDate, dueDate };
+    }
+    if (/(exit visit)/.test(normalizedContext)) {
+      const suggestedDate = addDays(endAnchor, -7);
+      const startDate = suggestedDate;
+      const dueDate = suggestedDate;
+      return { suggestedDate, startDate, dueDate };
+    }
+  }
+
   const suggestedDate = explicitAnchor ?? addDays(trialStartDate, timing.anchorOffset);
   const startDate = explicitAnchor
     ? addDays(suggestedDate, timing.startOffset - timing.anchorOffset)
@@ -746,7 +808,7 @@ function inferTaskCategory(taskName: string, protocolSection?: string | null) {
   if (/(exam|ecg|eeg|assessment|eCOG|performance status|physical)/.test(text)) return "assessment" as const;
   if (/(questionnaire|qol|pro|patient-reported)/.test(text)) return "questionnaire" as const;
   if (/(edc|crf|data entry|source doc|query|ctms)/.test(text)) return "data_entry" as const;
-  if (/(schedule|coordination|randomization|irt|notify|handoff|appointment)/.test(text)) {
+  if (/(schedule|coordination|randomization|irt|enroll|notify|handoff|appointment)/.test(text)) {
     return "coordination" as const;
   }
   if (/(safety|ae|sae|adverse event|observation|monitor)/.test(text)) return "safety_reporting" as const;
@@ -888,6 +950,156 @@ function inferConditionalNote(taskName: string) {
   if (/(female|pregnancy|childbearing)/.test(lower)) return "Females of childbearing potential only";
   if (/(if|only when|only if)/.test(lower)) return taskName;
   return null;
+}
+
+type CanonicalPhaseType =
+  | "screening"
+  | "baseline"
+  | "treatment_visit"
+  | "follow_up"
+  | "end_of_study"
+  | "unscheduled"
+  | "screen_fail"
+  | "early_termination"
+  | "custom";
+
+type CanonicalTaskCategory =
+  | "consent"
+  | "eligibility"
+  | "lab_sample"
+  | "vital_signs"
+  | "imaging"
+  | "drug_administration"
+  | "assessment"
+  | "questionnaire"
+  | "data_entry"
+  | "coordination"
+  | "documentation"
+  | "follow_up"
+  | "safety_reporting"
+  | "regulatory"
+  | "custom";
+
+const CANONICAL_SCAFFOLD_BONE: Array<{
+  sectionName: string;
+  subsectionName: string;
+  phaseType: CanonicalPhaseType;
+  color: string;
+}> = [
+  {
+    sectionName: "Study Site Startup",
+    subsectionName: "Site Feasibility & Selection",
+    phaseType: "custom",
+    color: "#3B82F6",
+  },
+  {
+    sectionName: "Study Site Startup",
+    subsectionName: "Site Regulatory Submission & Approval (including Site Activation)",
+    phaseType: "custom",
+    color: "#2563EB",
+  },
+  {
+    sectionName: "Study Enrollment",
+    subsectionName: "Pre-screening",
+    phaseType: "screening",
+    color: "#1D4ED8",
+  },
+  {
+    sectionName: "Study Enrollment",
+    subsectionName: "Screening",
+    phaseType: "screening",
+    color: "#3B82F6",
+  },
+  {
+    sectionName: "Study Enrollment",
+    subsectionName: "Baseline",
+    phaseType: "baseline",
+    color: "#4F46E5",
+  },
+  {
+    sectionName: "Study Enrollment",
+    subsectionName: "Randomization",
+    phaseType: "treatment_visit",
+    color: "#6366F1",
+  },
+  {
+    sectionName: "Study Conduct",
+    subsectionName: "Treatment Period",
+    phaseType: "treatment_visit",
+    color: "#14B8A6",
+  },
+  {
+    sectionName: "Study Conduct",
+    subsectionName: "Follow-up Period",
+    phaseType: "follow_up",
+    color: "#06B6D4",
+  },
+  {
+    sectionName: "Site Study Closure",
+    subsectionName: "Exit Visit",
+    phaseType: "end_of_study",
+    color: "#8B5CF6",
+  },
+  {
+    sectionName: "Site Study Closure",
+    subsectionName: "Last Patient Last Visit (LPLV)",
+    phaseType: "end_of_study",
+    color: "#A855F7",
+  },
+  {
+    sectionName: "Site Study Closure",
+    subsectionName: "Close out",
+    phaseType: "end_of_study",
+    color: "#7C3AED",
+  },
+];
+
+function inferCanonicalSubsectionName(input: {
+  taskName: string;
+  category: CanonicalTaskCategory;
+  protocolSection?: string | null;
+  sourcePhaseName?: string | null;
+  sourceExtractedText?: string | null;
+}) {
+  const text = normalizeText(
+    `${input.sourcePhaseName ?? ""} ${input.taskName} ${input.protocolSection ?? ""} ${input.sourceExtractedText ?? ""}`
+  );
+
+  if (/(feasib|site selection|qualification visit|site qualification|start[- ]?up|startup)/.test(text)) {
+    return "Site Feasibility & Selection";
+  }
+
+  if (
+    /(regulator|irb|iec|ethic|submission|approval|activation|site initiation|siv|contract|budget|cta|essential document)/.test(
+      text
+    )
+  ) {
+    return "Site Regulatory Submission & Approval (including Site Activation)";
+  }
+
+  if (/(close ?out|closeout|site closure|study closure|database lock|archiv|tmf|final report|reconciliation)/.test(text)) {
+    return "Close out";
+  }
+
+  if (/(lplv|last patient last visit)/.test(text)) return "Last Patient Last Visit (LPLV)";
+  if (/(exit visit)/.test(text)) return "Exit Visit";
+
+  if (/(follow ?up|follow-up|post treatment|post-treatment|end of treatment|eot)/.test(text)) {
+    return "Follow-up Period";
+  }
+
+  if (/(randomi[sz]|irt|allocation)/.test(text)) return "Randomization";
+  if (/\bbaseline\b/.test(text)) return "Baseline";
+  if (/(pre ?screen|prescreen|enroll|enrol|recruit)/.test(text)) return "Pre-screening";
+  if (/(screen|inclusion|exclusion|eligib|consent)/.test(text)) return "Screening";
+
+  if (input.category === "regulatory") {
+    return "Site Regulatory Submission & Approval (including Site Activation)";
+  }
+  if (input.category === "consent" || input.category === "eligibility") return "Screening";
+  if (input.category === "follow_up") return "Follow-up Period";
+
+  return "Treatment Period";
 }
 
 function ensureActionVerbName(taskName: string, category: string) {
@@ -1505,6 +1717,7 @@ export const mapRouter = router({
 
       const trialTimelineAnchor =
         parseMaybeDate(trial?.startDate) ?? parseMaybeDate(targetMap.createdAt) ?? startOfDay(new Date());
+      const trialTimelineEnd = parseMaybeDate(trial?.endDate);
 
       const clearExisting = input.clearExisting ?? true;
       if (clearExisting) {
@@ -1706,7 +1919,8 @@ export const mapRouter = router({
             legacyPhase.name,
             legacyPhaseIndex,
             schedulingContext,
-            legacyTask.suggestedDate
+            legacyTask.suggestedDate,
+            trialTimelineEnd
           );
           const importedStatus: TaskStatus = legacyTask.status === "completed" ? "confirmed" : "suggested";
           const importedAt = new Date();
@@ -1801,7 +2015,7 @@ export const mapRouter = router({
         .select()
         .from(mapTasks)
         .where(eq(mapTasks.mapId, targetMap.id));
-      const taskNameSetByPhase = new Map<string, Set<string>>();
+      let taskNameSetByPhase = new Map<string, Set<string>>();
       for (const task of existingTaskRows) {
         const set = taskNameSetByPhase.get(task.phaseId) ?? new Set<string>();
         set.add(normalizeText(task.name));
@@ -1913,7 +2127,8 @@ export const mapRouter = router({
               phaseForTask?.name ?? inputTask.section ?? "Visit",
               phaseForTask?.displayOrder ?? 0,
               `${phaseForTask?.name ?? ""} ${inputTask.section ?? ""} ${inputTask.name}`,
-              null
+              null,
+              trialTimelineEnd
             );
         const importedAt = new Date();
         await insertMapTaskWithFallback(
@@ -1988,16 +2203,82 @@ export const mapRouter = router({
         });
       };
 
-      for (const phase of phaseRowsAfterImport) {
+      const canonicalPhaseIdByName = new Map<string, string>();
+      for (let index = 0; index < CANONICAL_SCAFFOLD_BONE.length; index += 1) {
+        const phaseDef = CANONICAL_SCAFFOLD_BONE[index];
+        const phaseId = await ensurePhase(phaseDef.subsectionName, phaseDef.phaseType, phaseDef.color);
+        canonicalPhaseIdByName.set(phaseDef.subsectionName, phaseId);
+
+        await db
+          .update(mapPhases)
+          .set({
+            phaseType: phaseDef.phaseType,
+            color: phaseDef.color,
+            displayOrder: index,
+            updatedAt: new Date(),
+          })
+          .where(eq(mapPhases.id, phaseId));
+
+        const row = phaseRowsAfterImport.find((phase) => phase.id === phaseId);
+        if (row) {
+          row.phaseType = phaseDef.phaseType;
+          row.color = phaseDef.color;
+          row.displayOrder = index;
+          row.updatedAt = new Date();
+        }
+      }
+
+      const phaseById = new Map(phaseRowsAfterImport.map((phase) => [phase.id, phase]));
+      const nextOrderByCanonicalPhase = new Map<string, number>();
+      for (const task of createdMapTasks) {
+        const refs = task.protocolRefs;
+        const firstRef = (Array.isArray(refs) ? refs[0] : null) as Record<string, unknown> | null;
+        const sourcePhaseName = phaseById.get(task.phaseId)?.name ?? null;
+        const targetSubsection = inferCanonicalSubsectionName({
+          taskName: task.name,
+          category: task.category,
+          protocolSection: typeof firstRef?.section === "string" ? firstRef.section : null,
+          sourcePhaseName,
+          sourceExtractedText: typeof firstRef?.extractedText === "string" ? firstRef.extractedText : null,
+        });
+        const targetPhaseId = canonicalPhaseIdByName.get(targetSubsection);
+        if (!targetPhaseId) continue;
+        const nextOrder = nextOrderByCanonicalPhase.get(targetPhaseId) ?? 0;
+        nextOrderByCanonicalPhase.set(targetPhaseId, nextOrder + 1);
+
+        await db
+          .update(mapTasks)
+          .set({
+            phaseId: targetPhaseId,
+            orderInPhase: nextOrder,
+            updatedAt: new Date(),
+          })
+          .where(eq(mapTasks.id, task.id));
+        task.phaseId = targetPhaseId;
+      }
+
+      taskNameSetByPhase = new Map<string, Set<string>>();
+      for (const task of createdMapTasks) {
+        const set = taskNameSetByPhase.get(task.phaseId) ?? new Set<string>();
+        set.add(normalizeText(task.name));
+        taskNameSetByPhase.set(task.phaseId, set);
+      }
+
+      const canonicalPhaseRows = CANONICAL_SCAFFOLD_BONE.map((phaseDef) =>
+        phaseRowsAfterImport.find((phase) => phase.id === canonicalPhaseIdByName.get(phaseDef.subsectionName))
+      ).filter(Boolean) as typeof phaseRowsAfterImport;
+
+      for (const phase of canonicalPhaseRows) {
         const normalizedPhase = normalizeText(phase.name);
         const phaseTasks = createdMapTasks.filter((task) => task.phaseId === phase.id);
         const hasDrugAdministration = phaseTasks.some((task) => task.category === "drug_administration");
-        const isScreening = phase.phaseType === "screening" || normalizedPhase.includes("screen");
-        const isTreatmentVisit =
-          phase.phaseType === "treatment_visit" ||
-          phase.phaseType === "baseline" ||
-          normalizedPhase.includes("visit") ||
-          normalizedPhase.includes("cycle");
+        const isScreening = normalizedPhase === normalizeText("Screening");
+        const isTreatmentVisit = [
+          normalizeText("Baseline"),
+          normalizeText("Randomization"),
+          normalizeText("Treatment Period"),
+          normalizeText("Follow-up Period"),
+        ].includes(normalizedPhase);
 
         if (isScreening) {
           await addAutoTaskIfMissing({
@@ -2080,73 +2361,21 @@ export const mapRouter = router({
         }
       }
 
-      const screenFailPhaseId = await ensurePhase("Screen Fail", "screen_fail", "#EF4444");
-      await addAutoTaskIfMissing({
-        phaseId: screenFailPhaseId,
-        name: "Document screen failure reason",
-        category: "documentation",
-        priority: "high",
-        section: "Inclusion / Exclusion",
-        aiConfidence: 0.9,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: screenFailPhaseId,
-        name: "Notify sponsor of screen failure",
-        category: "coordination",
-        priority: "high",
-        section: "Study Design & Patient Population",
-        aiConfidence: 0.88,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: screenFailPhaseId,
-        name: "Close participant in CTMS and EDC",
-        category: "data_entry",
-        priority: "medium",
-        section: "Documentation",
-        aiConfidence: 0.86,
-      });
-
-      const earlyTerminationPhaseId = await ensurePhase("Early Termination", "early_termination", "#6366F1");
-      await addAutoTaskIfMissing({
-        phaseId: earlyTerminationPhaseId,
-        name: "Document reason for early termination",
-        category: "documentation",
-        priority: "high",
-        section: "Study Design & Patient Population",
-        aiConfidence: 0.89,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: earlyTerminationPhaseId,
-        name: "Perform end-of-study assessments",
-        category: "assessment",
-        priority: "high",
-        section: "Procedures & Assessments",
-        aiConfidence: 0.88,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: earlyTerminationPhaseId,
-        name: "Draw final safety laboratory samples",
-        category: "lab_sample",
-        priority: "high",
-        section: "Lab & Samples",
-        aiConfidence: 0.88,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: earlyTerminationPhaseId,
-        name: "Complete early termination CRF pages",
-        category: "data_entry",
-        priority: "medium",
-        section: "Documentation",
-        aiConfidence: 0.86,
-      });
-      await addAutoTaskIfMissing({
-        phaseId: earlyTerminationPhaseId,
-        name: "Notify IRB and sponsor of early termination",
-        category: "regulatory",
-        priority: "high",
-        section: "Regulatory",
-        aiConfidence: 0.85,
-      });
+      const enrollmentAnchorPhase =
+        canonicalPhaseRows.find((phase) => normalizeText(phase.name) === normalizeText("Pre-screening")) ??
+        canonicalPhaseRows.find((phase) => normalizeText(phase.name) === normalizeText("Screening")) ??
+        canonicalPhaseRows.find((phase) => normalizeText(phase.name) === normalizeText("Baseline")) ??
+        null;
+      if (enrollmentAnchorPhase) {
+        await addAutoTaskIfMissing({
+          phaseId: enrollmentAnchorPhase.id,
+          name: "Open enrollment and begin participant screening",
+          category: "coordination",
+          priority: "critical",
+          section: "Enrollment & Randomization",
+          aiConfidence: 0.92,
+        });
+      }
 
       const phaseTaskDateRows = await db
         .select({
@@ -2244,145 +2473,92 @@ export const mapRouter = router({
         }
       }
 
-      const legacySectionRows = await db
-        .select()
-        .from(legacyProtocolSections)
-        .where(eq(legacyProtocolSections.protocolId, input.protocolId))
-        .orderBy(asc(legacyProtocolSections.orderIndex), asc(legacyProtocolSections.createdAt));
-
-      const rawSectionsForMap =
-        legacySectionRows.length > 0
-          ? [...legacySectionRows]
-          : [
-              {
-                id: -1,
-                protocolId: input.protocolId,
-                name: "Schedule of Events",
-                pageReference: null,
-                dateReference: null,
-                orderIndex: 0,
-                parentSectionId: null,
-                createdAt: new Date(),
-              },
-            ];
-      const sectionsForMap: typeof rawSectionsForMap = [];
-      const seenSectionKeys = new Set<string>();
-      for (const section of rawSectionsForMap) {
-        const normalizedName = normalizeText(section.name);
-        if (!normalizedName) continue;
-        const sectionType = inferSectionTypeFromName(section.name);
-        const key = sectionType === "custom" ? normalizedName : `type:${sectionType}`;
-        if (seenSectionKeys.has(key)) continue;
-        seenSectionKeys.add(key);
-        sectionsForMap.push(section);
-      }
-
-      const defaultSectionNames = [
-        "Schedule of Events",
-        "Inclusion / Exclusion",
-        "Dosing & Administration",
-        "Procedures & Assessments",
-        "Lab & Samples",
-        "Adverse Events & Safety",
-        "Concomitant Medications",
-      ];
-
-      const existingSectionKeys = new Set(
-        sectionsForMap.map((section) => {
-          const sectionType = inferSectionTypeFromName(section.name);
-          return sectionType === "custom" ? normalizeText(section.name) : `type:${sectionType}`;
-        })
+      const scaffoldSections = Array.from(
+        CANONICAL_SCAFFOLD_BONE.reduce((map, row) => {
+          const existing = map.get(row.sectionName) ?? [];
+          existing.push(row);
+          map.set(row.sectionName, existing);
+          return map;
+        }, new Map<string, Array<(typeof CANONICAL_SCAFFOLD_BONE)[number]>>())
       );
-      let maxSectionOrder =
-        sectionsForMap.length > 0 ? Math.max(...sectionsForMap.map((section) => section.orderIndex)) : -1;
-      for (const defaultName of defaultSectionNames) {
-        const sectionType = inferSectionTypeFromName(defaultName);
-        const sectionKey = sectionType === "custom" ? normalizeText(defaultName) : `type:${sectionType}`;
-        if (existingSectionKeys.has(sectionKey)) continue;
-        maxSectionOrder += 1;
-        sectionsForMap.push({
-          id: -(maxSectionOrder + 1),
-          protocolId: input.protocolId,
-          name: defaultName,
-          pageReference: null,
-          dateReference: null,
-          orderIndex: maxSectionOrder,
-          parentSectionId: null,
-          createdAt: new Date(),
-        });
-        existingSectionKeys.add(sectionKey);
-      }
 
-      const sectionIdMap = new Map<number, string>();
-      for (const section of sectionsForMap) {
-        sectionIdMap.set(section.id, randomUUID());
-      }
+      const extractTaskPage = (taskId: string): number | null => {
+        const task = createdMapTasks.find((row) => row.id === taskId);
+        if (!task) return null;
+        for (const ref of task.protocolRefs) {
+          const pageRaw = (ref as Record<string, unknown>)?.page;
+          const page =
+            typeof pageRaw === "number"
+              ? pageRaw
+              : typeof pageRaw === "string" && pageRaw.trim().length > 0
+              ? Number(pageRaw)
+              : null;
+          if (Number.isFinite(page as number) && (page as number) > 0) {
+            return Math.round(page as number);
+          }
+        }
+        return null;
+      };
 
-      for (const section of sectionsForMap) {
-        const sectionId = sectionIdMap.get(section.id) as string;
-        const normalizedSectionName = normalizeText(section.name);
-        const sectionType = inferSectionTypeFromName(section.name);
-        const linkedTaskIds = createdMapTasks
-          .filter((task) => {
-            const refs = task.protocolRefs;
-            const refMatch = refs.some((ref) => {
-              const refSection = normalizeText(String(ref.section || ""));
-              return (
-                refSection.includes(normalizedSectionName) ||
-                normalizedSectionName.includes(refSection)
-              );
-            });
-            if (refMatch) return true;
-
-            if (sectionType === "schedule") return true;
-            if (sectionType === "eligibility") return task.category === "eligibility";
-            if (sectionType === "lab") return task.category === "lab_sample";
-            if (sectionType === "safety") return task.category === "safety_reporting";
-            if (sectionType === "randomization") {
-              return (
-                task.category === "coordination" &&
-                /(random|irt)/.test(normalizeText(task.name))
-              );
-            }
-            if (sectionType === "medication") {
-              return (
-                task.category === "drug_administration" ||
-                /(concomitant|medication)/.test(normalizeText(task.name))
-              );
-            }
-            if (sectionType === "procedure") {
-              return ["assessment", "vital_signs", "questionnaire", "imaging"].includes(task.category);
-            }
-            return (
-              normalizeText(task.name).includes(normalizedSectionName) ||
-              normalizedSectionName.includes(normalizeText(task.name))
-            );
-          })
+      let sectionOrder = 0;
+      for (const [sectionName, subsections] of scaffoldSections) {
+        const topLevelId = randomUUID();
+        const topPhaseIds = subsections
+          .map((subsection) => canonicalPhaseIdByName.get(subsection.subsectionName))
+          .filter(Boolean) as string[];
+        const topLinkedTaskIds = createdMapTasks
+          .filter((task) => topPhaseIds.includes(task.phaseId))
           .map((task) => task.id);
-        const linkedPhaseIds = Array.from(
-          new Set(
-            createdMapTasks
-              .filter((task) => linkedTaskIds.includes(task.id))
-              .map((task) => task.phaseId)
-          )
-        );
+        const topPageStart = topLinkedTaskIds
+          .map((taskId) => extractTaskPage(taskId))
+          .find((page) => typeof page === "number" && Number.isFinite(page)) ?? null;
 
         await db.insert(protocolMapSections).values({
-          id: sectionId,
+          id: topLevelId,
           protocolId: input.protocolId,
           mapId: targetMap.id,
-          name: section.name,
-          sectionType,
-          pageStart: extractPageStart(section.pageReference),
+          name: sectionName,
+          sectionType: "custom",
+          pageStart: topPageStart,
           pageEnd: null,
-          dateReference: parseDateFromReference(section.dateReference),
-          parentSectionId: section.parentSectionId ? sectionIdMap.get(section.parentSectionId) ?? null : null,
-          linkedPhaseIds,
-          linkedTaskIds,
-          displayOrder: section.orderIndex,
+          dateReference: null,
+          parentSectionId: null,
+          linkedPhaseIds: topPhaseIds,
+          linkedTaskIds: topLinkedTaskIds,
+          displayOrder: sectionOrder,
           isChecked: true,
           createdAt: new Date(),
         });
+        sectionOrder += 1;
+
+        for (const subsection of subsections) {
+          const phaseId = canonicalPhaseIdByName.get(subsection.subsectionName) ?? null;
+          const linkedTaskIds = phaseId
+            ? createdMapTasks
+                .filter((task) => task.phaseId === phaseId)
+                .map((task) => task.id)
+            : [];
+          const pageStart = linkedTaskIds
+            .map((taskId) => extractTaskPage(taskId))
+            .find((page) => typeof page === "number" && Number.isFinite(page)) ?? null;
+          await db.insert(protocolMapSections).values({
+            id: randomUUID(),
+            protocolId: input.protocolId,
+            mapId: targetMap.id,
+            name: subsection.subsectionName,
+            sectionType: inferSectionTypeFromName(subsection.subsectionName),
+            pageStart,
+            pageEnd: null,
+            dateReference: null,
+            parentSectionId: topLevelId,
+            linkedPhaseIds: phaseId ? [phaseId] : [],
+            linkedTaskIds,
+            displayOrder: sectionOrder,
+            isChecked: true,
+            createdAt: new Date(),
+          });
+          sectionOrder += 1;
+        }
       }
 
       const nextMetadata = {

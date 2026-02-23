@@ -62,6 +62,7 @@ import { toast } from "sonner";
 import { logEvent } from "@/lib/telemetry";
 import { useSidebarNav } from "@/contexts/SidebarNavContext";
 import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
+import { useOrganizationWorkspaces } from "@/hooks/useOrganizationWorkspaces";
 import {
   CHAT_ACTIVE_UPDATED_EVENT,
   CHAT_SESSIONS_UPDATED_EVENT,
@@ -104,9 +105,16 @@ export function Sidebar() {
       : null;
   const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
   const currentDataMode = getCurrentDataMode();
-  const { profile, organizationInitial } = useOrganizationProfile();
-  const organizationName = String(profile.name || "").trim() || "Organization";
-  const organizationLocation = String(profile.location || "").trim();
+  const { profile, organizationInitial: profileInitial } = useOrganizationProfile();
+  const {
+    activeOrganization,
+    otherOrganizations,
+    cloneCurrentOrganization,
+    switchOrganization,
+  } = useOrganizationWorkspaces();
+  const organizationName = String(profile.name || "").trim() || activeOrganization?.name || "Organization";
+  const organizationLocation = String(profile.location || "").trim() || activeOrganization?.location || "";
+  const organizationInitial = profileInitial || activeOrganization?.initial || "O";
   const utils = trpc.useUtils();
   const resetToEmptyMutation = trpc.demo.resetToEmpty.useMutation({
     onSuccess: async () => {
@@ -1087,23 +1095,48 @@ export function Sidebar() {
                     </span>
                   </div>
                 </div>
+                <Check className="ml-auto h-4 w-4 text-primary" />
               </DropdownMenuItem>
+              {otherOrganizations.length ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-xs text-muted-foreground">Other Organizations</DropdownMenuLabel>
+                  {otherOrganizations.map((organization) => (
+                    <DropdownMenuItem
+                      key={organization.id}
+                      onClick={() => {
+                        switchOrganization(organization.id);
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 rounded bg-blue-500 flex items-center justify-center text-white text-xs font-semibold">
+                          {organization.initial}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">{organization.name}</span>
+                          {organization.location ? (
+                            <span className="text-xs text-muted-foreground">{organization.location}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    </DropdownMenuItem>
+                  ))}
+                </>
+              ) : null}
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Other Organizations</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
+              <DropdownMenuItem
+                onClick={() => {
+                  const cloneId = cloneCurrentOrganization();
+                  if (!cloneId) {
+                    toast.error("Could not create organization copy.");
+                    return;
+                  }
+                  toast.success("Created a full copy of the current organization.");
+                }}
+              >
                 <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-blue-500 flex items-center justify-center text-white text-xs font-semibold">
-                    A
-                  </div>
-                  <span className="text-sm">Acme Pharma</span>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => toast.info("Organization switching coming soon")}>
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-green-500 flex items-center justify-center text-white text-xs font-semibold">
-                    G
-                  </div>
-                  <span className="text-sm">GlobalMed Inc</span>
+                  <Plus className="h-4 w-4" />
+                  <span>Create copy of current</span>
                 </div>
               </DropdownMenuItem>
             </DropdownMenuContent>

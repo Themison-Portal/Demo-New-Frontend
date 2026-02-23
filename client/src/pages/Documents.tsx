@@ -1022,6 +1022,25 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                             <span className="px-2 py-1 bg-green-50 text-green-700 text-xs rounded">
                               Indexed
                             </span>
+                          ) : doc.indexStatus === "failed" ? (
+                            <>
+                              <span
+                                className="px-2 py-1 bg-red-50 text-red-700 text-xs rounded"
+                                title={doc.indexFailureReason || "Indexing failed"}
+                              >
+                                Failed
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => retryMutation.mutate({ id: doc.id })}
+                                disabled={retryMutation.isPending}
+                                className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                title={doc.indexFailureReason || "Retry processing"}
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                              </Button>
+                            </>
                           ) : (
                             <>
                               <span className="px-2 py-1 bg-yellow-50 text-yellow-700 text-xs rounded">

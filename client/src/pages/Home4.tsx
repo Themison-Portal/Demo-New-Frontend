@@ -367,17 +367,12 @@ export default function Home4() {
   }, [currentMember?.id, state.teamMembers]);
 
   const collaborationQueue = useMemo(() => {
-    const threadsWaiting = Math.max(
-      1,
-      Math.min(12, todaySnapshot.overdue + todaySnapshot.blocked + Math.ceil(todaySnapshot.dueToday / 2))
-    );
-    const unreadMessages = Math.max(
-      threadsWaiting + quickChatMembers.length + todaySnapshot.dueToday,
-      threadsWaiting * 2
-    );
-    const mentions = Math.max(1, Math.min(6, Math.ceil((todaySnapshot.blocked + todaySnapshot.overdue) / 2)));
+    const loadScore = todaySnapshot.overdue + todaySnapshot.blocked + Math.ceil(todaySnapshot.dueToday / 2);
+    const threadsWaiting = Math.max(0, Math.min(12, loadScore));
+    const mentions = Math.max(0, Math.min(6, Math.ceil((todaySnapshot.blocked + todaySnapshot.overdue) / 2)));
+    const unreadMessages = Math.max(0, threadsWaiting + mentions);
     return { threadsWaiting, unreadMessages, mentions };
-  }, [quickChatMembers.length, todaySnapshot.blocked, todaySnapshot.dueToday, todaySnapshot.overdue]);
+  }, [todaySnapshot.blocked, todaySnapshot.dueToday, todaySnapshot.overdue]);
 
   const weekdayPressureData = useMemo(() => {
     const now = new Date();
@@ -435,10 +430,6 @@ export default function Home4() {
 
       assignBacklogTask();
     });
-
-    if (points.every((point) => point.load === 0)) {
-      return points.map((point, index) => ({ ...point, load: index === 0 ? 1 : 0 }));
-    }
 
     return points;
   }, [scopedTasks]);
@@ -538,8 +529,8 @@ export default function Home4() {
   }, []);
 
   return (
-    <div className="px-8 pb-8 pt-4">
-      <div className="mb-6">
+    <div className="px-8 pb-8">
+      <div className="sticky top-0 z-30 bg-[#F7F8FB] pb-3 pt-4">
         <div>
           <h1 className="text-[30px] font-semibold leading-[1.05] tracking-tight text-foreground">
             Welcome back, {firstName(currentMember?.name || runtimeUser.name)}
@@ -550,7 +541,7 @@ export default function Home4() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.9fr)_minmax(300px,1fr)]">
+      <div className="mt-3 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.9fr)_minmax(300px,1fr)]">
         <div className="space-y-4 xl:contents">
           <section
             ref={pulseCardRef}
@@ -680,7 +671,12 @@ export default function Home4() {
                     </p>
                   </div>
                   <span className="mt-0.5 flex h-8 w-8 translate-x-1 items-center justify-center rounded-[7px] bg-primary/10">
-                    <Sparkles className="h-4 w-4 text-primary" />
+                    <DotLottieReact
+                      src="/animations/genetics-lottie.json"
+                      loop
+                      autoplay
+                      className="h-6 w-6"
+                    />
                   </span>
                 </div>
 
@@ -707,7 +703,7 @@ export default function Home4() {
 
             </article>
 
-            <section className="relative overflow-hidden rounded-lg border border-gray-200 bg-white px-5 pb-5 pt-[18px]">
+            <section className="relative flex h-full min-h-[460px] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white px-5 pb-5 pt-[18px]">
               <span className="pointer-events-none absolute right-4 top-5 flex h-8 w-8 items-center justify-center rounded-[7px] bg-primary/10">
                 <Clock3 className="h-4 w-4 text-primary" />
               </span>
@@ -719,7 +715,7 @@ export default function Home4() {
                 </p>
               </div>
 
-              <div className="space-y-2.5">
+              <div className="flex-1 space-y-2.5">
                 {todayTasks.map((task) => (
                   <div key={task.id} className="rounded-lg border border-gray-200 bg-[#FAFAFA] p-3">
                     <div className="mb-1 flex items-center justify-between gap-2">

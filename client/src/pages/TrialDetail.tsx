@@ -478,6 +478,10 @@ export default function TrialDetail() {
       await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
       await utils.trials.list.invalidate({ demoMode: currentDataMode });
       await utils.trials.getContext.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode });
+      if (executionMapSummary?.id) {
+        await loadExecutionMap(executionMapSummary.id).catch(() => undefined);
+      }
       toast.success("Trial updated");
     },
     onError: (error) => {
@@ -1172,6 +1176,7 @@ export default function TrialDetail() {
           .trim();
         if (/(schedule|visit window|study days|soa|soe)/.test(normalized)) return "schedule";
         if (/(inclusion|exclusion|eligib)/.test(normalized)) return "eligibility";
+        if (/(randomi[sz]ation|irt|allocation)/.test(normalized)) return "randomization";
         if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "dosing";
         if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "procedure";
         if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "lab";
@@ -1187,8 +1192,8 @@ export default function TrialDetail() {
           return all.findIndex((row) => normalizeSectionKey(row.name) === key) === index;
         });
 
-      return dedupedSections
-      .map((section) => ({
+      const mappedSections = dedupedSections
+        .map((section) => ({
           id: section.id,
           name: section.name,
           dateReference: section.dateReference
@@ -1199,6 +1204,57 @@ export default function TrialDetail() {
           linkedTaskIds: section.linkedTaskIds ?? [],
           linkedPhaseIds: section.linkedPhaseIds ?? [],
         }));
+
+      const hasEnrollmentSection = mappedSections.some(
+        (section) => normalizeSectionKey(section.name) === "randomization"
+      );
+      if (!hasEnrollmentSection) {
+        const enrollmentMatches = setupPhases.flatMap((phase) =>
+          phase.tasks
+            .filter((task) => {
+              const normalizedName = String(task.name || "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
+              const normalizedRef = String(task.protocolReference?.section || "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
+              return (
+                normalizedName.includes("enroll") ||
+                normalizedName.includes("enrol") ||
+                normalizedName.includes("random") ||
+                normalizedName.includes("irt") ||
+                normalizedRef.includes("enroll") ||
+                normalizedRef.includes("enrol") ||
+                normalizedRef.includes("random") ||
+                normalizedRef.includes("irt")
+              );
+            })
+            .map((task) => ({
+              taskId: task.id,
+              phaseId: phase.id,
+              page: task.protocolReference?.page ?? null,
+            }))
+        );
+
+        const linkedTaskIds = Array.from(new Set(enrollmentMatches.map((row) => row.taskId)));
+        const linkedPhaseIds = Array.from(new Set(enrollmentMatches.map((row) => row.phaseId)));
+        const firstPage =
+          enrollmentMatches.find((row) => typeof row.page === "number" && Number.isFinite(row.page))?.page ??
+          null;
+        mappedSections.push({
+          id: "fallback-enrollment-randomization",
+          name: "Enrollment & Randomization",
+          dateReference: null,
+          pageReference: firstPage ? `P.${firstPage}` : null,
+          pageStart: firstPage,
+          linkedTaskIds,
+          linkedPhaseIds,
+        });
+      }
+
+      return mappedSections;
     }
 
     if (setupPhases.length === 0) return [];
@@ -1230,6 +1286,16 @@ export default function TrialDetail() {
           normalizedName.includes("inclusion") ||
           normalizedName.includes("exclusion") ||
           normalizedName.includes("consent"),
+      },
+      {
+        id: "enrollment-randomization",
+        name: "Enrollment & Randomization",
+        match: (task, normalizedName) =>
+          task.category === "coordination" ||
+          normalizedName.includes("enroll") ||
+          normalizedName.includes("enrol") ||
+          normalizedName.includes("random") ||
+          normalizedName.includes("irt"),
       },
       {
         id: "dosing",
@@ -1646,6 +1712,8 @@ export default function TrialDetail() {
             sections={setupSections}
             view={setupScaffoldView}
             onViewChange={setSetupScaffoldView}
+            timelineStartDate={trial?.startDate ? new Date(trial.startDate) : null}
+            timelineEndDate={trial?.endDate ? new Date(trial.endDate) : null}
             onConfirm={handleLaunchExecutionMap}
             onAddTask={handleAddSetupTask}
             onEditTask={handleEditSetupTask}

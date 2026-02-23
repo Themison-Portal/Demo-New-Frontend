@@ -384,8 +384,11 @@ const STORAGE_KEY_ACTIVE_MODE = `${STORAGE_KEY}-active-mode`;
 const STORAGE_KEY_DEFAULT_SAMPLE = `${STORAGE_KEY}-default-sample`;
 const STORAGE_KEY_DEFAULT_FULL = `${STORAGE_KEY}-default-full`;
 const STORAGE_KEY_DEFAULT_BUILDING = `${STORAGE_KEY}-default-building`;
+const ORGANIZATION_PROFILE_STORAGE_KEY = "themison-organization-profile:v1";
 const LEGACY_MEMBER_EMAIL_DOMAIN = "@themison.com";
 const CURRENT_MEMBER_EMAIL_DOMAIN = "@azorg.be";
+const ZAS_MEMBER_EMAIL_DOMAIN = "@zas.be";
+const ZAS_MEMBER_SITE = "Antwerp";
 const COLLAB_DEMO_STORAGE_PREFIXES = [
   "themison-collab-demo-conversations-",
   "themison-collab-demo-inbox-",
@@ -475,6 +478,105 @@ const migrateDemoStateMemberEmails = (value: DemoState): DemoState => {
 
 const normalizeMemberLookup = (value: string | null | undefined) => String(value || "").trim().toLowerCase();
 
+const sanitizeEmailLocalPart = (value: string) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, ".")
+    .replace(/\.{2,}/g, ".")
+    .replace(/^\.|\.$/g, "");
+
+const buildMemberEmailLocalPart = (member: TeamMember) => {
+  const rawEmail = String(member.email || "").trim();
+  if (rawEmail.includes("@")) {
+    const local = sanitizeEmailLocalPart(rawEmail.slice(0, rawEmail.indexOf("@")));
+    if (local) return local;
+  } else {
+    const local = sanitizeEmailLocalPart(rawEmail);
+    if (local) return local;
+  }
+
+  const nameLocal = sanitizeEmailLocalPart(String(member.name || "").replace(/\s+/g, "."));
+  if (nameLocal) return nameLocal;
+
+  const idToken = sanitizeEmailLocalPart(String(member.id || ""));
+  return idToken || "member";
+};
+
+const shouldUseZasMemberRules = () => {
+  if (typeof window === "undefined") return false;
+  try {
+    const raw = window.localStorage.getItem(ORGANIZATION_PROFILE_STORAGE_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<{ name: string; legalName: string; website: string }>;
+    const probe = `${parsed?.name || ""} ${parsed?.legalName || ""} ${parsed?.website || ""}`
+      .toLowerCase()
+      .trim();
+    if (!probe) return false;
+    return /\bzas\b/.test(probe) || probe.includes("zas.be");
+  } catch {
+    return false;
+  }
+};
+
+const alignStateToActiveOrganization = (targetState: DemoState): DemoState => {
+  if (!shouldUseZasMemberRules()) return targetState;
+  if (!Array.isArray(targetState.teamMembers) || targetState.teamMembers.length === 0) return targetState;
+
+  let changed = false;
+  const nextTeamMembers = targetState.teamMembers.map((member) => {
+    const localPart = buildMemberEmailLocalPart(member);
+    const nextEmail = `${localPart}${ZAS_MEMBER_EMAIL_DOMAIN}`;
+    const nextSite = ZAS_MEMBER_SITE;
+    if (member.email === nextEmail && member.site === nextSite) {
+      return member;
+    }
+    changed = true;
+    return {
+      ...member,
+      email: nextEmail,
+      site: nextSite,
+    };
+  });
+
+  if (!changed) return targetState;
+  return {
+    ...targetState,
+    teamMembers: nextTeamMembers,
+  };
+};
+
+const getMemberIdentityKeys = (member: TeamMember): string[] => {
+  const keys: string[] = [];
+  const id = String(member.id || "").trim().toLowerCase();
+  const email = normalizeMemberLookup(member.email);
+  const name = normalizeMemberLookup(member.name);
+  if (id) keys.push(`id:${id}`);
+  if (email) keys.push(`email:${email}`);
+  if (name) keys.push(`name:${name}`);
+  return keys;
+};
+
+const mergeUniqueTeamMembers = (primary: TeamMember[], secondary: TeamMember[]): TeamMember[] => {
+  const merged: TeamMember[] = [];
+  const seen = new Set<string>();
+
+  const pushUnique = (member: TeamMember) => {
+    const keys = getMemberIdentityKeys(member);
+    if (keys.length === 0) {
+      merged.push(member);
+      return;
+    }
+    if (keys.some((key) => seen.has(key))) return;
+    keys.forEach((key) => seen.add(key));
+    merged.push(member);
+  };
+
+  primary.forEach(pushUnique);
+  secondary.forEach(pushUnique);
+  return merged;
+};
+
 const mergeTeamMemberAvatars = (target: DemoState, sourceMembers: TeamMember[]) => {
   if (!Array.isArray(target.teamMembers) || target.teamMembers.length === 0) return target;
   if (!Array.isArray(sourceMembers) || sourceMembers.length === 0) return target;
@@ -533,6 +635,34 @@ const readStateFromStorage = (storageKey: string, mode: DemoState["dataMode"]): 
   }
 };
 
+const getSampleMembersForBuilding = (): TeamMember[] => {
+  if (typeof window === "undefined") return [...initialDemoState.teamMembers];
+
+  const sampleCurrent = readStateFromStorage(STORAGE_KEY_SAMPLE, "sample");
+  const sampleDefault = readStateFromStorage(STORAGE_KEY_DEFAULT_SAMPLE, "sample");
+  const sourceMembers =
+    (sampleCurrent?.teamMembers && sampleCurrent.teamMembers.length > 0
+      ? sampleCurrent.teamMembers
+      : sampleDefault?.teamMembers && sampleDefault.teamMembers.length > 0
+      ? sampleDefault.teamMembers
+      : initialDemoState.teamMembers) || [];
+
+  return sourceMembers.map((member) => ({ ...member }));
+};
+
+const syncBuildingTeamMembersFromSample = (targetState: DemoState): DemoState => {
+  if (targetState.dataMode !== "building") return targetState;
+
+  const sampleMembers = getSampleMembersForBuilding();
+  if (sampleMembers.length === 0) return targetState;
+
+  const mergedMembers = mergeUniqueTeamMembers(sampleMembers, targetState.teamMembers || []);
+  return {
+    ...targetState,
+    teamMembers: mergedMembers,
+  };
+};
+
 const syncModeAvatarsFromStoredSources = (targetState: DemoState): DemoState => {
   if (typeof window === "undefined") return targetState;
 
@@ -561,22 +691,37 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(stored) as DemoState;
         const hydrated = withMode(migrateDemoStateMemberEmails(parsed), activeMode);
-        return activeMode === "full" || activeMode === "building"
-          ? syncModeAvatarsFromStoredSources(hydrated)
-          : hydrated;
+        const modeAligned =
+          activeMode === "building" ? syncBuildingTeamMembersFromSample(hydrated) : hydrated;
+        const avatarAligned = activeMode === "full" || activeMode === "building"
+          ? syncModeAvatarsFromStoredSources(modeAligned)
+          : modeAligned;
+        return alignStateToActiveOrganization(avatarAligned);
       } catch (e) {
         console.error("Failed to parse stored state:", e);
-        return withMode(initialDemoState, "sample");
+        return alignStateToActiveOrganization(withMode(initialDemoState, "sample"));
       }
     }
-    return withMode(initialDemoState, "sample");
+    return alignStateToActiveOrganization(withMode(initialDemoState, "sample"));
   });
+
+  useEffect(() => {
+    const aligned = alignStateToActiveOrganization(state);
+    if (aligned !== state) {
+      setState(aligned);
+    }
+  }, [state]);
 
   // Save to localStorage whenever state changes
   useEffect(() => {
     const key = getStorageKeyForMode(state.dataMode);
+    const persistState = alignStateToActiveOrganization(state);
+    if (persistState !== state) {
+      setState(persistState);
+      return;
+    }
     try {
-      localStorage.setItem(key, JSON.stringify(state));
+      localStorage.setItem(key, JSON.stringify(persistState));
       localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
     } catch (error) {
       if (!isQuotaExceededError(error)) {
@@ -588,7 +733,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       clearCollaborationDemoStorage();
 
       try {
-        localStorage.setItem(key, JSON.stringify(state));
+        localStorage.setItem(key, JSON.stringify(persistState));
         localStorage.setItem(STORAGE_KEY_ACTIVE_MODE, state.dataMode);
         if (!quotaToastShownRef.current) {
           toast.success("Cleared cached collaboration demo data to save profile photos.");
@@ -659,26 +804,15 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       tasks: [],
       documents: [],
       milestones: [],
-      teamMembers: [
-        {
-          id: "member-1",
-          name: "Kaleb Sanders",
-          email: "kaleb.s@azorg.be",
-          role: "Principal Investigator",
-          clinicalRole: "Principal Investigator",
-          appRole: "Superadmin",
-          team: "Clinical",
-          site: "Copenhagen",
-          status: "Active",
-          initials: "KS",
-        },
-      ],
+      teamMembers: [],
       trials: [],
       activeTrials: 0,
       blockedTasks: 0,
       dataMode: 'building',
     };
-    const nextState = syncModeAvatarsFromStoredSources(withMode(emptyState, "building"));
+    const nextState = syncModeAvatarsFromStoredSources(
+      syncBuildingTeamMembersFromSample(withMode(emptyState, "building"))
+    );
     setState(nextState);
     localStorage.setItem(STORAGE_KEY_BUILDING, JSON.stringify(nextState));
   };
@@ -768,31 +902,20 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
   const getFallbackDefaultStateForMode = (mode: DemoState["dataMode"]): DemoState => {
     if (mode === "building") {
       return syncModeAvatarsFromStoredSources(
-        withMode(
-          {
-            tasks: [],
-            documents: [],
-            milestones: [],
-            teamMembers: [
-              {
-                id: "member-1",
-                name: "Kaleb Sanders",
-                email: "kaleb.s@azorg.be",
-                role: "Principal Investigator",
-                clinicalRole: "Principal Investigator",
-                appRole: "Superadmin",
-                team: "Clinical",
-                site: "Copenhagen",
-                status: "Active",
-                initials: "KS",
-              },
-            ],
-            trials: [],
-            activeTrials: 0,
-            blockedTasks: 0,
-            dataMode: "building",
-          },
-          "building"
+        syncBuildingTeamMembersFromSample(
+          withMode(
+            {
+              tasks: [],
+              documents: [],
+              milestones: [],
+              teamMembers: [],
+              trials: [],
+              activeTrials: 0,
+              blockedTasks: 0,
+              dataMode: "building",
+            },
+            "building"
+          )
         )
       );
     }
@@ -809,9 +932,10 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     try {
       const parsed = JSON.parse(stored) as DemoState;
       const hydrated = withMode(migrateDemoStateMemberEmails(parsed), mode);
+      const modeAligned = mode === "building" ? syncBuildingTeamMembersFromSample(hydrated) : hydrated;
       return mode === "full" || mode === "building"
-        ? syncModeAvatarsFromStoredSources(hydrated)
-        : hydrated;
+        ? syncModeAvatarsFromStoredSources(modeAligned)
+        : modeAligned;
     } catch (error) {
       console.error(`Failed to parse stored default state for ${mode}:`, error);
       return fallbackState;
@@ -854,7 +978,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(stored) as DemoState;
         const hydrated = withMode(migrateDemoStateMemberEmails(parsed), "building");
-        setState(syncModeAvatarsFromStoredSources(hydrated));
+        const withSampleMembers = syncBuildingTeamMembersFromSample(hydrated);
+        setState(syncModeAvatarsFromStoredSources(withSampleMembers));
         return;
       } catch (e) {
         console.error("Failed to parse stored building state:", e);

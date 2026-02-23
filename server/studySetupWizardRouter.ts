@@ -17,6 +17,7 @@ import {
 const FALLBACK_SECTION_NAMES = [
   "Schedule of Events",
   "Inclusion / Exclusion",
+  "Enrollment & Randomization",
   "Dosing & Administration",
   "Procedures & Assessments",
   "Lab & Samples",
@@ -384,6 +385,7 @@ function canonicalSectionName(name: string) {
   if (!normalized) return null;
   if (/(schedule|study days|visit window|visit schedule|soa|soe)/.test(normalized)) return "Schedule of Events";
   if (/(inclusion|exclusion|eligib)/.test(normalized)) return "Inclusion / Exclusion";
+  if (/(enroll|enrol|randomi[sz]ation|irt|allocation)/.test(normalized)) return "Enrollment & Randomization";
   if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "Dosing & Administration";
   if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "Procedures & Assessments";
   if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "Lab & Samples";
@@ -454,6 +456,30 @@ function scheduleVisitLabel(visit: { name: string; day?: string | null }) {
   const day = String(visit?.day || "").trim();
   if (!name) return "";
   return day ? `${name} (${day})` : name;
+}
+
+function parseScheduleDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const dateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]);
+    const day = Number(dateOnly[3]);
+    if (Number.isFinite(year) && Number.isFinite(month) && Number.isFinite(day)) {
+      const parsed = new Date(year, month - 1, day);
+      if (
+        parsed.getFullYear() === year &&
+        parsed.getMonth() === month - 1 &&
+        parsed.getDate() === day
+      ) {
+        return parsed;
+      }
+    }
+  }
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 function normalizeScheduleTask(task: any, fallbackPage: number | null) {
@@ -1009,7 +1035,7 @@ Return ONLY valid JSON in this shape:
 
 Rules:
 - Use realistic phase names from protocol schedule.
-- Use protocol sections for left-map navigation: Schedule of Events, Inclusion / Exclusion, Dosing & Administration, Procedures & Assessments, Lab & Samples, Adverse Events & Safety, Concomitant Medications.
+- Use protocol sections for left-map navigation: Schedule of Events, Inclusion / Exclusion, Enrollment & Randomization, Dosing & Administration, Procedures & Assessments, Lab & Samples, Adverse Events & Safety, Concomitant Medications.
 - Tasks must be precise (no vague labels like "Lab work").
 - Every visit phase must include a data-entry task.
 - Screening must include consent + inclusion/exclusion checks.
@@ -1383,7 +1409,7 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
             await db.createTask({
               phaseId: createdPhase.id,
               name: task.name,
-              suggestedDate: task.suggestedDate ? new Date(task.suggestedDate) : null,
+              suggestedDate: parseScheduleDate(task.suggestedDate),
               duration:
                 (typeof task.estimatedDuration === "number" && Number.isFinite(task.estimatedDuration)
                   ? Math.max(1, Math.round(task.estimatedDuration))
@@ -1544,14 +1570,18 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
       const existingTask = await db.getTaskById(taskId);
       await db.updateTask(taskId, {
         ...updates,
-        suggestedDate: updates.suggestedDate ? new Date(updates.suggestedDate) : undefined,
+        suggestedDate:
+          updates.suggestedDate === undefined ? undefined : parseScheduleDate(updates.suggestedDate),
       });
 
       const afterTask = existingTask
         ? {
             ...existingTask,
             ...updates,
-            suggestedDate: updates.suggestedDate ? new Date(updates.suggestedDate) : existingTask.suggestedDate,
+            suggestedDate:
+              updates.suggestedDate === undefined
+                ? existingTask.suggestedDate
+                : parseScheduleDate(updates.suggestedDate),
           }
         : undefined;
 

@@ -172,11 +172,11 @@ function Router() {
     <DashboardLayout breadcrumbs={breadcrumbs} breadcrumbIcon={breadcrumbIcon}>
       <Switch>
         <Route path="/">
-          {() => <Overview />}
+          {() => <Home4 />}
         </Route>
         <Route path="/home2" component={Home2} />
         <Route path="/home3" component={Home3} />
-        <Route path="/home4" component={Home4} />
+        <Route path="/home4" component={Overview} />
         <Route path="/workspace" component={TrialWorkspace} />
         <Route path="/trial-workspace" component={TrialWorkspace} />
         <Route path="/trial/:id/assistant">{(params) => (
