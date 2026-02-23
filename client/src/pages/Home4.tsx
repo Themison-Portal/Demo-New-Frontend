@@ -61,6 +61,14 @@ function isBeforeDay(a: Date, b: Date): boolean {
   return ax.getTime() < bx.getTime();
 }
 
+function dayDiff(from: Date, to: Date): number {
+  const fromDay = new Date(from);
+  fromDay.setHours(0, 0, 0, 0);
+  const toDay = new Date(to);
+  toDay.setHours(0, 0, 0, 0);
+  return Math.round((toDay.getTime() - fromDay.getTime()) / (24 * 60 * 60 * 1000));
+}
+
 function firstName(value?: string | null): string {
   const normalized = String(value || "").trim();
   if (!normalized) return "User";
@@ -308,14 +316,29 @@ export default function Home4() {
   const todayTasks = useMemo(() => {
     const now = new Date();
     const priorityRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-    const ranked = scopedTasks
+    const candidates = scopedTasks
       .filter((task) => !isDoneStatus(task.status))
       .map((task) => {
         const due = parseDate(task.dueDate);
         const overdue = Boolean(due && isBeforeDay(due, now));
         const dueToday = Boolean(due && isSameDay(due, now));
         const status = String(task.status || "todo").toLowerCase();
-        const baseScore = overdue ? 6 : dueToday ? 5 : status === "blocked" ? 4 : status === "in_progress" ? 3 : 2;
+        const blocked = status === "blocked" || status === "waiting";
+        const inProgress = status === "in_progress";
+        const dueInDays = due ? dayDiff(now, due) : null;
+        const dueSoon = dueInDays !== null && dueInDays > 0 && dueInDays <= 2;
+        const actionableToday = overdue || dueToday || blocked || inProgress || dueSoon;
+        const baseScore = overdue
+          ? 8
+          : dueToday
+            ? 7
+            : blocked
+              ? 6
+              : inProgress
+                ? 5
+                : dueSoon
+                  ? 4
+                  : 2;
         const priorityScore = priorityRank[String(task.priority || "low").toLowerCase()] || 1;
         const score = baseScore * 10 + priorityScore;
         const trialId = task.mapId ? mapById.get(task.mapId) : undefined;
@@ -326,40 +349,38 @@ export default function Home4() {
           trail: trialId ? trialLabelById.get(trialId) || trialId : "Cross-trial",
           dueLabel: formatDueDate(task.dueDate),
           score,
-          tag: overdue ? "Overdue" : dueToday ? "Today" : status === "blocked" ? "Blocked" : "Open",
+          actionableToday,
+          tag: overdue
+            ? "Overdue"
+            : dueToday
+              ? "Today"
+              : blocked
+                ? "Blocked"
+                : inProgress
+                  ? "In progress"
+                  : dueSoon
+                    ? "Soon"
+                    : "Open",
           tagClass:
             overdue
               ? "border-red-200 bg-red-50 text-red-700"
               : dueToday
                 ? "border-amber-200 bg-amber-50 text-amber-700"
-                : status === "blocked"
+                : blocked
                   ? "border-violet-200 bg-violet-50 text-violet-700"
+                  : inProgress
+                    ? "border-blue-200 bg-blue-50 text-blue-700"
+                    : dueSoon
+                      ? "border-cyan-200 bg-cyan-50 text-cyan-700"
                   : "border-blue-200 bg-blue-50 text-blue-700",
         };
-      })
+      });
+
+    return candidates
+      .filter((task) => task.actionableToday)
       .sort((a, b) => b.score - a.score)
       .slice(0, 5);
-
-    if (ranked.length > 0) return ranked;
-
-    return state.tasks
-      .filter((task) => !task.completed)
-      .map((task, index) => ({
-        id: task.id,
-        title: task.name,
-        trail: "General workspace",
-        dueLabel: "Today",
-        score: 100 - index,
-        tag: task.status === "waiting_on_monitor" ? "Blocked" : task.status === "due_today" ? "Today" : "Open",
-        tagClass:
-          task.status === "waiting_on_monitor"
-            ? "border-violet-200 bg-violet-50 text-violet-700"
-            : task.status === "due_today"
-              ? "border-amber-200 bg-amber-50 text-amber-700"
-              : "border-blue-200 bg-blue-50 text-blue-700",
-      }))
-      .slice(0, 5);
-  }, [mapById, scopedTasks, state.tasks, trialLabelById]);
+  }, [mapById, scopedTasks, trialLabelById]);
 
   const quickChatMembers = useMemo(() => {
     const currentId = currentMember?.id;
@@ -399,11 +420,12 @@ export default function Home4() {
     const indexByDate = new Map(points.map((point, index) => [point.dateKey, index]));
 
     let backlogCursor = 0;
-    const backlogPattern = [0, 1, 0, 2, 1, 3, 0, 2, 4, 1, 5, 3, 6] as const;
+    const backlogPattern = [1, 2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 1] as const;
     const assignBacklogTask = () => {
-      const slot = backlogPattern[backlogCursor % backlogPattern.length] ?? 0;
+      const slot = backlogPattern[backlogCursor % backlogPattern.length] ?? 1;
       backlogCursor += 1;
-      points[slot].load += 1;
+      const safeSlot = Math.max(1, Math.min(points.length - 1, slot));
+      points[safeSlot].load += 1;
     };
 
     openScopedTasks.forEach((task) => {
@@ -561,7 +583,7 @@ export default function Home4() {
             <div className="mb-10 pr-14">
               <h2 className="text-[22px] font-semibold leading-[30px] text-[#0E0017]">Clinical Execution Pulse</h2>
               <p className="mt-1 text-[13px] font-medium leading-[18px] text-[#75778B]">
-                Tasks to action across 7 business days (today highlighted).
+                Actionable queue across 7 business days (today highlighted).
               </p>
             </div>
 
@@ -606,7 +628,7 @@ export default function Home4() {
                             item.highlighted ? "font-semibold text-[#0a0a0a]" : "font-normal text-[#525252]"
                           }`}
                         >
-                          {item.pressureValue} tasks
+                          {item.pressureValue} queued
                         </p>
 
                         <div className="absolute bottom-0 left-0 right-0">
@@ -690,6 +712,10 @@ export default function Home4() {
                       <AlertTriangle className="h-4 w-4" />
                       {todaySnapshot.overdue} tasks overdue
                     </div>
+                    <div className="flex items-center gap-2 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-violet-700">
+                      <Clock3 className="h-4 w-4" />
+                      {todaySnapshot.blocked} tasks blocked / waiting
+                    </div>
                     <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-700">
                       <CheckCircle2 className="h-4 w-4" />
                       {todaySnapshot.completedYesterday} completed yesterday
@@ -716,18 +742,24 @@ export default function Home4() {
               </div>
 
               <div className="flex-1 space-y-2.5">
-                {todayTasks.map((task) => (
-                  <div key={task.id} className="rounded-lg border border-gray-200 bg-[#FAFAFA] p-3">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className={`inline-flex rounded px-2 py-0.5 text-[11px] font-medium border ${task.tagClass}`}>
-                        {task.tag}
-                      </span>
-                      <span className="text-xs text-[#75778B]">{task.dueLabel}</span>
-                    </div>
-                    <p className="truncate text-sm font-medium text-[#0E0017]">{task.title}</p>
-                    <p className="truncate text-xs text-[#75778B]">{task.trail}</p>
+                {todayTasks.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-gray-300 bg-[#FAFAFA] p-4 text-sm text-[#75778B]">
+                    No urgent tasks for today.
                   </div>
-                ))}
+                ) : (
+                  todayTasks.map((task) => (
+                    <div key={task.id} className="rounded-lg border border-gray-200 bg-[#FAFAFA] p-3">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className={`inline-flex rounded px-2 py-0.5 text-[11px] font-medium border ${task.tagClass}`}>
+                          {task.tag}
+                        </span>
+                        <span className="text-xs text-[#75778B]">{task.dueLabel}</span>
+                      </div>
+                      <p className="truncate text-sm font-medium text-[#0E0017]">{task.title}</p>
+                      <p className="truncate text-xs text-[#75778B]">{task.trail}</p>
+                    </div>
+                  ))
+                )}
               </div>
             </section>
           </div>

@@ -238,7 +238,7 @@ export const taskCategoryEnum = mysqlEnum("task_category", [
   "custom",
 ]);
 export const taskPriorityEnum = mysqlEnum("task_priority", ["critical", "high", "medium", "low"]);
-export const taskStatusEnum = mysqlEnum("task_status", [
+const taskStatusValues = [
   "suggested",
   "confirmed",
   "todo",
@@ -248,7 +248,8 @@ export const taskStatusEnum = mysqlEnum("task_status", [
   "done",
   "skipped",
   "cancelled",
-]);
+] as const;
+export const taskStatusEnum = mysqlEnum("task_status", taskStatusValues);
 export const taskRoleEnum = mysqlEnum("task_role", [
   "pi",
   "sub_i",
@@ -474,8 +475,8 @@ export const mapTaskStatusHistory = mysqlTable(
     mapId: varchar("mapId", { length: 36 }).notNull(),
     trialId: varchar("trialId", { length: 50 }).notNull(),
     taskId: varchar("taskId", { length: 36 }).notNull(),
-    fromStatus: taskStatusEnum,
-    toStatus: taskStatusEnum.notNull(),
+    fromStatus: mysqlEnum("fromStatus", taskStatusValues),
+    toStatus: mysqlEnum("toStatus", taskStatusValues).notNull(),
     reason: text("reason"),
     source: varchar("source", { length: 32 }).default("status_change").notNull(),
     changedBy: int("changedBy"),

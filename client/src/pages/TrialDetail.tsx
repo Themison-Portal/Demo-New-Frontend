@@ -192,6 +192,33 @@ function formatRoleLabel(role?: string | null): string {
   return alias[raw] || titleCase(raw);
 }
 
+function toAssignmentMemberShape(member: { id: string; name?: string; role?: string; clinicalRole?: string }) {
+  return {
+    id: String(member.id),
+    name: member.name || "",
+    role: member.role || "",
+    clinicalRole: member.clinicalRole || "",
+  };
+}
+
+function parseMemberNumericId(value: string | number | null | undefined): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const rounded = Math.round(value);
+    return rounded > 0 ? rounded : null;
+  }
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    const rounded = Math.round(asNumber);
+    return rounded > 0 ? rounded : null;
+  }
+  const trailingDigits = raw.match(/(\d+)(?!.*\d)/);
+  if (!trailingDigits) return null;
+  const parsed = Number.parseInt(trailingDigits[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 export default function TrialDetail() {
   const [, navigate] = useLocation();
   const [, params] = useRoute("/trial/:id");
@@ -210,6 +237,7 @@ export default function TrialDetail() {
   const [setupTaskModalMode, setSetupTaskModalMode] = useState<SetupTaskModalMode>("create");
   const [setupEditingTaskId, setSetupEditingTaskId] = useState<string | null>(null);
   const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
+  const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
   const [setupTaskForm, setSetupTaskForm] = useState<SetupTaskFormState>({
     title: "",
     description: "",
@@ -295,7 +323,6 @@ export default function TrialDetail() {
   const mapDependencies = useMapStore((store) => store.dependencies);
   const mapSections = useMapStore((store) => store.protocolMapSections);
   const loadExecutionMap = useMapStore((store) => store.loadMap);
-  const launchExecutionMap = useMapStore((store) => store.launchMap);
   const addExecutionTask = useMapStore((store) => store.addTask);
   const updateExecutionTask = useMapStore((store) => store.updateTask);
   const removeExecutionTask = useMapStore((store) => store.removeTask);
@@ -517,6 +544,46 @@ export default function TrialDetail() {
         })),
     [state.teamMembers, assignedMemberIds]
   );
+  const scaffoldAssignmentMembers = useMemo(
+    () =>
+      (state.teamMembers || [])
+        .filter((member) => assignedMemberIds.includes(member.id))
+        .map(toAssignmentMemberShape),
+    [state.teamMembers, assignedMemberIds]
+  );
+  const fallbackScaffoldAssignmentMembers = useMemo(
+    () => (state.teamMembers || []).map(toAssignmentMemberShape),
+    [state.teamMembers]
+  );
+  const effectiveScaffoldAssignmentMembers = useMemo(() => {
+    const selected = scaffoldAssignmentMembers;
+    const universe = fallbackScaffoldAssignmentMembers;
+    const seeded = selected.length > 0 ? selected : universe;
+    const membersById = new Map<string, (typeof seeded)[number]>();
+
+    for (const member of seeded) {
+      membersById.set(String(member.id), member);
+    }
+
+    if (selected.length > 0) {
+      const roleToken = (member: { role?: string; clinicalRole?: string }) =>
+        normalizeRoleToken(`${member.clinicalRole || ""} ${member.role || ""}`);
+      const hasRole = (tokens: string[]) =>
+        Array.from(membersById.values()).some((member) => tokens.includes(roleToken(member)));
+      const addRoleCoverage = (tokens: string[]) => {
+        if (hasRole(tokens)) return;
+        const match = universe.find((member) => tokens.includes(roleToken(member)));
+        if (match) membersById.set(String(match.id), match);
+      };
+
+      addRoleCoverage(["pi", "sub_i"]);
+      addRoleCoverage(["crc", "study_coordinator"]);
+      addRoleCoverage(["nurse"]);
+      addRoleCoverage(["pharmacist", "lab_tech", "data_manager", "regulatory_coordinator"]);
+    }
+
+    return Array.from(membersById.values());
+  }, [scaffoldAssignmentMembers, fallbackScaffoldAssignmentMembers]);
 
   const persistAssignedMembers = (nextIds: string[]) => {
     setAssignedMemberIds(nextIds);
@@ -685,6 +752,10 @@ export default function TrialDetail() {
         trialId: trial.id,
         protocolId: protocols[0].id,
         clearExisting: true,
+        demoMode: currentDataMode,
+        trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
+        trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
+        assignmentMembers: effectiveScaffoldAssignmentMembers,
       });
       if (cancelledGenerationRunsRef.current.has(runId)) {
         return;
@@ -776,6 +847,10 @@ export default function TrialDetail() {
         trialId,
         protocolId,
         clearExisting: true,
+        demoMode: currentDataMode,
+        trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
+        trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
+        assignmentMembers: effectiveScaffoldAssignmentMembers,
       })
       .then(async (result) => {
         await refetchExecutionMapSummary();
@@ -795,18 +870,49 @@ export default function TrialDetail() {
     importLegacyScaffold.isPending,
     refetchExecutionMapSummary,
     loadExecutionMap,
+    trial?.startDate,
+    trial?.endDate,
+    effectiveScaffoldAssignmentMembers,
   ]);
 
   const parseSampleSizeToNumber = (value?: string | null) => {
-    const digits = String(value ?? "").replace(/[^0-9]/g, "");
-    if (!digits) return 0;
-    const parsed = Number.parseInt(digits, 10);
+    const normalized = String(value ?? "")
+      .replace(/\u00a0/g, " ")
+      .trim();
+    if (!normalized) return 0;
+    const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
+    if (!match) return 0;
+    const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const normalizeTargetPatients = (rawTarget: number | null | undefined, sampleSize?: string | null) => {
+    const explicit = Number(rawTarget || 0);
+    const fallback = parseSampleSizeToNumber(sampleSize);
+    if (explicit <= 0) return fallback;
+
+    // Compatibility fix: older parsing concatenated all digits in sample-size strings
+    // (e.g., "117 / 5760" -> 1175760). If that exact pattern is detected, prefer first token.
+    const allDigits = Number.parseInt(String(sampleSize ?? "").replace(/[^0-9]/g, ""), 10);
+    if (
+      fallback > 0 &&
+      Number.isFinite(allDigits) &&
+      allDigits === explicit &&
+      fallback !== explicit
+    ) {
+      return fallback;
+    }
+
+    // Defensive fallback for historical malformed targets (e.g. 1175760 from concatenated values).
+    if (explicit >= 500000) {
+      const leading = Number.parseInt(String(explicit).slice(0, 3), 10);
+      if (Number.isFinite(leading) && leading > 0 && leading <= 5000) {
+        return leading;
+      }
+    }
+    return explicit;
+  };
   const enrolledPatients = trial?.enrolledPatients || 0;
-  const targetPatients =
-    (trial?.targetPatients && trial.targetPatients > 0 ? trial.targetPatients : 0) ||
-    parseSampleSizeToNumber(trial?.sampleSize);
+  const targetPatients = normalizeTargetPatients(trial?.targetPatients, trial?.sampleSize);
   const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
   const scaffoldTasks =
     scopedMapTasks.length > 0
@@ -1484,6 +1590,7 @@ export default function TrialDetail() {
     const memberForAssignee = setupAssignedMembersForTaskForm.find(
       (member) =>
         String(member.id) === String(task.assignedUserId || "") ||
+        String(member.id) === `member-${String(task.assignedUserId || "")}` ||
         member.name === (task.suggestedAssignee || "")
     );
     const predecessorTaskIds = scopedMapDependencies
@@ -1528,6 +1635,7 @@ export default function TrialDetail() {
     const selectedMember = setupAssignedMembersForTaskForm.find(
       (member) => String(member.id) === setupTaskForm.assigneeMemberId
     );
+    const selectedMemberNumericId = selectedMember ? parseMemberNumericId(selectedMember.id) : null;
     const assignedRole =
       setupTaskForm.assignedRole &&
       SETUP_ASSIGNED_ROLE_OPTIONS.includes(setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
@@ -1558,7 +1666,7 @@ export default function TrialDetail() {
           status: setupTaskForm.status,
           priority: setupTaskForm.priority,
           assignedRole,
-          assignedUserId: null,
+          assignedUserId: selectedMemberNumericId,
           suggestedAssignee: selectedMember?.name || null,
           suggestedDate: dueDateIso,
           dueDate: dueDateIso,
@@ -1583,7 +1691,7 @@ export default function TrialDetail() {
           status: setupTaskForm.status,
           priority: setupTaskForm.priority,
           assignedRole,
-          assignedUserId: null,
+          assignedUserId: selectedMemberNumericId,
           suggestedAssignee: selectedMember?.name || null,
           suggestedDate: dueDateIso,
           dueDate: dueDateIso,
@@ -1634,18 +1742,26 @@ export default function TrialDetail() {
   };
 
   const handleLaunchExecutionMap = async () => {
-    if (!map?.id) {
+    if (isLaunchingExecutionMap) return;
+
+    const mapId = executionMapSummary?.id || map?.id;
+    if (!mapId) {
       toast.error("No execution map loaded");
       return;
     }
 
+    setIsLaunchingExecutionMap(true);
     try {
-      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId: map.id });
-      if (confirmation.updated > 0) {
-        await loadExecutionMap(map.id);
-      }
-      await launchExecutionMap();
-      await refetchExecutionMapSummary();
+      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
+      await launchMapMutation.mutateAsync({ mapId });
+      await Promise.all([
+        utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode }),
+        utils.map.load.invalidate({ mapId }),
+        utils.map.loadWorkspace.invalidate(),
+      ]);
+      const refreshedSummary = await refetchExecutionMapSummary();
+      const resolvedMapId = refreshedSummary.data?.id || mapId;
+      await loadExecutionMap(resolvedMapId);
       if (confirmation.updated > 0) {
         toast.success(
           `Execution map launched (${confirmation.updated} suggested task${confirmation.updated === 1 ? "" : "s"} auto-confirmed)`
@@ -1655,6 +1771,8 @@ export default function TrialDetail() {
       }
     } catch (error: any) {
       toast.error(`Failed to launch map: ${error?.message || "Review suggested tasks first."}`);
+    } finally {
+      setIsLaunchingExecutionMap(false);
     }
   };
 
@@ -1712,6 +1830,7 @@ export default function TrialDetail() {
             sections={setupSections}
             view={setupScaffoldView}
             onViewChange={setSetupScaffoldView}
+            isConfirming={isLaunchingExecutionMap}
             timelineStartDate={trial?.startDate ? new Date(trial.startDate) : null}
             timelineEndDate={trial?.endDate ? new Date(trial.endDate) : null}
             onConfirm={handleLaunchExecutionMap}
@@ -2300,7 +2419,7 @@ export default function TrialDetail() {
                 <div className="rounded-lg border border-gray-200 bg-white p-3">
                   <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
                   <p className="mt-1 text-2xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
-                  <p className="mt-1 text-xs text-gray-500">Target: {targetPatients || 0}</p>
+                  <p className="mt-1 text-xs text-gray-500">Target: {(targetPatients || 0).toLocaleString()}</p>
                 </div>
                 <div className="rounded-lg border border-gray-200 bg-white p-3">
                   <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>

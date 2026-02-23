@@ -181,10 +181,39 @@ export function TrialWorkspace() {
 
   const trialsWithMeta = useMemo(() => {
     const parseSampleSizeToNumber = (value?: string | null) => {
-      const digits = String(value ?? "").replace(/[^0-9]/g, "");
-      if (!digits) return 0;
-      const parsed = Number.parseInt(digits, 10);
+      const normalized = String(value ?? "")
+        .replace(/\u00a0/g, " ")
+        .trim();
+      if (!normalized) return 0;
+      const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
+      if (!match) return 0;
+      const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
       return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const normalizeTargetPatients = (rawTarget: number | null | undefined, sampleSize?: string | null) => {
+      const explicit = Number(rawTarget || 0);
+      const fallback = parseSampleSizeToNumber(sampleSize);
+      if (explicit <= 0) return fallback;
+
+      // Compatibility fix for old sample-size parsing that concatenated all digits.
+      const allDigits = Number.parseInt(String(sampleSize ?? "").replace(/[^0-9]/g, ""), 10);
+      if (
+        fallback > 0 &&
+        Number.isFinite(allDigits) &&
+        allDigits === explicit &&
+        fallback !== explicit
+      ) {
+        return fallback;
+      }
+
+      // Defensive fallback for historical malformed targets (e.g. 1175760 from concatenated values).
+      if (explicit >= 500000) {
+        const leading = Number.parseInt(String(explicit).slice(0, 3), 10);
+        if (Number.isFinite(leading) && leading > 0 && leading <= 5000) {
+          return leading;
+        }
+      }
+      return explicit;
     };
     const memberSites = (state.teamMembers || [])
       .map((member) => member.site)
@@ -236,10 +265,10 @@ export function TrialWorkspace() {
         ? assignedMembers.some((member) => String(member?.team || "").toLowerCase() === currentTeam)
         : false;
       const enrolledPatients = Number(trial.enrolledPatients || 0);
-      const targetPatients =
-        Number(trial.targetPatients || 0) > 0
-          ? Number(trial.targetPatients || 0)
-          : parseSampleSizeToNumber((trial as { sampleSize?: string | null }).sampleSize);
+      const targetPatients = normalizeTargetPatients(
+        Number(trial.targetPatients || 0),
+        (trial as { sampleSize?: string | null }).sampleSize
+      );
       const enrollmentProgress =
         targetPatients > 0
           ? (enrolledPatients / targetPatients) * 100

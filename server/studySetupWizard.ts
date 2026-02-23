@@ -222,8 +222,20 @@ export async function getPhaseTransitions(fromPhaseId: number) {
 export async function createProtocolSection(data: InsertProtocolSection) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  
-  await db.insert(protocolSections).values(data);
+
+  const clampRef = (value: string | null | undefined): string | null => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.replace(/\s+/g, " ").trim();
+    if (!trimmed) return null;
+    if (trimmed.length <= 50) return trimmed;
+    return `${trimmed.slice(0, 47).trimEnd()}...`;
+  };
+
+  await db.insert(protocolSections).values({
+    ...data,
+    pageReference: clampRef(data.pageReference),
+    dateReference: clampRef(data.dateReference),
+  });
 }
 
 export async function getProtocolSections(protocolId: number) {

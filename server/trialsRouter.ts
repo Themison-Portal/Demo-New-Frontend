@@ -26,6 +26,9 @@ import {
 import { and, desc, eq, inArray, like, ne, notLike } from "drizzle-orm";
 import { toDemoId, serializeTrial, resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
+import { ENV } from "./_core/env";
+
+const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
 function extractDbErrorDetails(error: unknown) {
   const err = error as any;
@@ -46,9 +49,13 @@ function extractDbErrorDetails(error: unknown) {
 }
 
 function parseSampleSizeToTarget(sampleSize?: string | null) {
-  const digitsOnly = String(sampleSize ?? "").replace(/[^0-9]/g, "");
-  if (!digitsOnly) return undefined;
-  const parsed = Number.parseInt(digitsOnly, 10);
+  const normalized = String(sampleSize ?? "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+  if (!normalized) return undefined;
+  const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
+  if (!match) return undefined;
+  const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
   return parsed;
 }
@@ -231,16 +238,23 @@ export const trialsRouter = router({
       if (include.has("documents") || include.has("suggestions") || include.has("insights")) {
         try {
           const protocolIds = protocolRows.map((doc) => doc.id);
-          indexedProtocolIds = protocolIds.length
-            ? new Set(
-                (
-                  await db
-                    .select({ protocolId: fileSearchDocuments.protocolId })
-                    .from(fileSearchDocuments)
-                    .where(inArray(fileSearchDocuments.protocolId, protocolIds))
-                ).map((row) => row.protocolId)
-              )
-            : new Set<number>();
+          if (protocolIds.length > 0) {
+            if (USES_EXTERNAL_RAG) {
+              const chunkIndexedRows = await db
+                .select({ protocolId: protocolChunks.protocolId })
+                .from(protocolChunks)
+                .where(inArray(protocolChunks.protocolId, protocolIds));
+              indexedProtocolIds = new Set(chunkIndexedRows.map((row) => row.protocolId));
+            } else {
+              const vectorIndexedRows = await db
+                .select({ protocolId: fileSearchDocuments.protocolId })
+                .from(fileSearchDocuments)
+                .where(inArray(fileSearchDocuments.protocolId, protocolIds));
+              indexedProtocolIds = new Set(vectorIndexedRows.map((row) => row.protocolId));
+            }
+          } else {
+            indexedProtocolIds = new Set<number>();
+          }
 
           const byCategory = protocolRows.reduce<Record<string, number>>((acc, doc) => {
             const key = String(doc.category || "uncategorized").toLowerCase();

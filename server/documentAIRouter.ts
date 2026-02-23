@@ -7,8 +7,15 @@ import { queryWithAssistant, uploadToVectorStore, createVectorStore } from "./_c
 import { resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { invokeLLM } from "./_core/llm";
-import { getProtocolContextChunks, type ProtocolContextChunk } from "./_core/protocolContext";
+import {
+  getProtocolContextChunks,
+  ingestProtocolContextChunks,
+  type ProtocolContextChunk,
+} from "./_core/protocolContext";
 import { runUnifiedQuery } from "./_core/unifiedQuery";
+import { ENV } from "./_core/env";
+
+const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
 type DocumentAISource = {
   fileId?: string;
@@ -716,6 +723,13 @@ If the retrieved context is insufficient, clearly state what is missing instead 
       }
 
       try {
+        if (USES_EXTERNAL_RAG) {
+          return {
+            message:
+              "Fallback assistant retrieval is disabled in external RAG mode. Retry your question to use local protocol context retrieval.",
+          };
+        }
+
         const docs = await db
           .select()
           .from(fileSearchDocuments)
@@ -1006,6 +1020,17 @@ ${contextText}
 
         const doc = protocol[0];
 
+        if (USES_EXTERNAL_RAG) {
+          await ingestProtocolContextChunks({
+            protocolId: doc.id,
+            forceRefresh: true,
+          });
+          return {
+            success: true,
+            message: "Document context indexed successfully",
+          };
+        }
+
         // Get or create File Search Store for this trial
         let store = await db
           .select()
@@ -1091,6 +1116,30 @@ ${contextText}
           return {
             success: false,
             message: "No documents found for this trial",
+          };
+        }
+
+        if (USES_EXTERNAL_RAG) {
+          let successCount = 0;
+          let errorCount = 0;
+          for (const doc of docs) {
+            try {
+              await ingestProtocolContextChunks({
+                protocolId: doc.id,
+                forceRefresh: true,
+              });
+              successCount++;
+            } catch (error) {
+              console.error(`Error indexing local context for ${doc.filename}:`, error);
+              errorCount++;
+            }
+          }
+
+          return {
+            success: errorCount === 0,
+            message: `Processed local context for ${successCount} documents successfully${
+              errorCount > 0 ? `, ${errorCount} failed` : ""
+            }`,
           };
         }
 

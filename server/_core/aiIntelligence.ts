@@ -3,6 +3,7 @@ import {
   aiFeatureSnapshots,
   aiTrainingExamples,
   fileSearchDocuments,
+  protocolChunks,
   phases,
   protocols,
   tasks,
@@ -14,6 +15,9 @@ import {
 } from "../../drizzle/schema";
 import { and, desc, eq, inArray, like, notLike } from "drizzle-orm";
 import type { DemoMode } from "./demoMode";
+import { ENV } from "./env";
+
+const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
 function toDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -91,16 +95,22 @@ export async function computeTrialIntelligenceSnapshot(db: any, trialId: string)
     .orderBy(desc(protocols.createdAt));
 
   const protocolIds = protocolRows.map((row: any) => row.id);
-  const indexedIds = protocolIds.length
-    ? new Set(
-        (
-          await db
-            .select({ protocolId: fileSearchDocuments.protocolId })
-            .from(fileSearchDocuments)
-            .where(inArray(fileSearchDocuments.protocolId, protocolIds))
-        ).map((row: any) => row.protocolId)
-      )
-    : new Set<number>();
+  const indexedIds =
+    protocolIds.length > 0
+      ? new Set(
+          (
+            USES_EXTERNAL_RAG
+              ? await db
+                  .select({ protocolId: protocolChunks.protocolId })
+                  .from(protocolChunks)
+                  .where(inArray(protocolChunks.protocolId, protocolIds))
+              : await db
+                  .select({ protocolId: fileSearchDocuments.protocolId })
+                  .from(fileSearchDocuments)
+                  .where(inArray(fileSearchDocuments.protocolId, protocolIds))
+          ).map((row: any) => row.protocolId)
+        )
+      : new Set<number>();
 
   const activeDocs = protocolRows.filter((doc: any) => !doc.archivedAt);
   const archivedDocs = protocolRows.filter((doc: any) => !!doc.archivedAt);

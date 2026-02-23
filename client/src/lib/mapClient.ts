@@ -36,6 +36,15 @@ export const mapApi = {
     protocolId: number;
     mapId?: string;
     clearExisting?: boolean;
+    demoMode?: "sample" | "full" | "building";
+    trialStartDate?: string;
+    trialEndDate?: string;
+    assignmentMembers?: Array<{
+      id: string | number;
+      name?: string;
+      role?: string;
+      clinicalRole?: string;
+    }>;
   }) => mapTrpcClient.map.importLegacyScaffold.mutate(input),
 
   loadMap: (mapId: string) => mapTrpcClient.map.load.query({ mapId }),

@@ -400,6 +400,37 @@ function hashString(value: string): number {
   return Math.abs(hash);
 }
 
+function parseSampleSizeToTarget(sampleSize: unknown): number {
+  const normalized = String(sampleSize ?? "")
+    .replace(/\u00a0/g, " ")
+    .trim();
+  if (!normalized) return 0;
+  const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
+  if (!match) return 0;
+  const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function normalizeTargetPatientsValue(rawTarget: unknown, sampleSize: unknown): number {
+  const explicit = Number(rawTarget || 0);
+  const fallback = parseSampleSizeToTarget(sampleSize);
+  if (!Number.isFinite(explicit) || explicit <= 0) return fallback;
+
+  const allDigits = Number.parseInt(String(sampleSize ?? "").replace(/[^0-9]/g, ""), 10);
+  if (fallback > 0 && Number.isFinite(allDigits) && allDigits === explicit && fallback !== explicit) {
+    return fallback;
+  }
+
+  if (explicit >= 500000) {
+    const leading = Number.parseInt(String(explicit).slice(0, 3), 10);
+    if (Number.isFinite(leading) && leading > 0 && leading <= 5000) {
+      return leading;
+    }
+  }
+
+  return explicit;
+}
+
 function formatChartAxis(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "$0";
   if (value >= 1000) return `${Math.round(value / 1000)}k`;
@@ -457,25 +488,10 @@ function resolveBacklogOpenedAnchor(
   currentWeekStart: Date,
   historyWeeks: number
 ): Date | null {
+  void currentWeekStart;
+  void historyWeeks;
   const createdAt = parseDateValue(task.createdAt) ?? parseDateValue(task.updatedAt);
   if (!createdAt) return null;
-
-  const dueLike = parseDateValue(task.suggestedDate) ?? parseDateValue(task.dueDate);
-  if (!dueLike) return createdAt;
-
-  const createdWeekStart = startOfWeekDate(createdAt);
-  const dueWeekStart = startOfWeekDate(dueLike);
-  const createdInCurrentWeek = createdWeekStart.getTime() >= currentWeekStart.getTime();
-  const dueInFuture = dueWeekStart.getTime() > currentWeekStart.getTime();
-
-  // If tasks are generated "now" for future schedule coverage, backfill opened
-  // timestamps into past weeks so historical backlog trend remains realistic.
-  if (createdInCurrentWeek && dueInFuture) {
-    const weeksAhead = Math.max(1, weeksBetweenWeekStarts(currentWeekStart, dueWeekStart));
-    const weeksBack = Math.max(1, Math.min(historyWeeks - 1, weeksAhead));
-    return addDays(currentWeekStart, -weeksBack * 7);
-  }
-
   return createdAt;
 }
 
@@ -1168,38 +1184,6 @@ type CollaborationThreadRecord = {
   updatedAt?: string | Date | null;
 };
 
-function hashTrialKey(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash;
-}
-
-function buildSyntheticThreadRowsForTrial(trialKey: string): CollaborationThreadRecord[] {
-  const seed = hashTrialKey(trialKey || "trial");
-  const total = 4 + (seed % 8); // 4..11
-  const resolutionRatio = 0.3 + ((seed % 45) / 100); // 30%..74%
-  const resolvedTarget = Math.max(1, Math.min(total - 1, Math.round(total * resolutionRatio)));
-  const now = new Date();
-
-  return Array.from({ length: total }, (_, index) => {
-    const createdAt = addDays(now, -(index * 2 + 3 + ((seed + index) % 5)));
-    const resolved = index < resolvedTarget;
-    const resolvedLagDays = 1 + ((seed + index * 3) % 7);
-    const resolvedAt = resolved ? addDays(createdAt, resolvedLagDays) : null;
-
-    return {
-      id: `synthetic-thread-${trialKey}-${index}`,
-      trialId: trialKey,
-      status: resolved ? "resolved" : index % 3 === 0 ? "pending" : "open",
-      createdAt,
-      resolvedAt,
-      updatedAt: resolvedAt ?? addDays(createdAt, 1 + ((seed + index) % 4)),
-    };
-  });
-}
-
 function ThreadResolutionGaugePanel({
   trials,
 }: {
@@ -1316,20 +1300,8 @@ function ThreadResolutionGaugePanel({
     [aggregatedThreads, isAllSelection, threadsQuery.data]
   );
 
-  const fallbackRows = useMemo(() => {
-    if (!trialOptions.length) return [] as CollaborationThreadRecord[];
-    if (isAllSelection) {
-      return trialOptions.flatMap((trial) => {
-        const trialKey = String(trial.rawId || trial.id || "").trim();
-        return trialKey ? buildSyntheticThreadRowsForTrial(trialKey) : [];
-      });
-    }
-    const trialKey = String(selectedTrialRawId || resolvedSelectedTrialId || "").trim();
-    return trialKey ? buildSyntheticThreadRowsForTrial(trialKey) : [];
-  }, [isAllSelection, resolvedSelectedTrialId, selectedTrialRawId, trialOptions]);
-
   const stats = useMemo(() => {
-    const rows = sourceRows.length > 0 ? sourceRows : fallbackRows;
+    const rows = sourceRows;
     const now = new Date();
     const weekAgo = addDays(now, -7);
 
@@ -1365,7 +1337,7 @@ function ThreadResolutionGaugePanel({
       direction: deltaMetric.percent >= 0 ? "up" : "down",
       tone: deltaMetric.percent >= 0 ? "positive" : "negative",
     };
-  }, [fallbackRows, sourceRows]);
+  }, [sourceRows]);
 
   const isLoadingThreads = isAllSelection ? aggregatingThreads : threadsQuery.isLoading;
 
@@ -2218,12 +2190,9 @@ function UpcomingWorkloadPanel({
       if (!anchorDate) continue;
 
       const anchorWeekStart = startOfWeekDate(anchorDate);
+      if (anchorWeekStart.getTime() < firstWeekStart.getTime()) continue;
       if (anchorWeekStart.getTime() >= windowEnd.getTime()) continue;
-
-      const weekIndex =
-        anchorWeekStart.getTime() < firstWeekStart.getTime()
-          ? 0
-          : weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
+      const weekIndex = weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
       const bucket = buckets[clampWeekIndex(weekIndex)];
       if (!bucket) continue;
       bucket.tasks += 1;
@@ -2240,12 +2209,9 @@ function UpcomingWorkloadPanel({
       if (!anchorDate) continue;
 
       const anchorWeekStart = startOfWeekDate(anchorDate);
+      if (anchorWeekStart.getTime() < firstWeekStart.getTime()) continue;
       if (anchorWeekStart.getTime() >= windowEnd.getTime()) continue;
-
-      const weekIndex =
-        anchorWeekStart.getTime() < firstWeekStart.getTime()
-          ? 0
-          : weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
+      const weekIndex = weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
 
       const bucket = buckets[clampWeekIndex(weekIndex)];
       if (!bucket) continue;
@@ -3132,25 +3098,6 @@ function DarkRevenuePerformancePanel({
     const resolveOpenedAnchor = (task: WorkspaceTask) => {
       const createdAt = parseDateValue(task.createdAt) ?? parseDateValue(task.updatedAt);
       if (!createdAt) return null;
-
-      const dueLike = parseDateValue(task.suggestedDate) ?? parseDateValue(task.dueDate);
-      if (!dueLike) return createdAt;
-
-      const createdWeekStart = startOfWeek(createdAt);
-      const dueWeekStart = startOfWeek(dueLike);
-      const createdInCurrentWeek = createdWeekStart.getTime() >= currentWeekStart.getTime();
-      const dueInFuture = dueWeekStart.getTime() > currentWeekStart.getTime();
-
-      // If many tasks are generated "now" for future weeks, backfill them into past
-      // weeks for a more realistic historical backlog trend.
-      if (createdInCurrentWeek && dueInFuture) {
-        const weeksAhead = Math.max(1, weeksBetweenWeekStarts(currentWeekStart, dueWeekStart));
-        const weeksBack = Math.max(1, Math.min(historyWeeks - 1, weeksAhead));
-        const syntheticOpenedDate = new Date(currentWeekStart);
-        syntheticOpenedDate.setDate(currentWeekStart.getDate() - weeksBack * 7);
-        return syntheticOpenedDate;
-      }
-
       return createdAt;
     };
 
@@ -4817,7 +4764,10 @@ export default function AnalyticsHidden({ embedded = false }: { embedded?: boole
         sponsor: trial.sponsor ? String(trial.sponsor) : null,
         status: trial.status ? String(trial.status) : null,
         enrolledPatients: Number(trial.enrolledPatients || 0),
-        targetPatients: Number(trial.targetPatients || 0),
+        targetPatients: normalizeTargetPatientsValue(
+          trial.targetPatients,
+          (trial as { sampleSize?: string | null }).sampleSize
+        ),
       })),
     [trials]
   );
@@ -5125,6 +5075,7 @@ export default function AnalyticsHidden({ embedded = false }: { embedded?: boole
   const resolveTaskOwner = useMemo(() => {
     type TeamMemberLite = (typeof state.teamMembers)[number];
 
+    const allMembers = (state.teamMembers || []).filter(Boolean) as TeamMemberLite[];
     const memberById = new Map<string, TeamMemberLite>();
     const memberByNumericId = new Map<string, TeamMemberLite>();
     const memberByName = new Map<string, TeamMemberLite>();
@@ -5172,7 +5123,9 @@ export default function AnalyticsHidden({ embedded = false }: { embedded?: boole
       if (!resolvedMember) {
         const roleToken = normalizeRoleToken(task.assignedRole);
         if (roleToken) {
-          const candidates = membersByRole.get(roleToken) || [];
+          const roleCandidates = membersByRole.get(roleToken) || [];
+          const candidates =
+            roleCandidates.length > 1 ? roleCandidates : allMembers.length > 0 ? allMembers : roleCandidates;
           if (candidates.length > 0) {
             const seed = `${trialId}|${String(task.id || "")}|${roleToken}|${String(task.dueDate || "")}`;
             resolvedMember = candidates[hashString(seed) % candidates.length];

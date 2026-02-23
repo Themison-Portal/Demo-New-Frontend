@@ -614,12 +614,6 @@ const mapStoreState: MapStoreShape = {
 
   async launchMap() {
     if (!mapStoreState.map) throw new Error("No map loaded");
-    const notReviewed = mapStoreState.tasks.filter(
-      (task) => task.status !== "confirmed" && task.status !== "cancelled"
-    );
-    if (notReviewed.length > 0) {
-      throw new Error("Launch blocked: review all suggested tasks first");
-    }
 
     const prevMap = mapStoreState.map;
     const prevTasks = [...mapStoreState.tasks];

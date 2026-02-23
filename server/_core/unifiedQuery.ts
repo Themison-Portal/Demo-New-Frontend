@@ -5,6 +5,7 @@ import {
   mapPhases,
   mapTasks,
   mapTelemetryEvents,
+  protocolChunks,
   protocols,
   trials,
   type ExecutionMap,
@@ -15,6 +16,7 @@ import {
   type Trial,
 } from "../../drizzle/schema";
 import { invokeLLM } from "./llm";
+import { ENV } from "./env";
 import {
   getProtocolContextChunks,
   getStructuredEligibilityCriteria,
@@ -22,6 +24,8 @@ import {
   type ProtocolContextChunk,
 } from "./protocolContext";
 import { extractPdfPages } from "../pdfExtractor";
+
+const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
 export type UnifiedRoute = "document" | "operational" | "hybrid" | "telemetry";
 
@@ -2490,12 +2494,19 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     const activeProtocolRows = allProtocolRows.filter((protocol) => !protocol.archivedAt);
     let indexedProtocolIds = new Set<number>();
     if (activeProtocolRows.length > 0) {
-      const indexedRows = (await db
-        .select({ protocolId: fileSearchDocuments.protocolId })
-        .from(fileSearchDocuments)
-        .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
-        protocolId: number;
-      }>;
+      const indexedRows = USES_EXTERNAL_RAG
+        ? ((await db
+            .select({ protocolId: protocolChunks.protocolId })
+            .from(protocolChunks)
+            .where(inArray(protocolChunks.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
+            protocolId: number;
+          }>)
+        : ((await db
+            .select({ protocolId: fileSearchDocuments.protocolId })
+            .from(fileSearchDocuments)
+            .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
+            protocolId: number;
+          }>);
       indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
     }
     const indexedCount = activeProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;
@@ -2679,12 +2690,19 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     .orderBy(desc(protocols.updatedAt))) as Protocol[];
   let indexedProtocolIds = new Set<number>();
   if (trialProtocolRows.length > 0) {
-    const indexedRows = (await db
-      .select({ protocolId: fileSearchDocuments.protocolId })
-      .from(fileSearchDocuments)
-      .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
-      protocolId: number;
-    }>;
+    const indexedRows = USES_EXTERNAL_RAG
+      ? ((await db
+          .select({ protocolId: protocolChunks.protocolId })
+          .from(protocolChunks)
+          .where(inArray(protocolChunks.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
+          protocolId: number;
+        }>)
+      : ((await db
+          .select({ protocolId: fileSearchDocuments.protocolId })
+          .from(fileSearchDocuments)
+          .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
+          protocolId: number;
+        }>);
     indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
   }
   const indexedTrialDocs = trialProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;

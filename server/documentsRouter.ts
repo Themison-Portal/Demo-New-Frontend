@@ -18,6 +18,9 @@ import { createVectorStore, uploadToVectorStore } from "./_core/openaiAssistant"
 import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
+import { ENV } from "./_core/env";
+
+const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
 export const documentsRouter = router({
   list: publicProcedure
@@ -161,12 +164,18 @@ export const documentsRouter = router({
             .limit(1);
 
           const latestVectorEvent = latestVectorIndexEventByProtocol.get(String(doc.id));
+          const hasContextIndex = (chunkCountByProtocol[doc.id] ?? 0) > 0;
           const hasFileSearchIndex = fileSearchDoc.length > 0;
-          let indexStatus: "indexed" | "processing" | "failed" = hasFileSearchIndex
+          const hasEffectiveIndex = USES_EXTERNAL_RAG ? hasContextIndex : hasFileSearchIndex;
+          let indexStatus: "indexed" | "processing" | "failed" = hasEffectiveIndex
             ? "indexed"
             : "processing";
           let indexFailureReason: string | null = null;
-          if (!hasFileSearchIndex && latestVectorEvent?.eventType === "document_vector_index_failed") {
+          if (
+            !USES_EXTERNAL_RAG &&
+            !hasFileSearchIndex &&
+            latestVectorEvent?.eventType === "document_vector_index_failed"
+          ) {
             indexStatus = "failed";
             const payload = latestVectorEvent.payload as Record<string, unknown> | null;
             const reason =
@@ -176,11 +185,11 @@ export const documentsRouter = router({
 
           return {
             ...doc,
-            isIndexed: hasFileSearchIndex,
+            isIndexed: hasEffectiveIndex,
             indexStatus,
             indexFailureReason,
-            indexUpdatedAt: latestVectorEvent?.createdAt ?? null,
-            contextIndexed: (chunkCountByProtocol[doc.id] ?? 0) > 0,
+            indexUpdatedAt: USES_EXTERNAL_RAG ? null : latestVectorEvent?.createdAt ?? null,
+            contextIndexed: hasContextIndex,
             contextChunkCount: chunkCountByProtocol[doc.id] ?? 0,
             uploaderName: uploaderNameById.get(doc.uploadedBy) || `User ${doc.uploadedBy}`,
           };
@@ -434,6 +443,24 @@ export const documentsRouter = router({
               },
               aiInvolved: true,
             });
+          }
+
+          if (USES_EXTERNAL_RAG) {
+            await logTelemetryEvent({
+              eventType: "document_vector_index_skipped",
+              action: "skipped",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                reason: "external_rag_provider",
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+            return;
           }
 
           try {
@@ -732,6 +759,81 @@ export const documentsRouter = router({
         : protocol.trialId.startsWith("full:")
         ? "full"
         : "sample";
+
+      if (USES_EXTERNAL_RAG) {
+        await logTelemetryEvent({
+          eventType: "document_context_index_started",
+          action: "started",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocol.id),
+          payload: {
+            trialId: protocol.trialId,
+            filename: protocol.filename,
+            demoMode: normalizedMode,
+          },
+          aiInvolved: true,
+        });
+
+        try {
+          const chunkResult = await ingestProtocolContextChunks({
+            protocolId: protocol.id,
+            forceRefresh: true,
+          });
+          await logTelemetryEvent({
+            eventType: "document_context_index_completed",
+            action: "completed",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocol.id),
+            payload: {
+              trialId: protocol.trialId,
+              filename: protocol.filename,
+              chunksCreated: chunkResult.created,
+              reused: chunkResult.reused,
+              pageCount: chunkResult.pageCount,
+              wordCount: chunkResult.wordCount,
+              hasStructuredSchedule: chunkResult.hasStructuredSchedule,
+              hasStructuredCriteria: chunkResult.hasStructuredCriteria,
+              langExtractFactCount: chunkResult.langExtractFactCount ?? 0,
+              langExtractModel: chunkResult.langExtractModel ?? null,
+              embeddingCount: chunkResult.embeddingCount,
+              demoMode: normalizedMode,
+            },
+            aiInvolved: true,
+          });
+        } catch (error) {
+          await logTelemetryEvent({
+            eventType: "document_context_index_failed",
+            action: "failed",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocol.id),
+            payload: {
+              trialId: protocol.trialId,
+              filename: protocol.filename,
+              reason: error instanceof Error ? error.message : String(error),
+              demoMode: normalizedMode,
+            },
+            aiInvolved: true,
+          });
+          throw error;
+        }
+
+        await logTelemetryEvent({
+          eventType: "document_processing_retried",
+          action: "retry_processing",
+          userId: String(ctx.user.id),
+          entityType: "protocol",
+          entityId: String(protocol.id),
+          payload: {
+            trialId: protocol.trialId,
+            mode: "context_only",
+          },
+        });
+
+        return { success: true, message: "Document context reprocessed successfully" };
+      }
 
       // Check if already indexed
       const existingFileSearchDoc = await db

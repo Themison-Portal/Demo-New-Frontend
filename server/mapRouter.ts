@@ -25,7 +25,7 @@ import { getDb } from "./db";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
-import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
+import { resolveTrialId, stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
 
 const MAP_STATUSES = ["draft", "active", "revised", "archived"] as const;
 const MAP_DEMO_MODES: DemoMode[] = ["sample", "full", "building"];
@@ -104,10 +104,90 @@ function resolveMapTrialCandidates(trialId: string, demoMode?: DemoMode) {
 type DbClient = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 type MapTaskInsertRow = typeof mapTasks.$inferInsert;
 type TaskStatus = (typeof TASK_STATUSES)[number];
+type MapTaskRole = NonNullable<MapTaskInsertRow["assignedRole"]>;
 let mapTaskConditionalNoteColumnSupport: boolean | null = null;
 let mapTaskSchemaPatched = false;
 let mapTaskColumnCache: Set<string> | null = null;
 let mapTaskStatusHistoryTableReady = false;
+
+function parseAssigneeNumericId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const rounded = Math.round(value);
+    return rounded > 0 ? rounded : null;
+  }
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) {
+    const rounded = Math.round(numeric);
+    return rounded > 0 ? rounded : null;
+  }
+
+  const trailingDigits = raw.match(/(\d+)(?!.*\d)/);
+  if (!trailingDigits) return null;
+  const parsed = Number.parseInt(trailingDigits[1], 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+function normalizeTeamRoleToken(value: string | null | undefined): MapTaskRole {
+  const text = ` ${String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+  if (
+    text.includes(" principal investigator ") ||
+    text.includes(" principalinvestigator ") ||
+    text.includes(" medical monitor ") ||
+    text.includes(" physician ") ||
+    text.includes(" doctor ") ||
+    text.includes(" md ") ||
+    (text.includes(" investigator ") && !text.includes(" sub investigator "))
+  ) {
+    return "pi";
+  }
+  if (
+    text.includes(" sub investigator ") ||
+    text.includes(" subinvestigator ") ||
+    text.includes(" sub i ") ||
+    text.includes(" sub_i ")
+  ) {
+    return "sub_i";
+  }
+  if (
+    text.includes(" crc ") ||
+    text.includes(" clinical research coordinator ") ||
+    text.includes(" study coordinator ") ||
+    text.includes(" clinical operations ") ||
+    text.includes(" clinical ops ")
+  ) {
+    return "crc";
+  }
+  if (
+    text.includes(" coordinator ") ||
+    text.includes(" site manager ") ||
+    text.includes(" project manager ") ||
+    text.includes(" trial manager ") ||
+    text.includes(" operations ")
+  ) {
+    return "study_coordinator";
+  }
+  if (text.includes(" nurse ") || text.includes(" rn ") || text.includes(" np ")) return "nurse";
+  if (text.includes(" pharmacist ") || text.includes(" pharmacy ")) return "pharmacist";
+  if (text.includes(" lab ") || text.includes(" laboratory ")) return "lab_tech";
+  if (text.includes(" data manager ") || text.includes(" data management ") || text.includes(" data coordinator ")) {
+    return "data_manager";
+  }
+  if (
+    text.includes(" regulatory ") ||
+    text.includes(" quality ") ||
+    text.includes(" pharmacovigilance ") ||
+    text.includes(" safety ")
+  ) {
+    return "regulatory_coordinator";
+  }
+  if (text.includes(" pi ")) return "pi";
+  return "custom";
+}
 
 const MAP_TASK_STATUS_HISTORY_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS map_task_status_history (
@@ -564,6 +644,20 @@ function addDays(date: Date, offset: number): Date {
   return next;
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function clampNumberToRange(value: number, min: number, max: number): number {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+function diffDays(start: Date, end: Date): number {
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((endUtc - startUtc) / MS_PER_DAY);
+}
+
 function parseDateOnlyLocal(value: string): Date | null {
   const trimmed = String(value || "").trim();
   const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -720,16 +814,122 @@ function inferTimingWindow(phaseName: string, phaseIndex: number, contextText: s
   return { anchorOffset: resolvedAnchor, startOffset: resolvedAnchor, endOffset: resolvedAnchor };
 }
 
+function inferPhaseWindowOffsets(phaseName: string, phaseIndex: number, totalDurationDays: number) {
+  const duration = Math.max(1, Math.round(totalDurationDays));
+  const text = normalizeText(phaseName);
+  const pct = (value: number) => Math.round(duration * value);
+
+  let startOffset = 0;
+  let endOffset = duration;
+
+  if (/(site feasibility|feasibility|site selection|startup|start up)/.test(text)) {
+    startOffset = 0;
+    endOffset = Math.max(14, pct(0.14));
+  } else if (/(regulatory submission|site activation|activation|irb|iec|ethic|submission|approval)/.test(text)) {
+    startOffset = pct(0.08);
+    endOffset = Math.max(startOffset + 7, pct(0.3));
+  } else if (/(enrollment|enrolment|pre screen|prescreen|screening|baseline|randomi[sz]ation)/.test(text)) {
+    startOffset = pct(0.18);
+    endOffset = Math.max(startOffset + 7, pct(0.5));
+  } else if (/(conduct|treatment|procedure|assessment|dosing|administration|lab|sample)/.test(text)) {
+    startOffset = pct(0.35);
+    endOffset = Math.max(startOffset + 14, pct(0.82));
+  } else if (/(follow up|follow-up)/.test(text)) {
+    startOffset = pct(0.75);
+    endOffset = Math.max(startOffset + 7, pct(0.94));
+  } else if (/(site study closure|study closure|close out|closeout|exit visit|lplv|last patient last visit)/.test(text)) {
+    startOffset = pct(0.9);
+    endOffset = duration;
+  } else {
+    const fallbackAnchor = clampNumberToRange(inferPhaseOffsetDays(phaseName, phaseIndex), 0, duration);
+    startOffset = fallbackAnchor;
+    endOffset = Math.min(duration, fallbackAnchor + Math.max(7, pct(0.08)));
+  }
+
+  startOffset = clampNumberToRange(startOffset, 0, duration);
+  endOffset = clampNumberToRange(Math.max(startOffset, endOffset), startOffset, duration);
+  return { startOffset, endOffset };
+}
+
+function hasExplicitTemporalCue(value: string): boolean {
+  return /(?:\bday\s*-?\d+\b|\bweek\s*\d+\b|\bcycle\b|\bwindow\b|[±\u00b1]\s*\d+\s*day|\+\s*\d+\s*day|-\s*\d+\s*day)/i.test(
+    value
+  );
+}
+
 function deriveTaskSchedule(
   trialStartDate: Date,
   phaseName: string,
   phaseIndex: number,
   contextText: string,
   explicitSuggestedDate: Date | string | null | undefined,
-  trialEndDate?: Date | null
+  trialEndDate?: Date | null,
+  options?: {
+    taskIndexWithinPhase?: number;
+    taskCountInPhase?: number;
+    minSpanDays?: number;
+  }
 ) {
+  const finalizeSchedule = (schedule: {
+    suggestedDate: Date;
+    startDate: Date;
+    dueDate: Date;
+  }) => {
+    const base = clampScheduleToTrialWindow(schedule);
+    const minSpanDays = Math.max(1, Math.round(Number(options?.minSpanDays ?? 1)));
+
+    let suggestedDate = startOfDay(base.suggestedDate);
+    let startDate = startOfDay(base.startDate);
+    let dueDate = startOfDay(base.dueDate);
+
+    const currentSpan = Math.max(1, diffDays(startDate, dueDate) + 1);
+    if (minSpanDays > currentSpan) {
+      dueDate = addDays(startDate, minSpanDays - 1);
+      if (trialEndDate) {
+        const trialEnd = startOfDay(trialEndDate);
+        if (dueDate.getTime() > trialEnd.getTime()) dueDate = trialEnd;
+      }
+      if (dueDate.getTime() < startDate.getTime()) dueDate = startDate;
+    }
+
+    if (suggestedDate.getTime() < startDate.getTime()) suggestedDate = startDate;
+    if (suggestedDate.getTime() > dueDate.getTime()) suggestedDate = dueDate;
+
+    return { suggestedDate, startDate, dueDate };
+  };
+
+  const clampScheduleToTrialWindow = (schedule: {
+    suggestedDate: Date;
+    startDate: Date;
+    dueDate: Date;
+  }) => {
+    const trialStart = startOfDay(trialStartDate);
+    const trialEnd = trialEndDate ? startOfDay(trialEndDate) : null;
+
+    let suggestedDate = startOfDay(schedule.suggestedDate);
+    let startDate = startOfDay(schedule.startDate);
+    let dueDate = startOfDay(schedule.dueDate);
+
+    if (suggestedDate.getTime() < trialStart.getTime()) suggestedDate = trialStart;
+    if (startDate.getTime() < trialStart.getTime()) startDate = trialStart;
+    if (dueDate.getTime() < trialStart.getTime()) dueDate = trialStart;
+
+    if (trialEnd) {
+      if (suggestedDate.getTime() > trialEnd.getTime()) suggestedDate = trialEnd;
+      if (startDate.getTime() > trialEnd.getTime()) startDate = trialEnd;
+      if (dueDate.getTime() > trialEnd.getTime()) dueDate = trialEnd;
+    }
+
+    if (dueDate.getTime() < startDate.getTime()) dueDate = startDate;
+    if (suggestedDate.getTime() < startDate.getTime()) suggestedDate = startDate;
+    if (suggestedDate.getTime() > dueDate.getTime()) suggestedDate = dueDate;
+
+    return { suggestedDate, startDate, dueDate };
+  };
+
   const normalizedContext = normalizeText(`${phaseName} ${contextText}`);
   const timing = inferTimingWindow(phaseName, phaseIndex, contextText);
+  const hasTemporalCue = hasExplicitTemporalCue(`${phaseName} ${contextText}`);
   const explicitAnchor = parseMaybeDate(explicitSuggestedDate);
 
   if (!explicitAnchor && trialEndDate) {
@@ -738,31 +938,68 @@ function deriveTaskSchedule(
       const suggestedDate = addDays(endAnchor, 14);
       const startDate = suggestedDate;
       const dueDate = addDays(suggestedDate, 14);
-      return { suggestedDate, startDate, dueDate };
+      return finalizeSchedule({ suggestedDate, startDate, dueDate });
     }
     if (/(lplv|last patient last visit)/.test(normalizedContext)) {
       const suggestedDate = endAnchor;
       const startDate = suggestedDate;
       const dueDate = suggestedDate;
-      return { suggestedDate, startDate, dueDate };
+      return finalizeSchedule({ suggestedDate, startDate, dueDate });
     }
     if (/(exit visit)/.test(normalizedContext)) {
       const suggestedDate = addDays(endAnchor, -7);
       const startDate = suggestedDate;
       const dueDate = suggestedDate;
-      return { suggestedDate, startDate, dueDate };
+      return finalizeSchedule({ suggestedDate, startDate, dueDate });
     }
   }
 
-  const suggestedDate = explicitAnchor ?? addDays(trialStartDate, timing.anchorOffset);
-  const startDate = explicitAnchor
+  let suggestedDate = explicitAnchor ?? addDays(trialStartDate, timing.anchorOffset);
+  let startDate = explicitAnchor
     ? addDays(suggestedDate, timing.startOffset - timing.anchorOffset)
     : addDays(trialStartDate, timing.startOffset);
-  const dueCandidate = explicitAnchor
+  let dueCandidate = explicitAnchor
     ? addDays(suggestedDate, timing.endOffset - timing.anchorOffset)
     : addDays(trialStartDate, timing.endOffset);
-  const dueDate = dueCandidate < startDate ? startDate : dueCandidate;
-  return { suggestedDate, startDate, dueDate };
+  let dueDate = dueCandidate < startDate ? startDate : dueCandidate;
+
+  if (trialEndDate && trialEndDate.getTime() > trialStartDate.getTime()) {
+    const totalDurationDays = Math.max(
+      1,
+      Math.round((startOfDay(trialEndDate).getTime() - startOfDay(trialStartDate).getTime()) / MS_PER_DAY)
+    );
+    const phaseWindow = inferPhaseWindowOffsets(phaseName, phaseIndex, totalDurationDays);
+    const windowStartDate = addDays(trialStartDate, phaseWindow.startOffset);
+    const windowEndDate = addDays(trialStartDate, phaseWindow.endOffset);
+    const taskCount = Math.max(1, Number(options?.taskCountInPhase ?? 1));
+    const taskIndex = clampNumberToRange(Number(options?.taskIndexWithinPhase ?? 0), 0, taskCount - 1);
+    const phaseSpanDays = Math.max(0, phaseWindow.endOffset - phaseWindow.startOffset);
+
+    // If the protocol text does not include an explicit temporal cue, distribute tasks
+    // across the phase window to avoid same-day clustering from synthetic anchor dates.
+    if (!hasTemporalCue) {
+      const denominator = taskCount > 1 ? taskCount - 1 : 1;
+      const distributedOffset =
+        phaseWindow.startOffset + Math.round((taskIndex / denominator) * phaseSpanDays);
+      suggestedDate = addDays(trialStartDate, distributedOffset);
+      startDate = suggestedDate;
+      const suggestedSpan = Math.max(0, Math.min(14, Math.round(phaseSpanDays / Math.max(2, taskCount))));
+      dueDate = addDays(suggestedDate, suggestedSpan);
+      if (dueDate.getTime() > windowEndDate.getTime()) dueDate = windowEndDate;
+      if (dueDate.getTime() < startDate.getTime()) dueDate = startDate;
+      return finalizeSchedule({ suggestedDate, startDate, dueDate });
+    }
+
+    if (suggestedDate.getTime() < windowStartDate.getTime()) suggestedDate = windowStartDate;
+    if (suggestedDate.getTime() > windowEndDate.getTime()) suggestedDate = windowEndDate;
+    if (startDate.getTime() < windowStartDate.getTime()) startDate = windowStartDate;
+    if (startDate.getTime() > windowEndDate.getTime()) startDate = windowEndDate;
+    if (dueDate.getTime() < windowStartDate.getTime()) dueDate = windowStartDate;
+    if (dueDate.getTime() > windowEndDate.getTime()) dueDate = windowEndDate;
+    if (dueDate.getTime() < startDate.getTime()) dueDate = startDate;
+  }
+
+  return finalizeSchedule({ suggestedDate, startDate, dueDate });
 }
 
 const ACTION_VERBS = [
@@ -838,22 +1075,54 @@ function inferAssignedRole(
   taskName: string
 ) {
   const text = taskName.toLowerCase();
-  if (category === "consent") return "pi" as const;
-  if (category === "eligibility") return "crc" as const;
-  if (category === "lab_sample") return text.includes("process") || text.includes("ship") ? ("lab_tech" as const) : ("nurse" as const);
-  if (category === "vital_signs") return "nurse" as const;
-  if (category === "imaging") return "nurse" as const;
-  if (category === "drug_administration") {
-    if (/(prepare|dispense|accountability)/.test(text)) return "pharmacist" as const;
+  const dataEntryCue = /\b(edc|crf|data entry|query|document|log|worksheet|tracker|reconcile|enter)\b/.test(text);
+  const coordinationCue = /\b(schedule|book|arrange|coordinate|appointment|notify)\b/.test(text);
+
+  if (category === "consent") return coordinationCue ? ("crc" as const) : ("pi" as const);
+  if (category === "eligibility") return /review|medical|investigator/.test(text) ? ("pi" as const) : ("crc" as const);
+  if (category === "lab_sample") {
+    if (dataEntryCue) return "crc" as const;
+    if (/(process|ship|centrifuge|aliquot|biomarker|pk|pharmacokinetic)/.test(text)) return "lab_tech" as const;
+    if (/(urinalysis|pregnancy test|analysis|assay)/.test(text)) return "lab_tech" as const;
+    if (/(blood|sample|draw|collect|tube|venipuncture)/.test(text)) return "nurse" as const;
+    return "crc" as const;
+  }
+  if (category === "vital_signs") {
+    if (dataEntryCue) return "crc" as const;
+    if (/(review|interpret|abnormal)/.test(text)) return "sub_i" as const;
     return "nurse" as const;
   }
-  if (category === "assessment") return /(physical|medical|ae|sae|exam)/.test(text) ? ("pi" as const) : ("sub_i" as const);
+  if (category === "imaging") {
+    if (coordinationCue || dataEntryCue) return "crc" as const;
+    return "sub_i" as const;
+  }
+  if (category === "drug_administration") {
+    if (dataEntryCue) return "crc" as const;
+    if (/(prepare|dispense|accountability)/.test(text)) return "pharmacist" as const;
+    if (/(dose modification|medical review|prescribe|order)/.test(text)) return "pi" as const;
+    return "nurse" as const;
+  }
+  if (category === "assessment") {
+    if (dataEntryCue) return "crc" as const;
+    if (/(physical|medical|ae|sae|adverse|exam|eligibility)/.test(text)) return "pi" as const;
+    if (/(ecg|eeg|symptom|performance status|vital)/.test(text)) return "sub_i" as const;
+    return "crc" as const;
+  }
   if (category === "questionnaire") return "crc" as const;
   if (category === "data_entry") return "crc" as const;
-  if (category === "coordination") return "crc" as const;
-  if (category === "documentation") return "crc" as const;
-  if (category === "follow_up") return "crc" as const;
-  if (category === "safety_reporting") return "pi" as const;
+  if (category === "coordination") return "study_coordinator" as const;
+  if (category === "documentation") {
+    if (/(regulatory|irb|iec|ethic|submission|amendment|deviation|authority)/.test(text)) {
+      return "regulatory_coordinator" as const;
+    }
+    return "crc" as const;
+  }
+  if (category === "follow_up") return coordinationCue ? ("study_coordinator" as const) : ("crc" as const);
+  if (category === "safety_reporting") {
+    if (/(enter|report|document|edc|query|log)/.test(text)) return "crc" as const;
+    if (/(regulatory|authority|sponsor)/.test(text)) return "regulatory_coordinator" as const;
+    return "pi" as const;
+  }
   if (category === "regulatory") return "regulatory_coordinator" as const;
   return "custom" as const;
 }
@@ -941,6 +1210,44 @@ function inferEstimatedDuration(
     custom: 20,
   };
   return defaults[category] ?? 20;
+}
+
+function inferMinimumTaskSpanDays(
+  category:
+    | "consent"
+    | "eligibility"
+    | "lab_sample"
+    | "vital_signs"
+    | "imaging"
+    | "drug_administration"
+    | "assessment"
+    | "questionnaire"
+    | "data_entry"
+    | "coordination"
+    | "documentation"
+    | "follow_up"
+    | "safety_reporting"
+    | "regulatory"
+    | "custom",
+  taskName: string
+) {
+  const text = normalizeText(taskName);
+
+  const withinDaysMatch = text.match(/\bwithin\s+(\d{1,2})\s+day\b/i);
+  if (withinDaysMatch) {
+    const days = Number(withinDaysMatch[1]);
+    if (Number.isFinite(days) && days > 0) return Math.max(1, Math.min(14, Math.round(days)));
+  }
+
+  const plusMinusMatch = text.match(/[±\u00b1]\s*(\d{1,2})\s*day/i);
+  if (plusMinusMatch) {
+    const delta = Number(plusMinusMatch[1]);
+    if (Number.isFinite(delta) && delta >= 0) return Math.max(1, Math.min(14, delta * 2 + 1));
+  }
+
+  if (category === "data_entry" || category === "documentation") return 3;
+  if (category === "coordination" || category === "regulatory" || category === "follow_up") return 2;
+  return 1;
 }
 
 function inferConditionalNote(taskName: string) {
@@ -1639,11 +1946,36 @@ export const mapRouter = router({
         protocolId: z.number(),
         mapId: z.string().optional(),
         clearExisting: z.boolean().optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+        trialStartDate: z.string().optional(),
+        trialEndDate: z.string().optional(),
+        assignmentMembers: z
+          .array(
+            z.object({
+              id: z.union([z.string(), z.number()]),
+              name: z.string().optional(),
+              role: z.string().optional(),
+              clinicalRole: z.string().optional(),
+            })
+          )
+          .optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+
+      const requestedMode = input.demoMode as DemoMode | undefined;
+      const trialCandidateIds = new Set(resolveMapTrialCandidates(input.trialId, requestedMode));
+      if (requestedMode) {
+        const resolvedFromMode = await resolveTrialId(
+          db,
+          requestedMode,
+          input.trialId,
+          requestedMode !== "building"
+        );
+        if (resolvedFromMode) trialCandidateIds.add(resolvedFromMode);
+      }
 
       const [legacyScaffold] = await db
         .select()
@@ -1659,14 +1991,40 @@ export const mapRouter = router({
         });
       }
 
-      const [trial] = await db.select().from(trials).where(eq(trials.id, input.trialId)).limit(1);
       const [protocol] = await db.select().from(protocols).where(eq(protocols.id, input.protocolId)).limit(1);
+      if (protocol?.trialId) {
+        trialCandidateIds.add(String(protocol.trialId));
+      }
+
+      const trialRows =
+        trialCandidateIds.size > 0
+          ? await db
+              .select()
+              .from(trials)
+              .where(inArray(trials.id, Array.from(trialCandidateIds)))
+          : [];
+      const trialById = new Map(trialRows.map((row) => [row.id, row]));
+      const preferredTrialIds = [
+        protocol?.trialId ? String(protocol.trialId) : "",
+        requestedMode ? toDemoId(requestedMode, input.trialId) : "",
+        input.trialId,
+        ...Array.from(trialCandidateIds),
+      ]
+        .map((id) => id.trim())
+        .filter((id, index, arr) => id.length > 0 && arr.indexOf(id) === index);
+      const trial =
+        preferredTrialIds.map((id) => trialById.get(id)).find((row): row is typeof trialRows[number] => Boolean(row)) ??
+        trialRows[0] ??
+        null;
+      const resolvedTrialId = trial?.id ?? input.trialId;
+      trialCandidateIds.add(resolvedTrialId);
+      const trialCandidateIdList = Array.from(trialCandidateIds);
 
       let targetMap: typeof executionMaps.$inferSelect | undefined;
       if (input.mapId) {
         const [map] = await db.select().from(executionMaps).where(eq(executionMaps.id, input.mapId)).limit(1);
         if (!map) throw new TRPCError({ code: "NOT_FOUND", message: "Execution map not found" });
-        if (map.trialId !== input.trialId) {
+        if (!trialCandidateIds.has(map.trialId)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Map does not belong to this trial" });
         }
         targetMap = map;
@@ -1676,7 +2034,7 @@ export const mapRouter = router({
           .from(executionMaps)
           .where(
             and(
-              eq(executionMaps.trialId, input.trialId),
+              inArray(executionMaps.trialId, trialCandidateIdList),
               eq(executionMaps.protocolId, input.protocolId),
               or(eq(executionMaps.status, "draft"), eq(executionMaps.status, "revised"))
             )
@@ -1698,7 +2056,7 @@ export const mapRouter = router({
         };
         await db.insert(executionMaps).values({
           id: mapId,
-          trialId: input.trialId,
+          trialId: resolvedTrialId,
           protocolId: input.protocolId,
           status: "draft",
           version: 1,
@@ -1715,9 +2073,23 @@ export const mapRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Failed to create map" });
       }
 
-      const trialTimelineAnchor =
-        parseMaybeDate(trial?.startDate) ?? parseMaybeDate(targetMap.createdAt) ?? startOfDay(new Date());
-      const trialTimelineEnd = parseMaybeDate(trial?.endDate);
+      const trialTimelineAnchor = parseMaybeDate(input.trialStartDate) ?? parseMaybeDate(trial?.startDate);
+      if (!trialTimelineAnchor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Trial start date is required before generating an execution plan.",
+        });
+      }
+
+      let trialTimelineEnd = parseMaybeDate(input.trialEndDate) ?? parseMaybeDate(trial?.endDate);
+      if (trialTimelineEnd && trialTimelineEnd.getTime() < trialTimelineAnchor.getTime()) {
+        console.warn("[map.importLegacyScaffold] ignoring invalid trial end date before start date", {
+          trialId: input.trialId,
+          startDate: trialTimelineAnchor.toISOString(),
+          endDate: trialTimelineEnd.toISOString(),
+        });
+        trialTimelineEnd = null;
+      }
 
       const clearExisting = input.clearExisting ?? true;
       if (clearExisting) {
@@ -1841,6 +2213,203 @@ export const mapRouter = router({
           | "custom";
         name: string;
       }> = [];
+      const assignmentMembers = (input.assignmentMembers || [])
+        .map((member) => {
+          const numericId = parseAssigneeNumericId(member.id);
+          if (!numericId) return null;
+          const displayName = String(member.name || "").trim() || null;
+          const roleText = `${member.clinicalRole || ""} ${member.role || ""}`.trim();
+          const roleToken = normalizeTeamRoleToken(roleText);
+          return {
+            numericId,
+            displayName,
+            roleToken,
+            roleText: normalizeText(roleText),
+          };
+        })
+        .filter(
+          (
+            member
+          ): member is {
+            numericId: number;
+            displayName: string | null;
+            roleToken: MapTaskRole;
+            roleText: string;
+          } => Boolean(member)
+        );
+      const assignmentMemberById = new Map<
+        number,
+        { numericId: number; displayName: string | null; roleToken: MapTaskRole; roleText: string }
+      >();
+      for (const member of assignmentMembers) {
+        if (!assignmentMemberById.has(member.numericId)) {
+          assignmentMemberById.set(member.numericId, member);
+        }
+      }
+      const uniqueAssignmentMembers = Array.from(assignmentMemberById.values());
+      const assignmentLoadByMember = new Map<number, number>();
+      for (const member of uniqueAssignmentMembers) {
+        assignmentLoadByMember.set(member.numericId, 0);
+      }
+
+      const ROLE_CUE_PATTERNS: Record<MapTaskRole, RegExp[]> = {
+        pi: [/\b(informed consent|consent|sae|serious adverse|medical review|eligibility)\b/i],
+        sub_i: [/\b(physical exam|investigator assessment|medical history|clinical assessment)\b/i],
+        crc: [/\b(edc|crf|data entry|visit schedule|coordination|questionnaire|follow[- ]?up)\b/i],
+        nurse: [/\b(vitals?|blood pressure|temperature|infusion|injection|pre[- ]?dose|post[- ]?dose|observation)\b/i],
+        pharmacist: [/\b(dispense|pharmacy|drug accountability|ip accountability|reconstitute|prepare dose)\b/i],
+        lab_tech: [/\b(lab|sample|specimen|centrifuge|aliquot|ship|biomarker|pk|urine|blood draw)\b/i],
+        data_manager: [/\b(query|data clean|reconcile|database lock|edc|ctms)\b/i],
+        regulatory_coordinator: [/\b(irb|iec|ethics|regulatory|submission|amendment|deviation)\b/i],
+        study_coordinator: [/\b(schedule|appointment|site communication|enrollment|coordination)\b/i],
+        custom: [],
+      };
+
+      const roleCompatibilityScore = (required: MapTaskRole, candidate: MapTaskRole): number => {
+        if (required === candidate) return 3;
+        if ((required === "pi" && candidate === "sub_i") || (required === "sub_i" && candidate === "pi")) return 2;
+        if (
+          required === "crc" &&
+          (candidate === "study_coordinator" || candidate === "data_manager" || candidate === "regulatory_coordinator")
+        ) {
+          return 2;
+        }
+        if (required === "study_coordinator" && candidate === "crc") return 2;
+        if (required === "regulatory_coordinator" && (candidate === "crc" || candidate === "data_manager")) return 1;
+        if (required === "data_manager" && candidate === "crc") return 1;
+        if (required === "lab_tech" && (candidate === "nurse" || candidate === "pharmacist")) return 1;
+        if (required === "lab_tech" && candidate === "crc") return 1;
+        if (required === "nurse" && (candidate === "lab_tech" || candidate === "pharmacist")) return 1;
+        if (required === "nurse" && candidate === "crc") return 1;
+        if (required === "crc" && (candidate === "nurse" || candidate === "study_coordinator")) return 1;
+        return 0;
+      };
+
+      const roleCueScore = (role: MapTaskRole, normalizedTaskText: string): number => {
+        const patterns = ROLE_CUE_PATTERNS[role] ?? [];
+        let score = 0;
+        for (const pattern of patterns) {
+          if (pattern.test(normalizedTaskText)) score += 2;
+        }
+        return Math.min(score, 6);
+      };
+
+      const inferFallbackRequiredRole = (taskText: string): MapTaskRole => {
+        const orderedRoles: MapTaskRole[] = [
+          "pi",
+          "sub_i",
+          "crc",
+          "study_coordinator",
+          "nurse",
+          "pharmacist",
+          "lab_tech",
+          "data_manager",
+          "regulatory_coordinator",
+        ];
+        let bestRole: MapTaskRole = "crc";
+        let bestScore = 0;
+        for (const role of orderedRoles) {
+          const score = roleCueScore(role, taskText);
+          if (score > bestScore) {
+            bestScore = score;
+            bestRole = role;
+          }
+        }
+        return bestRole;
+      };
+
+      const pickAssigneeForTask = (inputTask: {
+        inferredRole: string | null | undefined;
+        taskName: string;
+        phaseName?: string | null;
+        section?: string | null;
+        contextText?: string | null;
+      }) => {
+        if (uniqueAssignmentMembers.length === 0) return null;
+
+        const requestedRole = normalizeTeamRoleToken(inputTask.inferredRole);
+        const taskText = normalizeText(
+          `${inputTask.taskName || ""} ${inputTask.phaseName || ""} ${inputTask.section || ""} ${inputTask.contextText || ""}`
+        );
+        const requiredRole = requestedRole === "custom" ? inferFallbackRequiredRole(taskText) : requestedRole;
+
+        const exactCandidates =
+          requiredRole === "custom"
+            ? []
+            : uniqueAssignmentMembers.filter((member) => member.roleToken === requiredRole);
+        const compatibleCandidates =
+          requiredRole === "custom"
+            ? uniqueAssignmentMembers
+            : uniqueAssignmentMembers.filter((member) => roleCompatibilityScore(requiredRole, member.roleToken) > 0);
+        let candidatePool = exactCandidates.length
+          ? exactCandidates
+          : compatibleCandidates.length
+          ? compatibleCandidates
+          : uniqueAssignmentMembers;
+
+        // If only one exact-role candidate exists and is significantly overloaded,
+        // allow compatible roles to absorb part of the queue.
+        if (exactCandidates.length === 1 && compatibleCandidates.length > 1) {
+          const exactMemberId = exactCandidates[0].numericId;
+          const exactLoad = assignmentLoadByMember.get(exactMemberId) ?? 0;
+          const alternateLoad = compatibleCandidates
+            .filter((member) => member.numericId !== exactMemberId)
+            .reduce<number | null>((lowest, member) => {
+              const load = assignmentLoadByMember.get(member.numericId) ?? 0;
+              return lowest == null ? load : Math.min(lowest, load);
+            }, null);
+          if (alternateLoad != null && exactLoad - alternateLoad >= 4) {
+            candidatePool = compatibleCandidates;
+          }
+        }
+
+        const minPoolLoad = candidatePool.reduce<number | null>((lowest, member) => {
+          const load = assignmentLoadByMember.get(member.numericId) ?? 0;
+          return lowest == null ? load : Math.min(lowest, load);
+        }, null) ?? 0;
+
+        let best:
+          | {
+              memberId: number;
+              memberName: string | null;
+              score: number;
+              load: number;
+              tieBreaker: string;
+            }
+          | null = null;
+
+        for (const member of candidatePool) {
+          const compatibility = requiredRole === "custom" ? 1 : roleCompatibilityScore(requiredRole, member.roleToken);
+          const cueBoost = roleCueScore(member.roleToken, taskText);
+          const load = assignmentLoadByMember.get(member.numericId) ?? 0;
+          const overload = Math.max(0, load - minPoolLoad);
+          const score = compatibility * 10 + cueBoost * 2 - overload * 4 - load * 0.25;
+          const tieBreaker = `${member.displayName || ""}:${member.numericId}`;
+
+          const shouldReplace =
+            !best ||
+            score > best.score ||
+            (score === best.score && load < best.load) ||
+            (score === best.score && load === best.load && tieBreaker.localeCompare(best.tieBreaker) < 0);
+
+          if (shouldReplace) {
+            best = {
+              memberId: member.numericId,
+              memberName: member.displayName,
+              score,
+              load,
+              tieBreaker,
+            };
+          }
+        }
+
+        if (!best) return null;
+        assignmentLoadByMember.set(best.memberId, (assignmentLoadByMember.get(best.memberId) ?? 0) + 1);
+        return {
+          id: best.memberId,
+          name: best.memberName,
+        };
+      };
 
       for (let legacyPhaseIndex = 0; legacyPhaseIndex < legacyPhaseRows.length; legacyPhaseIndex += 1) {
         const legacyPhase = legacyPhaseRows[legacyPhaseIndex];
@@ -1863,7 +2432,8 @@ export const mapRouter = router({
           .where(eq(legacyTasks.phaseId, legacyPhase.id))
           .orderBy(asc(legacyTasks.orderIndex), asc(legacyTasks.createdAt));
 
-        for (const legacyTask of legacyPhaseTasks) {
+        for (let legacyTaskIndex = 0; legacyTaskIndex < legacyPhaseTasks.length; legacyTaskIndex += 1) {
+          const legacyTask = legacyPhaseTasks[legacyTaskIndex];
           const newTaskId = randomUUID();
           legacyTaskIdToMapTaskId.set(legacyTask.id, newTaskId);
           legacyTaskToLegacyPhase.set(legacyTask.id, legacyPhase.id);
@@ -1905,6 +2475,24 @@ export const mapRouter = router({
             ? 0.9
             : 0.8;
           const conditionalNote = inferConditionalNote(normalizedName);
+          const legacySuggestedAssigneeId =
+            typeof legacyTask.suggestedAssigneeId === "number" && Number.isFinite(legacyTask.suggestedAssigneeId)
+              ? Math.round(legacyTask.suggestedAssigneeId)
+              : null;
+          const suggestedAssigneeFromLegacy =
+            legacySuggestedAssigneeId != null ? assignmentMemberById.get(legacySuggestedAssigneeId) ?? null : null;
+          const suggestedAssignee = suggestedAssigneeFromLegacy
+            ? {
+                id: suggestedAssigneeFromLegacy.numericId,
+                name: suggestedAssigneeFromLegacy.displayName,
+              }
+            : pickAssigneeForTask({
+                inferredRole: assignedRole,
+                taskName: normalizedName,
+                phaseName: legacyPhase.name,
+                section: legacyTask.protocolSection ?? protocolContextRef?.section ?? null,
+                contextText: protocolContextRef?.extractedText ?? null,
+              });
           const schedulingContext = [
             legacyPhase.name,
             normalizedName,
@@ -1920,7 +2508,12 @@ export const mapRouter = router({
             legacyPhaseIndex,
             schedulingContext,
             legacyTask.suggestedDate,
-            trialTimelineEnd
+            trialTimelineEnd,
+            {
+              taskIndexWithinPhase: legacyTaskIndex,
+              taskCountInPhase: legacyPhaseTasks.length,
+              minSpanDays: inferMinimumTaskSpanDays(category, normalizedName),
+            }
           );
           const importedStatus: TaskStatus = legacyTask.status === "completed" ? "confirmed" : "suggested";
           const importedAt = new Date();
@@ -1939,8 +2532,8 @@ export const mapRouter = router({
             blockedReason: null,
             blockedSince: null,
             assignedRole,
-            assignedUserId: legacyTask.suggestedAssigneeId ?? null,
-            suggestedAssignee: null,
+            assignedUserId: suggestedAssignee?.id ?? null,
+            suggestedAssignee: suggestedAssignee?.name ?? null,
             suggestedDate: schedule.suggestedDate,
             dueDate: schedule.dueDate,
             estimatedDuration: inferEstimatedDuration(category, normalizedName, legacyTask.duration),
@@ -2128,8 +2721,21 @@ export const mapRouter = router({
               phaseForTask?.displayOrder ?? 0,
               `${phaseForTask?.name ?? ""} ${inputTask.section ?? ""} ${inputTask.name}`,
               null,
-              trialTimelineEnd
+              trialTimelineEnd,
+              {
+                taskIndexWithinPhase: phaseTasksCount,
+                taskCountInPhase: Math.max(phaseTasksCount + 1, 1),
+                minSpanDays: inferMinimumTaskSpanDays(inputTask.category, inputTask.name),
+              }
             );
+        const assignedRole = inferAssignedRole(inputTask.category, inputTask.name);
+        const suggestedAssignee = pickAssigneeForTask({
+          inferredRole: assignedRole,
+          taskName: inputTask.name,
+          phaseName: phaseForTask?.name ?? null,
+          section: inputTask.section ?? null,
+          contextText: contextRef?.extractedText ?? null,
+        });
         const importedAt = new Date();
         await insertMapTaskWithFallback(
           db,
@@ -2144,9 +2750,9 @@ export const mapRouter = router({
           status: "suggested",
           blockedReason: null,
           blockedSince: null,
-          assignedRole: inferAssignedRole(inputTask.category, inputTask.name),
-          assignedUserId: null,
-          suggestedAssignee: null,
+          assignedRole,
+          assignedUserId: suggestedAssignee?.id ?? null,
+          suggestedAssignee: suggestedAssignee?.name ?? null,
           suggestedDate: autoSchedule.suggestedDate,
           dueDate: autoSchedule.dueDate,
           estimatedDuration: inferEstimatedDuration(inputTask.category, inputTask.name, null),

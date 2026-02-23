@@ -65,6 +65,7 @@ interface TaskScaffoldViewProps {
   phases: Phase[];
   sections: ProtocolSection[];
   onConfirm: () => void;
+  isConfirming?: boolean;
   onAddTask: () => void;
   onEditTask: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
@@ -350,6 +351,7 @@ export function TaskScaffoldView({
   phases,
   sections,
   onConfirm,
+  isConfirming = false,
   onAddTask,
   onEditTask,
   onDeleteTask,
@@ -712,8 +714,12 @@ export function TaskScaffoldView({
       const maxEnd = datedRows.length
         ? datedRows.reduce((max, row) => (row.end! > max ? row.end! : max), datedRows[0].end!)
         : addDays(fallbackAnchor, 21);
-      const startBase = trialStart ? startOfDay(trialStart) : minStart;
-      const rawEndBase = trialEnd ? startOfDay(trialEnd) : maxEnd;
+      const trialStartDay = trialStart ? startOfDay(trialStart) : null;
+      const trialEndDay = trialEnd ? startOfDay(trialEnd) : null;
+      const startBase =
+        trialStartDay && trialStartDay.getTime() < minStart.getTime() ? trialStartDay : minStart;
+      const rawEndBase =
+        trialEndDay && trialEndDay.getTime() > maxEnd.getTime() ? trialEndDay : maxEnd;
       const endBase = rawEndBase < startBase ? startBase : rawEndBase;
       const start = addDays(startBase, -2);
       const end = addDays(endBase, 2);
@@ -961,7 +967,9 @@ export function TaskScaffoldView({
               </Button>
               <Button
                 size="sm"
+                disabled={isConfirming}
                 onClick={() => {
+                  if (isConfirming) return;
                   logEvent({
                     eventType: "trial_setup_completed",
                     action: "confirm",
@@ -971,7 +979,7 @@ export function TaskScaffoldView({
                 }}
               >
                 <Check className="h-4 w-4 mr-1" />
-                Confirm & Launch
+                {isConfirming ? "Launching..." : "Confirm & Launch"}
               </Button>
             </div>
           </div>

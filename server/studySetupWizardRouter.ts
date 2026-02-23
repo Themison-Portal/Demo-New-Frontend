@@ -27,6 +27,58 @@ const FALLBACK_SECTION_NAMES = [
 
 const FALLBACK_PHASE_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#8B5CF6", "#06B6D4", "#EF4444", "#6366F1"];
 
+const MAX_PROTOCOL_SECTION_REFERENCE_LENGTH = 50;
+
+function truncateProtocolSectionReference(value: string | null | undefined) {
+  if (!value) return null;
+  const trimmed = String(value).replace(/\s+/g, " ").trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= MAX_PROTOCOL_SECTION_REFERENCE_LENGTH) return trimmed;
+  return `${trimmed.slice(0, MAX_PROTOCOL_SECTION_REFERENCE_LENGTH - 3).trimEnd()}...`;
+}
+
+function compressPageReference(value: string | null | undefined) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const matches = Array.from(raw.matchAll(/\b\d{1,4}\b/g));
+  const numbers = matches
+    .map((match) => Number.parseInt(match[0], 10))
+    .filter((page) => Number.isFinite(page) && page > 0);
+
+  if (!numbers.length) {
+    return truncateProtocolSectionReference(raw);
+  }
+
+  const uniqueSorted = Array.from(new Set(numbers)).sort((a, b) => a - b);
+  const first = uniqueSorted[0];
+  const last = uniqueSorted[uniqueSorted.length - 1];
+
+  if (uniqueSorted.length > 8) {
+    return truncateProtocolSectionReference(first === last ? `P.${first}` : `P.${first}-${last}`);
+  }
+
+  const ranges: string[] = [];
+  let rangeStart = uniqueSorted[0];
+  let previous = uniqueSorted[0];
+  for (let index = 1; index < uniqueSorted.length; index += 1) {
+    const current = uniqueSorted[index];
+    if (current === previous + 1) {
+      previous = current;
+      continue;
+    }
+    ranges.push(rangeStart === previous ? `${rangeStart}` : `${rangeStart}-${previous}`);
+    rangeStart = current;
+    previous = current;
+  }
+  ranges.push(rangeStart === previous ? `${rangeStart}` : `${rangeStart}-${previous}`);
+
+  const compressed = `P.${ranges.join(", ")}`;
+  if (compressed.length <= MAX_PROTOCOL_SECTION_REFERENCE_LENGTH) return compressed;
+  return truncateProtocolSectionReference(first === last ? `P.${first}` : `P.${first}-${last}`);
+}
+
 function normalizeToken(value: string | null | undefined) {
   return String(value || "")
     .toLowerCase()
@@ -403,8 +455,8 @@ function normalizeProtocolSections(rawSections: any[]) {
       const canonical = canonicalSectionName(originalName) || originalName;
       return {
         name: canonical,
-        dateReference: section?.dateReference || null,
-        pageReference: section?.pageReference || null,
+        dateReference: truncateProtocolSectionReference(section?.dateReference || null),
+        pageReference: compressPageReference(section?.pageReference || null),
         children: Array.isArray(section?.children)
           ? section.children
               .map((child: any) => {
@@ -412,8 +464,8 @@ function normalizeProtocolSections(rawSections: any[]) {
                 if (!childName) return null;
                 return {
                   name: childName,
-                  dateReference: child?.dateReference || null,
-                  pageReference: child?.pageReference || null,
+                  dateReference: truncateProtocolSectionReference(child?.dateReference || null),
+                  pageReference: compressPageReference(child?.pageReference || null),
                 };
               })
               .filter(Boolean)
