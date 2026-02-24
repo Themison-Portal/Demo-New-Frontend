@@ -236,6 +236,7 @@ export default function TrialDetail() {
   const [setupTaskModalOpen, setSetupTaskModalOpen] = useState(false);
   const [setupTaskModalMode, setSetupTaskModalMode] = useState<SetupTaskModalMode>("create");
   const [setupEditingTaskId, setSetupEditingTaskId] = useState<string | null>(null);
+  const [pendingOpenSetupTaskId, setPendingOpenSetupTaskId] = useState<string | null>(null);
   const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
   const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
   const [setupTaskForm, setSetupTaskForm] = useState<SetupTaskFormState>({
@@ -288,6 +289,15 @@ export default function TrialDetail() {
     const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
     window.history.replaceState(window.history.state, "", nextUrl);
   }, [activeTab, trialTabStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const openTask = (params.get("openTask") || "").trim();
+    if (!openTask) return;
+    setPendingOpenSetupTaskId(openTask);
+    setActiveTab("study-setup-wizard");
+  }, [trialId]);
 
   const { data: protocols = [] } = trpc.documents.list.useQuery(
     { trialId, demoMode: currentDataMode },
@@ -1616,6 +1626,22 @@ export default function TrialDetail() {
     });
     setSetupTaskModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!pendingOpenSetupTaskId) return;
+    if (activeTab !== "study-setup-wizard") return;
+    const task = scopedMapTasks.find((row) => row.id === pendingOpenSetupTaskId);
+    if (!task) return;
+    handleEditSetupTask(task.id);
+    setPendingOpenSetupTaskId(null);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("openTask");
+    params.delete("mapId");
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [activeTab, pendingOpenSetupTaskId, scopedMapTasks, handleEditSetupTask]);
 
   const handleSaveSetupTaskModal = async () => {
     if (!map?.id) {

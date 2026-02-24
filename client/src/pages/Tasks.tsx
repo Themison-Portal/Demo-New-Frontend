@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   KanbanSquare,
@@ -66,6 +66,42 @@ type LoadedMapPayload = {
 };
 
 const ALL_SCOPE = "all";
+const TASK_MANAGER_OPEN_TASK_REQUEST_KEY = "themison:task-manager-open-task-request:v1";
+const TASK_MANAGER_OPEN_TASK_REQUEST_MAX_AGE_MS = 5 * 60 * 1000;
+
+function readTaskManagerOpenTaskRequest() {
+  if (typeof window === "undefined") return null as { taskId: string; taskName?: string | null } | null;
+  try {
+    const raw = window.localStorage.getItem(TASK_MANAGER_OPEN_TASK_REQUEST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { taskId?: string; taskName?: string | null; createdAt?: number };
+    const taskId = String(parsed?.taskId || "").trim();
+    if (!taskId) return null;
+    const createdAt = Number(parsed?.createdAt || 0);
+    if (Number.isFinite(createdAt) && createdAt > 0) {
+      const ageMs = Date.now() - createdAt;
+      if (ageMs > TASK_MANAGER_OPEN_TASK_REQUEST_MAX_AGE_MS) {
+        window.localStorage.removeItem(TASK_MANAGER_OPEN_TASK_REQUEST_KEY);
+        return null;
+      }
+    }
+    return {
+      taskId,
+      taskName: parsed?.taskName ? String(parsed.taskName).trim() : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function clearTaskManagerOpenTaskRequest() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(TASK_MANAGER_OPEN_TASK_REQUEST_KEY);
+  } catch {
+    // Ignore storage cleanup errors.
+  }
+}
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
   suggested: "Suggested",
@@ -986,12 +1022,19 @@ export default function Tasks() {
   const currentDataMode = getCurrentDataMode();
 
   const params = useMemo(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search || "");
+    }
     const raw = location.includes("?") ? location.split("?")[1] : "";
     return new URLSearchParams(raw);
   }, [location]);
 
   const trialFromQuery = params.get("trialId")?.toLowerCase() ?? ALL_SCOPE;
   const filterFromQuery = normalizeStatusFilterValue(params.get("filter")?.toLowerCase() ?? "");
+  const openTaskFromQuery = (params.get("openTask") || "").trim();
+  const openTaskNameFromQuery = (params.get("openTaskName") || "").trim();
+  const embeddedTaskModal = params.get("embeddedTaskModal") === "1";
+  const embeddedTaskModalNonce = (params.get("nonce") || "").trim();
 
   const [view, setView] = useState<TaskManagerView>("kanban");
   const [search, setSearch] = useState("");
@@ -1007,8 +1050,11 @@ export default function Tasks() {
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [embeddedTaskModalWasOpen, setEmbeddedTaskModalWasOpen] = useState(false);
   const [taskModalMode, setTaskModalMode] = useState<TaskModalMode>("create");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [pendingOpenTaskId, setPendingOpenTaskId] = useState<string | null>(openTaskFromQuery || null);
+  const [pendingOpenTaskName, setPendingOpenTaskName] = useState<string | null>(openTaskNameFromQuery || null);
   const [dependencyTaskIds, setDependencyTaskIds] = useState<string[]>([]);
   const [isWallFullscreenOpen, setIsWallFullscreenOpen] = useState(false);
   const [isWallFullscreenVisible, setIsWallFullscreenVisible] = useState(false);
@@ -1049,6 +1095,42 @@ export default function Tasks() {
     sourceText: "",
   });
 
+  useLayoutEffect(() => {
+    if (!embeddedTaskModal || typeof document === "undefined") return;
+    const html = document.documentElement;
+    const body = document.body;
+    const root = document.getElementById("root");
+
+    const previousStyles = {
+      htmlBackground: html.style.background,
+      htmlBackgroundColor: html.style.backgroundColor,
+      bodyBackground: body.style.background,
+      bodyBackgroundColor: body.style.backgroundColor,
+      rootBackground: root?.style.background ?? "",
+      rootBackgroundColor: root?.style.backgroundColor ?? "",
+    };
+
+    html.style.background = "transparent";
+    html.style.backgroundColor = "transparent";
+    body.style.background = "transparent";
+    body.style.backgroundColor = "transparent";
+    if (root) {
+      root.style.background = "transparent";
+      root.style.backgroundColor = "transparent";
+    }
+
+    return () => {
+      html.style.background = previousStyles.htmlBackground;
+      html.style.backgroundColor = previousStyles.htmlBackgroundColor;
+      body.style.background = previousStyles.bodyBackground;
+      body.style.backgroundColor = previousStyles.bodyBackgroundColor;
+      if (root) {
+        root.style.background = previousStyles.rootBackground;
+        root.style.backgroundColor = previousStyles.rootBackgroundColor;
+      }
+    };
+  }, [embeddedTaskModal]);
+
   useEffect(() => {
     setTrialScope(trialFromQuery || ALL_SCOPE);
   }, [trialFromQuery]);
@@ -1056,6 +1138,20 @@ export default function Tasks() {
   useEffect(() => {
     setStatusFilter(filterFromQuery || "all");
   }, [filterFromQuery]);
+
+  useEffect(() => {
+    if (openTaskFromQuery) {
+      setPendingOpenTaskId(openTaskFromQuery);
+      setPendingOpenTaskName(openTaskNameFromQuery || null);
+      clearTaskManagerOpenTaskRequest();
+      return;
+    }
+    const pending = readTaskManagerOpenTaskRequest();
+    if (!pending?.taskId) return;
+    setPendingOpenTaskId(pending.taskId);
+    setPendingOpenTaskName(pending.taskName || null);
+    clearTaskManagerOpenTaskRequest();
+  }, [openTaskFromQuery, openTaskNameFromQuery]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -1929,6 +2025,10 @@ export default function Tasks() {
 
     if (nextScope && nextScope !== ALL_SCOPE) routeParams.set("trialId", nextScope);
     if (nextStatus && nextStatus !== "all") routeParams.set("filter", nextStatus);
+    if (openTaskFromQuery) routeParams.set("openTask", openTaskFromQuery);
+    if (openTaskNameFromQuery) routeParams.set("openTaskName", openTaskNameFromQuery);
+    if (embeddedTaskModal) routeParams.set("embeddedTaskModal", "1");
+    if (embeddedTaskModalNonce) routeParams.set("nonce", embeddedTaskModalNonce);
 
     const query = routeParams.toString();
     setLocation(query ? `/tasks?${query}` : "/tasks");
@@ -2144,6 +2244,69 @@ export default function Tasks() {
     });
     setTaskModalOpen(true);
   };
+
+  useEffect(() => {
+    if (!pendingOpenTaskId) return;
+    if (isLoading) return;
+    const normalizedPendingTaskName = String(pendingOpenTaskName || "").trim().toLowerCase();
+    const targetTask =
+      tasks.find((task) => task.id === pendingOpenTaskId) ||
+      (normalizedPendingTaskName
+        ? tasks.find((task) => String(task.name || "").trim().toLowerCase() === normalizedPendingTaskName)
+        : undefined);
+    if (!targetTask) {
+      if (tasks.length === 0) return;
+      if (trialScope !== ALL_SCOPE) {
+        setTrialScope(ALL_SCOPE);
+        const routeParams = new URLSearchParams();
+        routeParams.set("openTask", pendingOpenTaskId);
+        if (pendingOpenTaskName) {
+          routeParams.set("openTaskName", pendingOpenTaskName);
+        }
+        if (embeddedTaskModal) {
+          routeParams.set("embeddedTaskModal", "1");
+        }
+        if (embeddedTaskModalNonce) {
+          routeParams.set("nonce", embeddedTaskModalNonce);
+        }
+        setLocation(`/tasks?${routeParams.toString()}`);
+        return;
+      }
+      setPendingOpenTaskId(null);
+      setPendingOpenTaskName(null);
+      clearTaskManagerOpenTaskRequest();
+      toast.error("Task not found.");
+      return;
+    }
+    openEditTaskModal(targetTask);
+    setPendingOpenTaskId(null);
+    setPendingOpenTaskName(null);
+    clearTaskManagerOpenTaskRequest();
+  }, [
+    pendingOpenTaskId,
+    pendingOpenTaskName,
+    isLoading,
+    tasks,
+    trialScope,
+    embeddedTaskModal,
+    embeddedTaskModalNonce,
+    setLocation,
+  ]);
+
+  useEffect(() => {
+    if (!embeddedTaskModal) return;
+    if (taskModalOpen) {
+      setEmbeddedTaskModalWasOpen(true);
+    }
+  }, [embeddedTaskModal, taskModalOpen]);
+
+  useEffect(() => {
+    if (!embeddedTaskModal) return;
+    if (!embeddedTaskModalWasOpen) return;
+    if (taskModalOpen) return;
+    if (typeof window === "undefined") return;
+    window.parent?.postMessage({ type: "themison:task-modal-close" }, window.location.origin);
+  }, [embeddedTaskModal, embeddedTaskModalWasOpen, taskModalOpen]);
 
   const syncTaskDependencies = async (mapId: string, targetTaskId: string, selectedSourceTaskIds: string[]) => {
     const existingDeps = dependencies.filter((dep) => dep.targetTaskId === targetTaskId);
@@ -3357,7 +3520,8 @@ export default function Tasks() {
 
   return (
     <>
-      <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4">
+      {!embeddedTaskModal ? (
+        <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4">
         <div>
           <h1 className="text-3xl font-bold text-foreground tracking-tight mb-2">Task Manager</h1>
           <p className="text-sm text-muted-foreground">
@@ -3599,9 +3763,10 @@ export default function Tasks() {
             </>
           )}
         </div>
-      </div>
+        </div>
+      ) : null}
 
-      {isWallFullscreenOpen ? (
+      {!embeddedTaskModal && isWallFullscreenOpen ? (
         <div className="fixed inset-0 z-[70] pointer-events-auto">
           <div
             className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-500 ${
@@ -3626,6 +3791,9 @@ export default function Tasks() {
           setTaskModalOpen(open);
           if (!open) {
             setEditingTaskId(null);
+            if (embeddedTaskModal && typeof window !== "undefined") {
+              window.parent?.postMessage({ type: "themison:task-modal-close" }, window.location.origin);
+            }
           }
         }}
       >

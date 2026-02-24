@@ -6,6 +6,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -89,8 +90,63 @@ interface ChatMessage {
   content: string;
   thinking?: string; // AI's reasoning/thought process
   thoughtsSummary?: string; // UI-friendly summary (no raw chain-of-thought)
-  sources?: Array<{ filename: string; section?: string; excerpt?: string; fileId?: string; fileUrl?: string; protocolId?: number; page?: number; category?: string; sourceType?: string }>;
+  sources?: Array<{
+    filename: string;
+    section?: string;
+    excerpt?: string;
+    fileId?: string;
+    fileUrl?: string;
+    protocolId?: number;
+    page?: number;
+    category?: string;
+    sourceType?: string;
+    taskId?: string;
+    trialId?: string;
+    mapId?: string;
+    dueDate?: string | null;
+    taskStatus?: string | null;
+    assignedRole?: string | null;
+    assigneeName?: string | null;
+    phaseName?: string | null;
+  }>;
 }
+
+type TaskEditorFormState = {
+  title: string;
+  description: string;
+  dueDate: string;
+  priority: string;
+  assignedRole: string;
+  assigneeName: string;
+  status: string;
+};
+
+const TASK_EDITOR_STATUS_OPTIONS = [
+  "suggested",
+  "confirmed",
+  "todo",
+  "in_progress",
+  "blocked",
+  "waiting",
+  "done",
+  "skipped",
+  "cancelled",
+] as const;
+
+const TASK_EDITOR_PRIORITY_OPTIONS = ["critical", "high", "medium", "low"] as const;
+
+const TASK_EDITOR_ROLE_OPTIONS = [
+  "pi",
+  "sub_i",
+  "crc",
+  "nurse",
+  "pharmacist",
+  "lab_tech",
+  "data_manager",
+  "regulatory_coordinator",
+  "study_coordinator",
+  "custom",
+] as const;
 
 type AddContextOption = {
   id: string;
@@ -647,6 +703,53 @@ function readRuntimeUserInfo() {
   }
 }
 
+function toDateInputValue(value?: string | Date | null): string {
+  if (!value) return "";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function toIsoDateTime(value: string): string | null {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function parseTaskEditorLinkHref(href?: string | null) {
+  const raw = String(href || "").trim();
+  if (!raw) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw, "https://themison.local");
+  } catch {
+    return null;
+  }
+
+  const isThemisonTaskLink =
+    (parsed.protocol === "themison:" &&
+      (parsed.hostname === "task" || parsed.pathname.replace(/^\/+/, "") === "task")) ||
+    (parsed.hostname === "themison.local" && parsed.pathname.replace(/\/+$/, "") === "/__themison/task");
+  if (!isThemisonTaskLink) return null;
+
+  const taskId = parsed.searchParams.get("taskId")?.trim();
+  if (!taskId) return null;
+  const trialId = parsed.searchParams.get("trialId")?.trim() || undefined;
+  const mapId = parsed.searchParams.get("mapId")?.trim() || undefined;
+  const taskName = parsed.searchParams.get("taskName")?.trim() || undefined;
+
+  return {
+    taskId,
+    trialId,
+    mapId,
+    taskName,
+  };
+}
+
 type ArchiveFolderDialogMode = "save" | "move";
 type ArchiveFolderDialogStep = "select" | "create";
 
@@ -670,6 +773,24 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   const [taskPaneMode, setTaskPaneMode] = useState<"source" | "worksheet">("source");
   const [taskPaneDocument, setTaskPaneDocument] = useState<{ name: string; url: string; section?: string; page?: number; excerpt?: string } | null>(null);
   const [taskPaneOpenedAt, setTaskPaneOpenedAt] = useState<number | null>(null);
+  const [taskEditorOpen, setTaskEditorOpen] = useState(false);
+  const [taskEditorSource, setTaskEditorSource] = useState<{
+    taskId: string;
+    trialId?: string;
+    mapId?: string;
+  } | null>(null);
+  const [taskManagerOverlayOpen, setTaskManagerOverlayOpen] = useState(false);
+  const [taskManagerOverlayUrl, setTaskManagerOverlayUrl] = useState<string | null>(null);
+  const [taskEditorSeededTaskId, setTaskEditorSeededTaskId] = useState<string | null>(null);
+  const [taskEditorForm, setTaskEditorForm] = useState<TaskEditorFormState>({
+    title: "",
+    description: "",
+    dueDate: "",
+    priority: "medium",
+    assignedRole: "",
+    assigneeName: "",
+    status: "todo",
+  });
   const [worksheetDrafts, setWorksheetDrafts] = useState<WorksheetDraft[]>([]);
   const [activeWorksheetId, setActiveWorksheetId] = useState<string | null>(null);
   const [worksheetGenerationMessageIndex, setWorksheetGenerationMessageIndex] = useState<number | null>(null);
@@ -1312,6 +1433,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
   const chatMutation = trpc.documentAI.chat.useMutation();
   const generateWorksheetMutation = trpc.documentAI.generateWorksheet.useMutation();
+  const updateTaskMutation = trpc.map.updateTask.useMutation();
+  const changeTaskStatusMutation = trpc.map.changeTaskStatus.useMutation();
   const { data: allTrials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
   
   // Query all trials with documents
@@ -1334,6 +1457,31 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     { id: selectedTrialId, demoMode: currentDataMode },
     { enabled: !!trialId && trialId !== 'all' }
   );
+
+  const taskEditorTrialId = taskEditorSource?.trialId || trialId || "";
+  const taskEditorMapSummaryQuery = trpc.map.getByTrial.useQuery(
+    {
+      trialId: taskEditorTrialId,
+      includeArchived: false,
+      demoMode: currentDataMode,
+    },
+    {
+      enabled: taskEditorOpen && !taskEditorSource?.mapId && Boolean(taskEditorTrialId),
+    }
+  );
+  const taskEditorMapId = taskEditorSource?.mapId || taskEditorMapSummaryQuery.data?.id || "";
+  const taskEditorMapDetailQuery = trpc.map.load.useQuery(
+    { mapId: taskEditorMapId },
+    {
+      enabled: taskEditorOpen && Boolean(taskEditorMapId),
+    }
+  );
+
+  const taskEditorTask = useMemo(() => {
+    if (!taskEditorSource?.taskId) return null;
+    const rows = (taskEditorMapDetailQuery.data?.tasks || []) as Array<Record<string, any>>;
+    return rows.find((task) => String(task.id) === taskEditorSource.taskId) || null;
+  }, [taskEditorMapDetailQuery.data?.tasks, taskEditorSource?.taskId]);
 
   const selectedTrialDocuments = useMemo(() => {
     if (!selectedTrialId || selectedTrialId === "all") return [] as Array<Record<string, any>>;
@@ -1359,6 +1507,28 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
       pickLatest(activeDocs)
     );
   }, [selectedTrialDocuments]);
+
+  const isTaskEditorSaving = updateTaskMutation.isPending || changeTaskStatusMutation.isPending;
+  const isTaskEditorLoading =
+    taskEditorOpen &&
+    ((taskEditorSource?.mapId ? false : taskEditorMapSummaryQuery.isLoading) || taskEditorMapDetailQuery.isLoading);
+
+  useEffect(() => {
+    if (!taskEditorOpen) return;
+    if (!taskEditorTask) return;
+    const currentTaskId = String(taskEditorTask.id || "");
+    if (!currentTaskId || taskEditorSeededTaskId === currentTaskId) return;
+    setTaskEditorForm({
+      title: String(taskEditorTask.name || ""),
+      description: String(taskEditorTask.description || ""),
+      dueDate: toDateInputValue(taskEditorTask.dueDate || taskEditorTask.suggestedDate),
+      priority: String(taskEditorTask.priority || "medium"),
+      assignedRole: String(taskEditorTask.assignedRole || ""),
+      assigneeName: String(taskEditorTask.suggestedAssignee || ""),
+      status: String(taskEditorTask.status || "todo"),
+    });
+    setTaskEditorSeededTaskId(currentTaskId);
+  }, [taskEditorOpen, taskEditorTask, taskEditorSeededTaskId]);
 
   useEffect(() => {
     if (!trialId) return;
@@ -1695,7 +1865,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           role: msg.role,
           content: msg.content,
         })),
-        ...(selectedTrialId && selectedTrialId !== "all" ? { trialId: selectedTrialId, demoMode: currentDataMode } : {}),
+        demoMode: currentDataMode,
+        ...(selectedTrialId && selectedTrialId !== "all" ? { trialId: selectedTrialId } : {}),
         // If in all documents mode, don't send documentIds (backend will search all)
         // If in filtered mode, send specific documentIds
         ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {}),
@@ -1863,6 +2034,111 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         demoMode: currentDataMode,
       },
     });
+  };
+
+  const handleOpenTaskEditor = (source: {
+    taskId?: string;
+    trialId?: string;
+    mapId?: string;
+    taskName?: string;
+  }) => {
+    const taskId = String(source.taskId || "").trim();
+    if (!taskId) {
+      toast.error("Task link is missing task id.");
+      return;
+    }
+    const routeParams = new URLSearchParams();
+    routeParams.set("openTask", taskId);
+    const taskName = String(source.taskName || "").trim();
+    if (taskName) {
+      routeParams.set("openTaskName", taskName);
+    }
+    routeParams.set("embeddedTaskModal", "1");
+    routeParams.set("nonce", String(Date.now()));
+    setTaskManagerOverlayUrl(`/tasks?${routeParams.toString()}`);
+    setTaskManagerOverlayOpen(true);
+  };
+
+  useEffect(() => {
+    if (!taskManagerOverlayOpen) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data as { type?: string } | null;
+      if (!payload || payload.type !== "themison:task-modal-close") return;
+      setTaskManagerOverlayOpen(false);
+    };
+    window.addEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+    };
+  }, [taskManagerOverlayOpen]);
+
+  const handleCloseTaskEditor = () => {
+    if (isTaskEditorSaving) return;
+    setTaskEditorOpen(false);
+    setTaskEditorSource(null);
+    setTaskEditorSeededTaskId(null);
+  };
+
+  const handleSaveTaskEditor = async () => {
+    if (!taskEditorTask) {
+      toast.error("Task details are still loading.");
+      return;
+    }
+    const title = taskEditorForm.title.trim();
+    if (!title) {
+      toast.error("Task title is required.");
+      return;
+    }
+
+    const dueDateIso = toIsoDateTime(taskEditorForm.dueDate);
+    const nextStatusToken = taskEditorForm.status.trim();
+    const nextStatus = TASK_EDITOR_STATUS_OPTIONS.includes(nextStatusToken as (typeof TASK_EDITOR_STATUS_OPTIONS)[number])
+      ? (nextStatusToken as (typeof TASK_EDITOR_STATUS_OPTIONS)[number])
+      : null;
+    const nextPriorityToken = taskEditorForm.priority.trim();
+    const nextPriority = TASK_EDITOR_PRIORITY_OPTIONS.includes(
+      nextPriorityToken as (typeof TASK_EDITOR_PRIORITY_OPTIONS)[number]
+    )
+      ? (nextPriorityToken as (typeof TASK_EDITOR_PRIORITY_OPTIONS)[number])
+      : "medium";
+    const nextAssignedRoleToken = taskEditorForm.assignedRole.trim();
+    const nextAssignedRole = TASK_EDITOR_ROLE_OPTIONS.includes(
+      nextAssignedRoleToken as (typeof TASK_EDITOR_ROLE_OPTIONS)[number]
+    )
+      ? (nextAssignedRoleToken as (typeof TASK_EDITOR_ROLE_OPTIONS)[number])
+      : null;
+    const currentStatus = String(taskEditorTask.status || "");
+    let statusChanged = false;
+
+    try {
+      if (nextStatus && nextStatus !== currentStatus) {
+        await changeTaskStatusMutation.mutateAsync({
+          taskId: String(taskEditorTask.id),
+          status: nextStatus,
+        });
+        statusChanged = true;
+      }
+
+      await updateTaskMutation.mutateAsync({
+        taskId: String(taskEditorTask.id),
+        updates: {
+          name: title,
+          description: taskEditorForm.description.trim(),
+          priority: nextPriority,
+          assignedRole: nextAssignedRole,
+          suggestedAssignee: taskEditorForm.assigneeName.trim() || null,
+          dueDate: dueDateIso,
+          suggestedDate: dueDateIso,
+        },
+      });
+
+      await taskEditorMapDetailQuery.refetch();
+      toast.success(statusChanged ? "Task and status updated." : "Task updated.");
+      setTaskEditorOpen(false);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to save task.");
+    }
   };
 
   const createFallbackWorksheetBlocks = useCallback((question: string, messageEntry: ChatMessage) => {
@@ -3990,7 +4266,7 @@ Output rules:
                           onChange={(e) => setMessage(e.target.value)}
                           onKeyDown={handleKeyDown}
                           placeholder={starterPromptPlaceholder}
-                          className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
+                          className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-[#0E0017] caret-[#0E0017] placeholder:text-gray-400"
                         />
                         <div className="mt-3 flex items-center justify-between">
                           <div className="flex items-center gap-2">
@@ -4259,16 +4535,44 @@ Output rules:
                                       {children}
                                     </blockquote>
                                   ),
-                                  a: ({ children, href }) => (
-                                    <a
-                                      href={href}
-                                      className="text-blue-600 hover:text-blue-700 underline"
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                    >
-                                      {children}
-                                    </a>
-                                  ),
+                                  a: ({ children, href }) => {
+                                    const taskLink = parseTaskEditorLinkHref(href);
+                                    if (taskLink) {
+                                      const taskLabelFromLink = Array.isArray(children)
+                                        ? children
+                                            .map((item) => (typeof item === "string" ? item : ""))
+                                            .join("")
+                                            .trim()
+                                        : typeof children === "string"
+                                        ? children.trim()
+                                        : "";
+                                      return (
+                                        <a
+                                          href={href}
+                                          className="text-emerald-700 hover:text-emerald-800 underline decoration-emerald-400"
+                                          onClick={(event) => {
+                                            event.preventDefault();
+                                            handleOpenTaskEditor({
+                                              ...taskLink,
+                                              taskName: taskLink.taskName || taskLabelFromLink || undefined,
+                                            });
+                                          }}
+                                        >
+                                          {children}
+                                        </a>
+                                      );
+                                    }
+                                    return (
+                                      <a
+                                        href={href}
+                                        className="text-blue-600 hover:text-blue-700 underline"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        {children}
+                                      </a>
+                                    );
+                                  },
                                   strong: ({ children }) => (
                                     <strong className="font-semibold text-gray-900">
                                       {children}
@@ -4287,49 +4591,133 @@ Output rules:
                           </div>
                         </div>
 
-                    {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
-                          <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
-                            <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase">
-                              Evidence from study documents (click to open)
-                            </p>
-                            {msg.sources.map((source, sourceIndex) => {
-                              return (
-                                <div
-                                  key={sourceIndex}
-                                  className="bg-white/70 border border-gray-100 rounded-xl p-3 space-y-2"
-                                >
-                                  <div className="flex items-start justify-between">
-                                    <div className="flex items-start gap-3">
-                                      <FileText className="w-5 h-5 text-blue-600 mt-0.5" />
-                                      <div>
-                                        <p className="text-sm font-semibold text-gray-900">
-                                          {source.category || "Document"}
-                                        </p>
-                                        <p className="text-[11px] text-gray-500 mt-0.5">
-                                          {source.section ? `Section "${source.section}"` : "Section not available"}
-                                          {" · "}
-                                          {source.page ? `Page ${source.page}` : "Page not available"}
-                                        </p>
+                        {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (() => {
+                          const previousQuestion = getPreviousUserQuestion(index).toLowerCase();
+                          const taskIntent = /\b(task|tasks|to do|todo|today|due)\b/i.test(previousQuestion);
+
+                          const normalizedSources = msg.sources
+                            .map((source) => {
+                              const isTaskSource =
+                                Boolean(source.taskId) || String(source.category || "").toLowerCase() === "task";
+                              const canOpenTask = isTaskSource && Boolean(source.taskId);
+                              const canOpenDocument = !isTaskSource && Boolean(source.fileUrl);
+                              const title = String(
+                                (isTaskSource ? source.filename : source.filename || source.category) || "Document"
+                              ).trim();
+                              const isPlaceholderDocument =
+                                !isTaskSource &&
+                                title.toLowerCase() === "document" &&
+                                !canOpenDocument &&
+                                !source.page &&
+                                !source.protocolId;
+                              return {
+                                source,
+                                isTaskSource,
+                                canOpenTask,
+                                canOpenDocument,
+                                title,
+                                isPlaceholderDocument,
+                              };
+                            })
+                            .filter((entry) => !entry.isPlaceholderDocument)
+                            .filter((entry) => entry.canOpenTask || entry.canOpenDocument);
+
+                          const taskFocusedSources = taskIntent
+                            ? normalizedSources.filter((entry) => entry.isTaskSource)
+                            : normalizedSources;
+                          const displayCandidates = taskFocusedSources.length > 0 ? taskFocusedSources : normalizedSources;
+
+                          const seen = new Set<string>();
+                          const dedupedSources = displayCandidates.filter((entry) => {
+                            const source = entry.source;
+                            const dedupeKey = entry.isTaskSource
+                              ? `task:${source.taskId || source.filename || ""}`
+                              : `doc:${source.fileUrl || ""}:${source.section || ""}:${source.page || ""}`;
+                            if (seen.has(dedupeKey)) return false;
+                            seen.add(dedupeKey);
+                            return true;
+                          });
+
+                          if (dedupedSources.length === 0) return null;
+                          const maxVisibleSources = taskIntent ? 6 : 3;
+                          const visibleSources = dedupedSources.slice(0, maxVisibleSources);
+                          const hiddenSourceCount = Math.max(0, dedupedSources.length - visibleSources.length);
+
+                          return (
+                            <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase">
+                                {taskIntent ? "Related tasks" : "Evidence and linked records"}
+                                </p>
+                                {hiddenSourceCount > 0 ? (
+                                  <p className="text-[11px] text-gray-500">
+                                    Showing top {visibleSources.length} of {dedupedSources.length}
+                                  </p>
+                                ) : null}
+                              </div>
+                              {visibleSources.map((entry, sourceIndex) => {
+                                const source = entry.source;
+                                return (
+                                  <div
+                                    key={sourceIndex}
+                                    className="bg-white/70 border border-gray-100 rounded-xl p-3 space-y-2"
+                                  >
+                                    <div className="flex items-start justify-between">
+                                      <div className="flex items-start gap-3">
+                                        {entry.isTaskSource ? (
+                                          <CheckSquare className="w-5 h-5 text-emerald-600 mt-0.5" />
+                                        ) : (
+                                          <FileText className="w-5 h-5 text-blue-600 mt-0.5" />
+                                        )}
+                                        <div>
+                                          <p className="text-sm font-semibold text-gray-900">
+                                            {entry.title}
+                                          </p>
+                                          <p className="text-[11px] text-gray-500 mt-0.5">
+                                            {entry.isTaskSource
+                                              ? source.section || "Task context"
+                                              : `${source.section ? `Section "${source.section}"` : "Document source"}${
+                                                  source.page ? ` · Page ${source.page}` : ""
+                                                }`}
+                                          </p>
+                                        </div>
                                       </div>
                                     </div>
+                                    <p className="text-xs text-gray-600 italic ml-8 mt-2">
+                                      {source.excerpt
+                                        ? source.excerpt.replace(/【[^】]+】/g, "").trim() || "Excerpt not available."
+                                        : "Excerpt not available."}
+                                    </p>
+                                    {entry.canOpenTask ? (
+                                      <button
+                                        onClick={() =>
+                                          handleOpenTaskEditor({
+                                            taskId: source.taskId,
+                                            trialId: source.trialId || trialId || undefined,
+                                            mapId: source.mapId,
+                                            taskName: source.filename,
+                                          })
+                                        }
+                                        className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg mt-2"
+                                      >
+                                        Open task
+                                        <ExternalLink className="w-4 h-4" />
+                                      </button>
+                                    ) : entry.canOpenDocument ? (
+                                      <button
+                                        onClick={() => handleOpenTaskDocument(source)}
+                                        className="inline-flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg mt-2"
+                                      >
+                                        Open document
+                                        <ExternalLink className="w-4 h-4" />
+                                      </button>
+                                    ) : null}
                                   </div>
-                                  <p className="text-xs text-gray-600 italic ml-8 mt-2">
-                                    {source.excerpt
-                                      ? source.excerpt.replace(/【[^】]+】/g, "").trim() || "Excerpt not available."
-                                      : "Excerpt not available."}
-                                  </p>
-                                  <button
-                                    onClick={() => handleOpenTaskDocument(source)}
-                                    className="inline-flex items-center gap-2 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg mt-2"
-                                  >
-                                    Open in {source.category || "Document"}
-                                    <ExternalLink className="w-4 h-4" />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
 
                         {msg.role === "assistant" && shouldSuggestWorksheet(index, msg) && (
                           <div className="mt-6 max-w-4xl mx-auto">
@@ -4604,7 +4992,7 @@ Output rules:
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask a follow-up question..."
-                    className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-gray-700 placeholder:text-gray-400"
+                    className="min-h-[80px] max-h-48 overflow-y-auto border-0 resize-none focus-visible:ring-0 focus-visible:border-0 shadow-none text-[#0E0017] caret-[#0E0017] placeholder:text-gray-400"
                   />
 
                   <div className="mt-3 flex items-center justify-between">
@@ -5720,6 +6108,131 @@ Output rules:
             </div>
           </div>
         )}
+
+        {taskManagerOverlayOpen ? (
+          <div className="fixed inset-0 z-[70]">
+            {taskManagerOverlayUrl ? (
+              <iframe
+                src={taskManagerOverlayUrl}
+                className="h-full w-full border-0 bg-transparent"
+                style={{ background: "transparent" }}
+                title="Task Manager Editor"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-black/20 text-sm text-gray-700">
+                Loading task editor...
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <Dialog open={taskEditorOpen} onOpenChange={(open) => !open && handleCloseTaskEditor()}>
+          <DialogContent className="sm:max-w-[640px] max-h-[86vh] overflow-y-auto">
+            <DialogTitle className="text-lg font-semibold text-gray-900">Edit Task</DialogTitle>
+            {isTaskEditorLoading ? (
+              <div className="py-6 text-sm text-gray-600">Loading task details...</div>
+            ) : !taskEditorTask ? (
+              <div className="space-y-3 py-2">
+                <p className="text-sm text-gray-700">Task details could not be loaded for this source.</p>
+                <p className="text-xs text-gray-500">
+                  Try asking again so Themison AI returns a fresh task link.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Title</label>
+                  <Input
+                    value={taskEditorForm.title}
+                    onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Task title"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Description</label>
+                  <Textarea
+                    value={taskEditorForm.description}
+                    onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, description: event.target.value }))}
+                    placeholder="Task description"
+                    className="min-h-[96px]"
+                  />
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Due date</label>
+                    <Input
+                      type="date"
+                      value={taskEditorForm.dueDate}
+                      onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Priority</label>
+                    <select
+                      value={taskEditorForm.priority}
+                      onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, priority: event.target.value }))}
+                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                    >
+                      {TASK_EDITOR_PRIORITY_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Status</label>
+                    <select
+                      value={taskEditorForm.status}
+                      onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, status: event.target.value }))}
+                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                    >
+                      {TASK_EDITOR_STATUS_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assigned role</label>
+                    <select
+                      value={taskEditorForm.assignedRole}
+                      onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, assignedRole: event.target.value }))}
+                      className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="">Unassigned</option>
+                      {TASK_EDITOR_ROLE_OPTIONS.map((value) => (
+                        <option key={value} value={value}>
+                          {value.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assignee name</label>
+                  <Input
+                    value={taskEditorForm.assigneeName}
+                    onChange={(event) => setTaskEditorForm((prev) => ({ ...prev, assigneeName: event.target.value }))}
+                    placeholder="e.g. Kaleb Sanders"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="mt-4 flex items-center justify-end gap-2 border-t border-gray-100 pt-4">
+              <Button variant="outline" onClick={handleCloseTaskEditor} disabled={isTaskEditorSaving}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleSaveTaskEditor()}
+                disabled={isTaskEditorSaving || isTaskEditorLoading || !taskEditorTask}
+              >
+                {isTaskEditorSaving ? "Saving..." : "Save task"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Right: PDF Viewer Pane - Fixed Position */}
         {pdfViewerOpen && selectedDocument && !pdfViewerExpanded && !taskPaneOpen && (

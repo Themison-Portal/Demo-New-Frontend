@@ -8,6 +8,7 @@ import {
   protocolChunks,
   protocols,
   trials,
+  users,
   type ExecutionMap,
   type MapPhase,
   type MapTask,
@@ -17,6 +18,7 @@ import {
 } from "../../drizzle/schema";
 import { invokeLLM } from "./llm";
 import { ENV } from "./env";
+import { stripDemoId } from "./demoMode";
 import {
   getProtocolContextChunks,
   getStructuredEligibilityCriteria,
@@ -65,6 +67,21 @@ export type OperationalEvidence = {
   label: string;
   value: string;
   asOf: string;
+  taskItems?: OperationalTaskItem[];
+};
+
+export type OperationalTaskItem = {
+  taskId: string;
+  mapId: string;
+  trialId: string;
+  trialLabel?: string | null;
+  taskName: string;
+  dueDate: string | null;
+  status: string | null;
+  assignedRole: string | null;
+  assigneeName: string | null;
+  phaseId: string | null;
+  phaseName: string | null;
 };
 
 export type TelemetryEvidence = {
@@ -95,6 +112,14 @@ export type UnifiedQueryResult = {
     excerpt?: string;
     category?: string | null;
     sourceType: "document" | "operational" | "telemetry";
+    taskId?: string;
+    trialId?: string;
+    mapId?: string;
+    dueDate?: string | null;
+    taskStatus?: string | null;
+    assignedRole?: string | null;
+    assigneeName?: string | null;
+    phaseName?: string | null;
   }>;
   evidence: UnifiedEvidenceBundle;
   confidence: number;
@@ -464,6 +489,10 @@ function hasOperationalIntent(query: string) {
       normalized
     ) ||
     /\b(this week|next week|this month|next 7 days)\b/.test(normalized) ||
+    (/\b(today|tomorrow|yesterday|next business day)\b/.test(normalized) &&
+      /\b(my|i|mine|due|task|tasks|work|todo|to do|schedule)\b/.test(normalized)) ||
+    (/\b(20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/.test(normalized) &&
+      /\b(due|task|tasks|work|todo|to do|schedule)\b/.test(normalized)) ||
     (/\bwhat(?:s| is)? my\b/.test(normalized) && /\b(task|tasks|work|todo|to do|week)\b/.test(normalized))
   );
 }
@@ -635,15 +664,246 @@ function formatIsoNow() {
   return new Date().toISOString();
 }
 
-function formatShortDate(value: unknown) {
-  if (!value) return "unscheduled";
+function parseDateLike(value: unknown) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return value;
+  }
+  if (typeof value === "string") {
+    const dateOnly = parseIsoDateOnlyLocal(value);
+    if (dateOnly) return dateOnly;
+  }
   const parsed = new Date(value as string | number | Date);
-  if (Number.isNaN(parsed.getTime())) return "unscheduled";
-  return parsed.toISOString().slice(0, 10);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function toLocalDayTimestamp(value: unknown) {
+  const parsed = parseDateLike(value);
+  if (!parsed) return null;
+  return startOfLocalDay(parsed).getTime();
+}
+
+function compareTasksByDueDate(a: MapTask, b: MapTask) {
+  const aTs = toLocalDayTimestamp(a.dueDate) ?? Number.MAX_SAFE_INTEGER;
+  const bTs = toLocalDayTimestamp(b.dueDate) ?? Number.MAX_SAFE_INTEGER;
+  if (aTs !== bTs) return aTs - bTs;
+  const aMap = String(a.mapId || "");
+  const bMap = String(b.mapId || "");
+  if (aMap !== bMap) return aMap.localeCompare(bMap);
+  const aPhase = String(a.phaseId || "");
+  const bPhase = String(b.phaseId || "");
+  if (aPhase !== bPhase) return aPhase.localeCompare(bPhase);
+  const aOrder = Number.isFinite(Number(a.orderInPhase)) ? Number(a.orderInPhase) : Number.MAX_SAFE_INTEGER;
+  const bOrder = Number.isFinite(Number(b.orderInPhase)) ? Number(b.orderInPhase) : Number.MAX_SAFE_INTEGER;
+  if (aOrder !== bOrder) return aOrder - bOrder;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
+type QueuedTaskProjectionPoint = {
+  dateKey: string;
+  tasks: MapTask[];
+};
+
+function buildQueuedTaskProjection(tasks: MapTask[], windowDays = 7, reference = new Date()) {
+  const now = startOfLocalDay(reference);
+  const businessDates: Date[] = [];
+  const cursor = new Date(now);
+
+  while (businessDates.length < windowDays) {
+    const dow = cursor.getDay();
+    if (dow !== 0 && dow !== 6) {
+      businessDates.push(new Date(cursor));
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const points: QueuedTaskProjectionPoint[] = businessDates.map((date) => ({
+    dateKey: formatLocalDate(date) || "",
+    tasks: [],
+  }));
+  const indexByDate = new Map(points.map((point, index) => [point.dateKey, index]));
+  const backlogPattern = [1, 2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 1] as const;
+  let backlogCursor = 0;
+
+  const assignBacklogTask = (task: MapTask) => {
+    if (points.length === 0) return;
+    const slot = backlogPattern[backlogCursor % backlogPattern.length] ?? 1;
+    backlogCursor += 1;
+    const safeSlot = Math.max(1, Math.min(points.length - 1, slot));
+    points[safeSlot].tasks.push(task);
+  };
+
+  const openTasks = tasks.filter((task) => isOpenTask(task)).sort(compareTasksByDueDate);
+  for (const task of openTasks) {
+    const dueDate = parseDateLike(task.dueDate);
+    const statusToken = normalizeLite(String(task.status || ""));
+    const isBlocked = statusToken === "blocked" || statusToken === "waiting";
+
+    if (dueDate) {
+      const dueKey = formatLocalDate(dueDate);
+      const idx = dueKey ? indexByDate.get(dueKey) : undefined;
+      if (idx != null) {
+        points[idx].tasks.push(task);
+        continue;
+      }
+      if (startOfLocalDay(dueDate).getTime() < now.getTime()) {
+        points[0].tasks.push(task);
+        continue;
+      }
+    }
+
+    if (isBlocked) {
+      points[0].tasks.push(task);
+      continue;
+    }
+
+    assignBacklogTask(task);
+  }
+
+  return points;
+}
+
+function formatShortDate(value: unknown) {
+  const localDate = formatLocalDate(value);
+  return localDate || "unscheduled";
+}
+
+function formatLocalDate(value: unknown) {
+  const parsed = parseDateLike(value);
+  if (!parsed) return null;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function addLocalDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function parseIsoDateOnlyLocal(value: string) {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const parsed = new Date(year, month - 1, day);
+  if (
+    parsed.getFullYear() !== year ||
+    parsed.getMonth() !== month - 1 ||
+    parsed.getDate() !== day
+  ) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseOperationalTargetDate(query: string): Date | null {
+  const raw = String(query || "").toLowerCase();
+  const now = startOfLocalDay(new Date());
+
+  if (/\bday after tomorrow\b/.test(raw)) return addLocalDays(now, 2);
+  if (/\btomorrow\b/.test(raw)) return addLocalDays(now, 1);
+  if (/\btoday\b/.test(raw)) return now;
+  if (/\byesterday\b/.test(raw)) return addLocalDays(now, -1);
+
+  const isoMatch = raw.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (isoMatch) {
+    const parsed = parseIsoDateOnlyLocal(isoMatch[1]);
+    if (parsed) return startOfLocalDay(parsed);
+  }
+
+  const usDateMatch = raw.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (usDateMatch) {
+    const month = Number(usDateMatch[1]);
+    const day = Number(usDateMatch[2]);
+    const yearToken = usDateMatch[3];
+    const currentYear = now.getFullYear();
+    const year = yearToken
+      ? Number(yearToken.length === 2 ? `20${yearToken}` : yearToken)
+      : currentYear;
+    if (Number.isFinite(month) && Number.isFinite(day) && Number.isFinite(year)) {
+      const parsed = new Date(year, month - 1, day);
+      if (
+        parsed.getFullYear() === year &&
+        parsed.getMonth() === month - 1 &&
+        parsed.getDate() === day
+      ) {
+        return startOfLocalDay(parsed);
+      }
+    }
+  }
+
+  const monthNameMatch = raw.match(
+    /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?\b/i
+  );
+  if (monthNameMatch) {
+    const parsed = new Date(monthNameMatch[0]);
+    if (!Number.isNaN(parsed.getTime())) return startOfLocalDay(parsed);
+  }
+
+  return null;
 }
 
 function isOpenTask(task: MapTask) {
   return task.status !== "done" && task.status !== "cancelled" && task.status !== "skipped";
+}
+
+function buildOperationalTaskItem(
+  task: MapTask,
+  options: {
+    mapTrialById: Map<string, string>;
+    trialLabelById?: Map<string, string>;
+    phaseById?: Map<string, MapPhase>;
+  }
+): OperationalTaskItem | null {
+  const mapId = String(task.mapId || "");
+  if (!mapId) return null;
+  const trialIdRaw = String(options.mapTrialById.get(mapId) || "");
+  const trialId = trialIdRaw ? stripDemoId(trialIdRaw) : "";
+  if (!trialId) return null;
+  const phaseId = String(task.phaseId || "") || null;
+  const phase = phaseId ? options.phaseById?.get(phaseId) : undefined;
+  return {
+    taskId: String(task.id || ""),
+    mapId,
+    trialId,
+    trialLabel: trialIdRaw ? options.trialLabelById?.get(trialIdRaw) || null : null,
+    taskName: String(task.name || "").trim() || "Untitled task",
+    dueDate: formatLocalDate(task.dueDate),
+    status: task.status || null,
+    assignedRole: task.assignedRole || null,
+    assigneeName: task.suggestedAssignee || null,
+    phaseId,
+    phaseName: phase?.name || null,
+  };
+}
+
+function pickPreferredExecutionMap(rows: ExecutionMap[], includeArchived = false) {
+  const filtered = includeArchived ? rows : rows.filter((row) => row.status !== "archived");
+  if (!filtered.length) return null;
+  const rank: Record<ExecutionMap["status"], number> = {
+    active: 0,
+    revised: 1,
+    draft: 2,
+    archived: 3,
+  };
+  const sorted = [...filtered].sort((a, b) => {
+    const statusRank = rank[a.status] - rank[b.status];
+    if (statusRank !== 0) return statusRank;
+    if (a.version !== b.version) return b.version - a.version;
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+  return sorted[0] || null;
 }
 
 function clamp01(value: number) {
@@ -2442,10 +2702,52 @@ function buildDeterministicCriteriaAnswer(
   return lines.join("\n");
 }
 
-async function collectOperationalEvidence(db: any, trialId?: string, userId?: number) {
+async function collectOperationalEvidence(
+  db: any,
+  trialId?: string,
+  userId?: number,
+  query?: string,
+  demoMode: "sample" | "full" | "building" = "sample"
+) {
+  const targetDate = query ? parseOperationalTargetDate(query) : null;
+  const targetDateKey = targetDate ? formatLocalDate(targetDate) : null;
+  let userNameToken: string | null = null;
+  if (typeof userId === "number") {
+    const userRows = (await db
+      .select({ name: users.name })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)) as Array<{ name: string | null }>;
+    const name = String(userRows[0]?.name || "").trim();
+    if (name) userNameToken = normalizeLite(name);
+  }
+  const isTaskMine = (task: MapTask) => {
+    if (typeof userId !== "number") return false;
+    if (task.assignedUserId === userId) return true;
+    if (!userNameToken) return false;
+    const suggested = normalizeLite(String(task.suggestedAssignee || ""));
+    if (!suggested) return false;
+    // Keep "my task" assignment semantics aligned with Home4 dashboard:
+    // exact assignee name match only (after normalization).
+    return suggested === userNameToken;
+  };
   if (!trialId) {
     const asOf = formatIsoNow();
-    const trialRows = (await db.select().from(trials).orderBy(desc(trials.updatedAt))) as Trial[];
+    const prefixedTrialRows = (await db
+      .select()
+      .from(trials)
+      .where(like(trials.id, `${demoMode}:%`))
+      .orderBy(desc(trials.updatedAt))) as Trial[];
+    const trialRows =
+      prefixedTrialRows.length > 0
+        ? prefixedTrialRows
+        : demoMode === "building"
+          ? []
+          : ((await db
+              .select()
+              .from(trials)
+              .where(notLike(trials.id, "%:%"))
+              .orderBy(desc(trials.updatedAt))) as Trial[]);
     if (trialRows.length === 0) return [] as OperationalEvidence[];
 
     const evidence: OperationalEvidence[] = [];
@@ -2542,20 +2844,23 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     const mapRows = (await db
       .select()
       .from(executionMaps)
+      .where(inArray(executionMaps.trialId, trialRows.map((trial) => trial.id)))
       .orderBy(desc(executionMaps.updatedAt))) as ExecutionMap[];
-    const latestMapByTrial = new Map<string, ExecutionMap>();
+    const groupedByTrial = new Map<string, ExecutionMap[]>();
     for (const map of mapRows) {
       if (!map.trialId) continue;
-      if (!latestMapByTrial.has(map.trialId)) {
-        latestMapByTrial.set(map.trialId, map);
-      }
+      const rows = groupedByTrial.get(map.trialId) ?? [];
+      rows.push(map);
+      groupedByTrial.set(map.trialId, rows);
     }
-    const activeMaps = Array.from(latestMapByTrial.values());
+    const activeMaps = Array.from(groupedByTrial.values())
+      .map((rows) => pickPreferredExecutionMap(rows, false))
+      .filter(Boolean) as ExecutionMap[];
     if (activeMaps.length === 0) return evidence;
 
     evidence.push({
       label: "Execution maps",
-      value: `${activeMaps.length} active map(s) across ${latestMapByTrial.size} trial(s)`,
+      value: `${activeMaps.length} active map(s) across ${groupedByTrial.size} trial(s)`,
       asOf,
     });
 
@@ -2563,28 +2868,34 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     const tasksRows = mapIds.length
       ? ((await db.select().from(mapTasks).where(inArray(mapTasks.mapId, mapIds))) as MapTask[])
       : [];
+    const phasesRows = mapIds.length
+      ? ((await db.select().from(mapPhases).where(inArray(mapPhases.mapId, mapIds))) as MapPhase[])
+      : [];
+    const phaseById = new Map<string, MapPhase>(phasesRows.map((phase) => [String(phase.id), phase]));
 
     const byStatus = tasksRows.reduce((acc: Record<string, number>, task: MapTask) => {
       const key = task.status || "unknown";
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
     }, {});
-    const now = Date.now();
+    const now = startOfLocalDay(new Date()).getTime();
     const overdue = tasksRows.filter((task: MapTask) => {
-      if (!task.dueDate) return false;
+      const due = toLocalDayTimestamp(task.dueDate);
+      if (due === null) return false;
       if (!isOpenTask(task)) return false;
-      return new Date(task.dueDate).getTime() < now;
+      return due < now;
     });
     const dueSoon = tasksRows.filter((task: MapTask) => {
-      if (!task.dueDate) return false;
+      const due = toLocalDayTimestamp(task.dueDate);
+      if (due === null) return false;
       if (!isOpenTask(task)) return false;
-      const delta = new Date(task.dueDate).getTime() - now;
+      const delta = due - now;
       return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
     });
     const trialNameById = new Map(
-      trialRows.map((trial) => [trial.id, trial.investigationalProduct || trial.title || trial.id])
+      trialRows.map((trial) => [String(trial.id), trial.investigationalProduct || trial.title || trial.id])
     );
-    const mapTrialById = new Map(activeMaps.map((map) => [map.id, map.trialId]));
+    const mapTrialById = new Map(activeMaps.map((map) => [String(map.id), String(map.trialId)]));
 
     evidence.push({
       label: "Cross-trial task progress",
@@ -2600,31 +2911,36 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     });
 
     const dueSoonTop = [...dueSoon]
-      .sort((a, b) => new Date(a.dueDate as Date).getTime() - new Date(b.dueDate as Date).getTime())
+      .sort(compareTasksByDueDate)
       .slice(0, 8);
     if (dueSoonTop.length > 0) {
+      const dueSoonTaskItems = dueSoonTop
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
       evidence.push({
         label: "Cross-trial tasks due this week",
         value: dueSoonTop
           .map((task) => {
-            const trialKey = mapTrialById.get(task.mapId) || "unknown";
+            const trialKey = mapTrialById.get(String(task.mapId)) || "unknown";
             const trialName = trialNameById.get(trialKey) || trialKey;
             return `${trialName}: ${task.name} (${formatShortDate(task.dueDate)})`;
           })
           .join("; "),
         asOf,
+        ...(dueSoonTaskItems.length > 0 ? { taskItems: dueSoonTaskItems } : {}),
       });
     }
 
     if (typeof userId === "number") {
-      const assignedOpen = tasksRows.filter((task) => task.assignedUserId === userId && isOpenTask(task));
+      const assignedOpen = tasksRows.filter((task) => isTaskMine(task) && isOpenTask(task));
       const assignedDueSoon = assignedOpen
         .filter((task) => {
-          if (!task.dueDate) return false;
-          const delta = new Date(task.dueDate).getTime() - now;
+          const due = toLocalDayTimestamp(task.dueDate);
+          if (due === null) return false;
+          const delta = due - now;
           return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
         })
-        .sort((a, b) => new Date(a.dueDate as Date).getTime() - new Date(b.dueDate as Date).getTime())
+        .sort(compareTasksByDueDate)
         .slice(0, 8);
       evidence.push({
         label: "My assigned tasks",
@@ -2632,16 +2948,116 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
         asOf,
       });
       if (assignedDueSoon.length > 0) {
+        const myDueSoonTaskItems = assignedDueSoon
+          .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+          .filter((task): task is OperationalTaskItem => Boolean(task));
         evidence.push({
           label: "My tasks due this week",
           value: assignedDueSoon.map((task) => `${task.name} (${formatShortDate(task.dueDate)})`).join("; "),
           asOf,
+          ...(myDueSoonTaskItems.length > 0 ? { taskItems: myDueSoonTaskItems } : {}),
+        });
+      }
+      if (targetDateKey) {
+        const assignedDueOnTarget = assignedOpen
+          .filter((task) => {
+            if (!task.dueDate) return false;
+            return formatLocalDate(task.dueDate) === targetDateKey;
+          })
+          .sort(compareTasksByDueDate)
+          .slice(0, 12);
+        const myDueOnTargetTaskItems = assignedDueOnTarget
+          .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+          .filter((task): task is OperationalTaskItem => Boolean(task));
+        evidence.push({
+          label: `My tasks due ${targetDateKey}`,
+          value:
+            assignedDueOnTarget.length > 0
+              ? assignedDueOnTarget
+                  .map((task) => `${task.name} (${formatLocalDate(task.dueDate) || formatShortDate(task.dueDate)})`)
+                  .join("; ")
+              : "none",
+          asOf,
+          ...(myDueOnTargetTaskItems.length > 0 ? { taskItems: myDueOnTargetTaskItems } : {}),
         });
       }
     }
 
+    if (targetDateKey) {
+      const dueOnTarget = tasksRows
+        .filter((task) => {
+          if (!task.dueDate) return false;
+          if (!isOpenTask(task)) return false;
+          return formatLocalDate(task.dueDate) === targetDateKey;
+        })
+        .sort(compareTasksByDueDate)
+        .slice(0, 12);
+      const dueOnTargetTaskItems = dueOnTarget
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
+      evidence.push({
+        label: `Cross-trial tasks due ${targetDateKey}`,
+        value:
+          dueOnTarget.length > 0
+            ? dueOnTarget
+                .map((task) => {
+                  const trialKey = mapTrialById.get(String(task.mapId)) || "unknown";
+                  const trialName = trialNameById.get(trialKey) || trialKey;
+                  return `${trialName}: ${task.name} (${formatLocalDate(task.dueDate) || formatShortDate(task.dueDate)})`;
+                })
+                .join("; ")
+            : "none",
+        asOf,
+        ...(dueOnTargetTaskItems.length > 0 ? { taskItems: dueOnTargetTaskItems } : {}),
+      });
+
+      const scopedProjectionSource =
+        typeof userId === "number" && tasksRows.some((task) => isTaskMine(task) && isOpenTask(task))
+          ? tasksRows.filter((task) => isTaskMine(task) && isOpenTask(task))
+          : tasksRows.filter((task) => isOpenTask(task));
+      const scopedProjection = buildQueuedTaskProjection(scopedProjectionSource);
+      const scopedQueuedOnTarget =
+        scopedProjection.find((point) => point.dateKey === targetDateKey)?.tasks.slice(0, 12) ?? [];
+      const myQueuedTaskItems = scopedQueuedOnTarget
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
+      evidence.push({
+        label: `My queued tasks ${targetDateKey}`,
+        value:
+          scopedQueuedOnTarget.length > 0
+            ? scopedQueuedOnTarget
+                .map((task) => `${task.name} (${formatLocalDate(task.dueDate) || "unscheduled"})`)
+                .join("; ")
+            : "none",
+        asOf,
+        ...(myQueuedTaskItems.length > 0 ? { taskItems: myQueuedTaskItems } : {}),
+      });
+
+      const crossTrialProjection = buildQueuedTaskProjection(tasksRows.filter((task) => isOpenTask(task)));
+      const crossTrialQueuedOnTarget =
+        crossTrialProjection.find((point) => point.dateKey === targetDateKey)?.tasks.slice(0, 12) ?? [];
+      const crossTrialQueuedTaskItems = crossTrialQueuedOnTarget
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById: trialNameById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
+      evidence.push({
+        label: `Cross-trial queued tasks ${targetDateKey}`,
+        value:
+          crossTrialQueuedOnTarget.length > 0
+            ? crossTrialQueuedOnTarget
+                .map((task) => {
+                  const trialKey = mapTrialById.get(String(task.mapId)) || "unknown";
+                  const trialName = trialNameById.get(trialKey) || trialKey;
+                  return `${trialName}: ${task.name} (${formatLocalDate(task.dueDate) || "unscheduled"})`;
+                })
+                .join("; ")
+            : "none",
+        asOf,
+        ...(crossTrialQueuedTaskItems.length > 0 ? { taskItems: crossTrialQueuedTaskItems } : {}),
+      });
+    }
+
     const overdueByTrial = overdue.reduce((acc: Record<string, number>, task) => {
-      const trialKey = mapTrialById.get(task.mapId) || "unknown";
+      const trialKey = mapTrialById.get(String(task.mapId)) || "unknown";
       acc[trialKey] = (acc[trialKey] ?? 0) + 1;
       return acc;
     }, {});
@@ -2719,9 +3135,8 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     .select()
     .from(executionMaps)
     .where(eq(executionMaps.trialId, trialId))
-    .orderBy(desc(executionMaps.status), desc(executionMaps.updatedAt))
-    .limit(1)) as ExecutionMap[];
-  const activeMap = mapRows[0];
+    .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version))) as ExecutionMap[];
+  const activeMap = pickPreferredExecutionMap(mapRows, false);
   if (!activeMap) return evidence;
 
   evidence.push({
@@ -2740,6 +3155,9 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     .select()
     .from(mapPhases)
     .where(eq(mapPhases.mapId, activeMap.id))) as MapPhase[];
+  const phaseById = new Map<string, MapPhase>(phasesRows.map((phase) => [String(phase.id), phase]));
+  const mapTrialById = new Map<string, string>([[String(activeMap.id), String(trial.id)]]);
+  const trialLabelById = new Map<string, string>([[String(trial.id), trial.investigationalProduct || trial.title || trial.id]]);
 
   const phaseCount = phasesRows.length;
   const total = tasksRows.length;
@@ -2748,16 +3166,18 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     acc[key] = (acc[key] ?? 0) + 1;
     return acc;
   }, {});
-  const now = Date.now();
+  const now = startOfLocalDay(new Date()).getTime();
   const overdue = tasksRows.filter((task: MapTask) => {
-    if (!task.dueDate) return false;
+    const due = toLocalDayTimestamp(task.dueDate);
+    if (due === null) return false;
     if (!isOpenTask(task)) return false;
-    return new Date(task.dueDate).getTime() < now;
+    return due < now;
   });
   const dueSoon = tasksRows.filter((task: MapTask) => {
-    if (!task.dueDate) return false;
+    const due = toLocalDayTimestamp(task.dueDate);
+    if (due === null) return false;
     if (!isOpenTask(task)) return false;
-    const delta = new Date(task.dueDate).getTime() - now;
+    const delta = due - now;
     return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
   });
   const roleCounts = tasksRows.reduce((acc: Record<string, number>, task: MapTask) => {
@@ -2784,25 +3204,32 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
     asOf,
   });
   if (dueSoon.length > 0) {
+    const dueSoonTaskItems = [...dueSoon]
+      .sort(compareTasksByDueDate)
+      .slice(0, 8)
+      .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+      .filter((task): task is OperationalTaskItem => Boolean(task));
     evidence.push({
       label: "Tasks due this week",
       value: [...dueSoon]
-        .sort((a, b) => new Date(a.dueDate as Date).getTime() - new Date(b.dueDate as Date).getTime())
+        .sort(compareTasksByDueDate)
         .slice(0, 8)
         .map((task) => `${task.name} (${formatShortDate(task.dueDate)})`)
         .join("; "),
       asOf,
+      ...(dueSoonTaskItems.length > 0 ? { taskItems: dueSoonTaskItems } : {}),
     });
   }
   if (typeof userId === "number") {
-    const assignedOpen = tasksRows.filter((task) => task.assignedUserId === userId && isOpenTask(task));
+    const assignedOpen = tasksRows.filter((task) => isTaskMine(task) && isOpenTask(task));
     const assignedDueSoon = assignedOpen
       .filter((task) => {
-        if (!task.dueDate) return false;
-        const delta = new Date(task.dueDate).getTime() - now;
+        const due = toLocalDayTimestamp(task.dueDate);
+        if (due === null) return false;
+        const delta = due - now;
         return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
       })
-      .sort((a, b) => new Date(a.dueDate as Date).getTime() - new Date(b.dueDate as Date).getTime())
+      .sort(compareTasksByDueDate)
       .slice(0, 8);
     evidence.push({
       label: "My assigned tasks",
@@ -2810,12 +3237,98 @@ async function collectOperationalEvidence(db: any, trialId?: string, userId?: nu
       asOf,
     });
     if (assignedDueSoon.length > 0) {
+      const myDueSoonTaskItems = assignedDueSoon
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
       evidence.push({
         label: "My tasks due this week",
         value: assignedDueSoon.map((task) => `${task.name} (${formatShortDate(task.dueDate)})`).join("; "),
         asOf,
+        ...(myDueSoonTaskItems.length > 0 ? { taskItems: myDueSoonTaskItems } : {}),
       });
     }
+    if (targetDateKey) {
+      const assignedDueOnTarget = assignedOpen
+        .filter((task) => {
+          if (!task.dueDate) return false;
+          return formatLocalDate(task.dueDate) === targetDateKey;
+        })
+        .sort(compareTasksByDueDate)
+        .slice(0, 12);
+      const myDueOnTargetTaskItems = assignedDueOnTarget
+        .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+        .filter((task): task is OperationalTaskItem => Boolean(task));
+      evidence.push({
+        label: `My tasks due ${targetDateKey}`,
+        value:
+          assignedDueOnTarget.length > 0
+            ? assignedDueOnTarget
+                .map((task) => `${task.name} (${formatLocalDate(task.dueDate) || formatShortDate(task.dueDate)})`)
+                .join("; ")
+            : "none",
+        asOf,
+        ...(myDueOnTargetTaskItems.length > 0 ? { taskItems: myDueOnTargetTaskItems } : {}),
+      });
+    }
+  }
+  if (targetDateKey) {
+    const dueOnTarget = tasksRows
+      .filter((task) => {
+        if (!task.dueDate) return false;
+        if (!isOpenTask(task)) return false;
+        return formatLocalDate(task.dueDate) === targetDateKey;
+      })
+      .sort(compareTasksByDueDate)
+      .slice(0, 12);
+    const dueOnTargetTaskItems = dueOnTarget
+      .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+      .filter((task): task is OperationalTaskItem => Boolean(task));
+    evidence.push({
+      label: `Tasks due ${targetDateKey}`,
+      value:
+        dueOnTarget.length > 0
+          ? dueOnTarget
+              .map((task) => `${task.name} (${formatLocalDate(task.dueDate) || formatShortDate(task.dueDate)})`)
+              .join("; ")
+          : "none",
+      asOf,
+      ...(dueOnTargetTaskItems.length > 0 ? { taskItems: dueOnTargetTaskItems } : {}),
+    });
+
+    const scopedProjectionSource =
+      typeof userId === "number" && tasksRows.some((task) => isTaskMine(task) && isOpenTask(task))
+        ? tasksRows.filter((task) => isTaskMine(task) && isOpenTask(task))
+        : tasksRows.filter((task) => isOpenTask(task));
+    const scopedProjection = buildQueuedTaskProjection(scopedProjectionSource);
+    const scopedQueuedOnTarget =
+      scopedProjection.find((point) => point.dateKey === targetDateKey)?.tasks.slice(0, 12) ?? [];
+    const myQueuedTaskItems = scopedQueuedOnTarget
+      .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+      .filter((task): task is OperationalTaskItem => Boolean(task));
+    evidence.push({
+      label: `My queued tasks ${targetDateKey}`,
+      value:
+        scopedQueuedOnTarget.length > 0
+          ? scopedQueuedOnTarget.map((task) => `${task.name} (${formatLocalDate(task.dueDate) || "unscheduled"})`).join("; ")
+          : "none",
+      asOf,
+      ...(myQueuedTaskItems.length > 0 ? { taskItems: myQueuedTaskItems } : {}),
+    });
+
+    const trialProjection = buildQueuedTaskProjection(tasksRows.filter((task) => isOpenTask(task)));
+    const queuedOnTarget = trialProjection.find((point) => point.dateKey === targetDateKey)?.tasks.slice(0, 12) ?? [];
+    const queuedTaskItems = queuedOnTarget
+      .map((task) => buildOperationalTaskItem(task, { mapTrialById, trialLabelById, phaseById }))
+      .filter((task): task is OperationalTaskItem => Boolean(task));
+    evidence.push({
+      label: `Queued tasks ${targetDateKey}`,
+      value:
+        queuedOnTarget.length > 0
+          ? queuedOnTarget.map((task) => `${task.name} (${formatLocalDate(task.dueDate) || "unscheduled"})`).join("; ")
+          : "none",
+      asOf,
+      ...(queuedTaskItems.length > 0 ? { taskItems: queuedTaskItems } : {}),
+    });
   }
   if (topRoles) {
     evidence.push({
@@ -3025,6 +3538,147 @@ function buildOperationalContext(lines: OperationalEvidence[]) {
 
 function buildTelemetryContext(lines: TelemetryEvidence[]) {
   return lines.map((line) => `- ${line.label}: ${line.value} (as-of ${line.asOf})`);
+}
+
+function parseOperationalTaskList(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw || raw.toLowerCase() === "none") return [] as string[];
+  return raw
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function escapeMarkdownLinkLabel(value: string) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+
+function buildOperationalTaskMarkdownLink(
+  task: OperationalTaskItem,
+  options?: {
+    includeTrialLabel?: boolean;
+  }
+) {
+  const taskId = String(task.taskId || "").trim();
+  if (!taskId) return null;
+  const params = new URLSearchParams();
+  params.set("taskId", taskId);
+  if (task.trialId) params.set("trialId", String(task.trialId));
+  if (task.mapId) params.set("mapId", String(task.mapId));
+  if (task.taskName) params.set("taskName", String(task.taskName));
+  const href = `/__themison/task?${params.toString()}`;
+  const taskLabel =
+    options?.includeTrialLabel && task.trialLabel
+      ? `${task.trialLabel}: ${task.taskName || "Untitled task"}`
+      : task.taskName || "Untitled task";
+  const dueLabel = task.dueDate || "unscheduled";
+  return `[${escapeMarkdownLinkLabel(taskLabel)}](${href}) (${dueLabel})`;
+}
+
+function isDateScopedTaskQuestion(query: string) {
+  const normalized = normalizeLite(query);
+  if (!/\b(task|tasks|todo|to do|work)\b/.test(normalized)) return false;
+  return (
+    /\b(today|tomorrow|yesterday|day after tomorrow)\b/.test(normalized) ||
+    /\b(20\d{2}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/.test(normalized)
+  );
+}
+
+function buildDeterministicOperationalDateAnswer(query: string, opEvidence: OperationalEvidence[]) {
+  if (!isDateScopedTaskQuestion(query)) return null;
+  const targetDate = parseOperationalTargetDate(query);
+  if (!targetDate) return null;
+
+  const targetDateKey = formatLocalDate(targetDate);
+  if (!targetDateKey) return null;
+
+  const normalized = normalizeLite(query);
+  const asksForMyTasks = /\b(my|mine|i|me)\b/.test(normalized);
+  const explicitDueIntent = /\bdue\b/.test(normalized);
+  const preferredLabels = asksForMyTasks
+    ? explicitDueIntent
+      ? [
+          `My tasks due ${targetDateKey}`,
+          `My queued tasks ${targetDateKey}`,
+          `Tasks due ${targetDateKey}`,
+          `Queued tasks ${targetDateKey}`,
+          `Cross-trial tasks due ${targetDateKey}`,
+          `Cross-trial queued tasks ${targetDateKey}`,
+        ]
+      : [
+          `My queued tasks ${targetDateKey}`,
+          `My tasks due ${targetDateKey}`,
+          `Queued tasks ${targetDateKey}`,
+          `Tasks due ${targetDateKey}`,
+          `Cross-trial queued tasks ${targetDateKey}`,
+          `Cross-trial tasks due ${targetDateKey}`,
+        ]
+    : explicitDueIntent
+      ? [
+          `Tasks due ${targetDateKey}`,
+          `Queued tasks ${targetDateKey}`,
+          `Cross-trial tasks due ${targetDateKey}`,
+          `Cross-trial queued tasks ${targetDateKey}`,
+          `My tasks due ${targetDateKey}`,
+          `My queued tasks ${targetDateKey}`,
+        ]
+      : [
+          `Queued tasks ${targetDateKey}`,
+          `Tasks due ${targetDateKey}`,
+          `Cross-trial queued tasks ${targetDateKey}`,
+          `Cross-trial tasks due ${targetDateKey}`,
+          `My queued tasks ${targetDateKey}`,
+          `My tasks due ${targetDateKey}`,
+        ];
+
+  const candidates = preferredLabels
+    .map((label) => opEvidence.find((entry) => entry.label === label))
+    .filter((entry): entry is OperationalEvidence => Boolean(entry))
+    .map((entry) => {
+      const includeTrialLabel = normalizeLite(entry.label).includes("cross trial");
+      const linkedItems = (entry.taskItems || [])
+        .map((task) => buildOperationalTaskMarkdownLink(task, { includeTrialLabel }))
+        .filter((item): item is string => Boolean(item));
+      const fallbackItems = parseOperationalTaskList(entry.value);
+      return {
+        entry,
+        items: linkedItems.length > 0 ? linkedItems : fallbackItems,
+      };
+    });
+  if (candidates.length === 0) return null;
+  const selectedCandidate = candidates.find((candidate) => candidate.items.length > 0) || candidates[0];
+  const selected = selectedCandidate.entry;
+  const taskItems = selectedCandidate.items;
+  const queueLabel = normalizeLite(selected.label).includes("queued");
+  const lines: string[] = [];
+  if (asksForMyTasks && !normalizeLite(selected.label).startsWith("my ")) {
+    lines.push(
+      `No directly assigned tasks were found for ${targetDateKey}; showing scoped ${queueLabel ? "queue" : "task"} items.`
+    );
+    lines.push("");
+  }
+  if (taskItems.length === 0) {
+    lines.push(
+      queueLabel
+        ? `No tasks are queued for ${targetDateKey} based on current operational data.`
+        : `No open tasks are due on ${targetDateKey} based on current operational data.`
+    );
+  } else {
+    lines.push(`${queueLabel ? "Queued tasks" : "Open tasks due"} on ${targetDateKey}:`);
+    taskItems.slice(0, 20).forEach((item, index) => {
+      lines.push(`${index + 1}. ${item}`);
+    });
+  }
+  lines.push("", `[Operational: ${selected.label}, as-of ${selected.asOf}]`);
+
+  return {
+    message: lines.join("\n"),
+    confidence: taskItems.length > 0 ? 0.9 : 0.86,
+    thinking: "Returned deterministic date-scoped task answer from operational evidence.",
+  };
 }
 
 function buildFallbackCitations(docEvidence: DocumentEvidence[], opEvidence: OperationalEvidence[], telemetry: TelemetryEvidence[]) {
@@ -3280,7 +3934,9 @@ export async function runUnifiedQuery(params: {
     needsDoc
       ? collectDocumentEvidence(params.db, query, protocolRows, queryPlan)
       : Promise.resolve({ evidence: [], chunks: [] }),
-    needsOp ? collectOperationalEvidence(params.db, params.trialId, params.userId) : Promise.resolve([]),
+    needsOp
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      : Promise.resolve([]),
     needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
   ]);
 
@@ -3303,6 +3959,49 @@ export async function runUnifiedQuery(params: {
     gaps,
   };
 
+  const seenOperationalTaskSourceKeys = new Set<string>();
+  const operationalTaskSources = opEvidence
+    .flatMap((item) =>
+      (item.taskItems || []).map((task) => {
+        const key = `${task.trialId}:${task.taskId}`;
+        if (!task.taskId || !task.trialId || seenOperationalTaskSourceKeys.has(key)) return null;
+        seenOperationalTaskSourceKeys.add(key);
+        const metaParts = [
+          task.trialLabel || null,
+          task.phaseName || null,
+          task.dueDate ? `Due ${task.dueDate}` : "No due date",
+          task.status ? `Status ${String(task.status).replace(/_/g, " ")}` : null,
+          task.assigneeName ? `Assignee ${task.assigneeName}` : task.assignedRole ? `Role ${task.assignedRole}` : null,
+        ].filter(Boolean);
+        return {
+          sourceType: "operational" as const,
+          filename: task.taskName,
+          section: item.label,
+          page: null,
+          excerpt: metaParts.join(" · "),
+          category: "Task",
+          taskId: task.taskId,
+          trialId: task.trialId,
+          mapId: task.mapId,
+          dueDate: task.dueDate,
+          taskStatus: task.status,
+          assignedRole: task.assignedRole,
+          assigneeName: task.assigneeName,
+          phaseName: task.phaseName,
+        };
+      })
+    )
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .slice(0, 20);
+
+  const operationalSummarySources = opEvidence.slice(0, 6).map((item) => ({
+    sourceType: "operational" as const,
+    filename: item.label,
+    section: item.label,
+    page: null,
+    excerpt: item.value,
+  }));
+
   const sources = [
     ...docResult.evidence.slice(0, 14).map((item) => ({
       sourceType: "document" as const,
@@ -3314,13 +4013,9 @@ export async function runUnifiedQuery(params: {
       excerpt: item.excerpt,
       category: null,
     })),
-    ...opEvidence.slice(0, 6).map((item) => ({
-      sourceType: "operational" as const,
-      filename: item.label,
-      section: item.label,
-      page: null,
-      excerpt: item.value,
-    })),
+    ...(operationalTaskSources.length > 0
+      ? [...operationalTaskSources, ...operationalSummarySources.slice(0, 2)]
+      : operationalSummarySources),
     ...telemetryEvidence.slice(0, 4).map((item) => ({
       sourceType: "telemetry" as const,
       filename: item.label,
@@ -3329,6 +4024,23 @@ export async function runUnifiedQuery(params: {
       excerpt: item.value,
     })),
   ];
+
+  if (route === "operational" && needsOp) {
+    const deterministicOperationalDate = buildDeterministicOperationalDateAnswer(query, opEvidence);
+    if (deterministicOperationalDate) {
+      return {
+        plan: queryPlan,
+        route,
+        message: deterministicOperationalDate.message,
+        thinking: deterministicOperationalDate.thinking,
+        sources,
+        evidence,
+        confidence: clamp01(deterministicOperationalDate.confidence),
+        abstained: false,
+        abstainReason: null,
+      } satisfies UnifiedQueryResult;
+    }
+  }
 
   const hardBlockingGaps: string[] = [];
   if (queryPlan.requiredTools.includes("document_retrieval") && docResult.evidence.length === 0) {
@@ -3614,6 +4326,7 @@ export async function runUnifiedQueryDiagnostics(params: {
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   protocolIds?: number[];
   trialId?: string;
+  demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
 }) {
@@ -3624,7 +4337,13 @@ export async function runUnifiedQueryDiagnostics(params: {
     Boolean((params.protocolIds && params.protocolIds.length > 0) || params.trialId),
     Boolean(params.trialId)
   );
-  const protocolRows = await resolveProtocolsForScope(params.db, params.protocolIds, params.trialId, provisionalPlan);
+  const protocolRows = await resolveProtocolsForScope(
+    params.db,
+    params.protocolIds,
+    params.trialId,
+    provisionalPlan,
+    params.demoMode
+  );
   const protocolFileUrls = new Map<number, string | null>(
     protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
   );
@@ -3658,7 +4377,9 @@ export async function runUnifiedQueryDiagnostics(params: {
             candidates: [],
           } satisfies DocumentRetrievalDebug,
         }),
-    needsOp ? collectOperationalEvidence(params.db, params.trialId, params.userId) : Promise.resolve([]),
+    needsOp
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      : Promise.resolve([]),
     needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
   ]);
 

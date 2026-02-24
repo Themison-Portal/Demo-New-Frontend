@@ -4708,7 +4708,7 @@ function MonthlyChannelAreaPanel({
   );
 }
 
-export default function Analytics({ embedded = false }: { embedded?: boolean } = {}) {
+export default function Analytics2({ embedded = false }: { embedded?: boolean } = {}) {
   const { state, getCurrentDataMode } = useDemoState();
   const [location, setLocation] = useLocation();
   const isHomePage = location === "/";
@@ -5889,6 +5889,271 @@ export default function Analytics({ embedded = false }: { embedded?: boolean } =
           ) : null}
         </article>
       </section>
+
+      <BlockedReasonsByTrialPanel
+        trials={analyticsTrialOptions}
+        taskRows={taskTimelineRows}
+        blockedDeltaPercent={metricDeltas.blockedTasksDelta.percent}
+      />
+
+      <DarkRevenuePerformancePanel trials={analyticsTrialOptions} taskRows={taskTimelineRows} />
+
+      <section className="mb-6 rounded-lg border border-[#e7e7e8] bg-[#fcfcfd] p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_28px_rgba(15,23,42,0.06)]">
+        <div className="mb-4 flex items-center justify-between px-2">
+          <h2 className="text-xl font-semibold text-[#131416]">Overview</h2>
+          <button
+            type="button"
+            className="inline-flex h-10 items-center gap-2 rounded-full border border-[#d8d8db] bg-transparent px-4 text-sm text-[#2f3033]"
+          >
+            Last 7 days
+            <ChevronDown className="h-4 w-4 text-[#6f7075]" />
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-[#e4e5e7] bg-[#f9fafb] px-2 pb-2 pt-3">
+          <div className="relative h-[310px] w-full">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-[50px] left-[52px] right-[14px] top-[14px] z-0"
+              style={{
+                backgroundImage: [
+                  "linear-gradient(to right, rgba(185,193,217,0.26) 1px, transparent 1px)",
+                  "linear-gradient(to top, rgba(185,193,217,0.26) 1px, transparent 1px)",
+                ].join(", "),
+                backgroundSize: "56px 56px, 56px 56px",
+                WebkitMaskImage:
+                  "linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.18) 100%)",
+                maskImage:
+                  "linear-gradient(to top, rgba(0,0,0,0.95) 0%, rgba(0,0,0,0.55) 58%, rgba(0,0,0,0.18) 100%)",
+              }}
+            />
+            <ResponsiveContainer width="100%" height="100%" className="relative z-10">
+              <AreaChart data={executionTrend} margin={{ top: 10, right: 8, left: 8, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="analyticsExecutionStroke" x1="0%" y1="0%" x2="100%" y2="0%">
+                    {EXECUTION_CHART_GRADIENT_STOPS.map((stop) => (
+                      <stop key={`stroke-${stop.offset}`} offset={stop.offset} stopColor={stop.color} />
+                    ))}
+                  </linearGradient>
+                  <linearGradient id="analyticsExecutionGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                    {EXECUTION_CHART_GRADIENT_STOPS.map((stop) => (
+                      <stop
+                        key={`fill-${stop.offset}`}
+                        offset={stop.offset}
+                        stopColor={stop.color}
+                        stopOpacity={0.2}
+                      />
+                    ))}
+                  </linearGradient>
+                </defs>
+                <XAxis
+                  dataKey="name"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: "#8b8d93" }}
+                  dy={14}
+                  height={42}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: "#8b8d93" }}
+                  tickFormatter={formatChartAxis}
+                  ticks={chartTicks}
+                  width={44}
+                  domain={[0, chartCeiling]}
+                />
+                <Tooltip content={<TrendTooltip />} cursor={{ stroke: "#d8dce1", strokeWidth: 2 }} />
+                <Area
+                  type="monotone"
+                  dataKey="value"
+                  stroke="url(#analyticsExecutionStroke)"
+                  strokeWidth={3}
+                  fill="url(#analyticsExecutionGradient)"
+                  activeDot={{
+                    r: 5.5,
+                    fill: "#ffffff",
+                    stroke: "#0047FF",
+                    strokeWidth: 3,
+                  }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <StudentEnrollmentCard />
+        <TrafficSourcesCard />
+
+        <div className="mt-3 grid grid-cols-1 gap-4 px-4 xl:grid-cols-[1fr_auto] xl:items-center">
+          <div>
+            <p className="text-2xl font-semibold text-[#202226]">
+              {followUpCount.toLocaleString()} execution items need follow-up
+            </p>
+            <p className="mt-1 text-sm text-[#6f7075]">
+              Route owners and unblock trial operations.
+            </p>
+
+            <div className="relative mt-3">
+              <div className="flex gap-5 overflow-x-auto py-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {featuredMembers.map((member) => (
+                  <div key={member.id} className="min-w-[80px] flex-none text-center">
+                    <div className="mx-auto h-16 w-16 overflow-hidden rounded-full bg-[#e9eaed]">
+                      {member.avatar ? (
+                        <img src={member.avatar} alt={member.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-[#6f7075]">
+                          {member.initials || firstName(member.name).slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-2 truncate text-sm text-[#55565a]">{firstName(member.name)}</p>
+                  </div>
+                ))}
+                <div className="min-w-[80px] flex-none text-center">
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[#d8d8db] bg-transparent">
+                    <ArrowRight className="h-5 w-5 text-[#6f7075]" />
+                  </div>
+                  <p className="mt-2 text-sm text-[#55565a]">View all</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-auto xl:mx-0">
+            <GradientCompletionGauge value={100} />
+          </div>
+        </div>
+      </section>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <Card className="border-border shadow-none">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Task Completion</CardTitle>
+            <CheckCircle2 className="h-5 w-5 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-foreground">{donePct}%</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {taskStats.done} / {taskStats.total} tasks
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border shadow-none">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Blocked Tasks</CardTitle>
+            <AlertTriangle className="h-5 w-5 text-destructive" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-foreground">{taskStats.blocked}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {taskStats.inFlight} currently in progress
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-border shadow-none">
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Unassigned</CardTitle>
+            <Activity className="h-5 w-5 text-primary" />
+          </CardHeader>
+          <CardContent>
+            <p className="text-3xl font-bold text-foreground">{taskStats.unassigned}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              tasks without an owner
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <section className="relative mb-2 overflow-hidden rounded-[20px] border border-[#E8EAF2] bg-white px-5 pb-5 pt-5 shadow-[2px_4px_24px_0px_rgba(170,170,170,0.10)]">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-12 w-12 items-center justify-center rounded-[80px] border border-[#E4ECF6] bg-[rgba(255,255,255,0.1)] shadow-[inset_0px_0px_8px_0px_rgba(0,73,153,0.25)]">
+              <Users className="h-6 w-6 text-[#004999]" />
+            </span>
+            <div className="leading-[1.2]">
+              <h2 className="text-[20px] font-semibold text-[#121212]">Workload by Team Member</h2>
+              <p className="mt-1 text-[14px] font-normal text-[#121212]">
+                Last 12 months · assignment activity
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[14px] font-normal text-[#121212]"
+          >
+            Yearly
+            <ChevronDown className="h-4 w-4" />
+          </button>
+        </div>
+
+        {memberWorkloadDots.rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No task workload data yet.</p>
+        ) : (
+          <div className="mt-2 overflow-hidden rounded-[14px] border border-[#E7EBF3] bg-[linear-gradient(270deg,rgba(82,213,255,0.14)_0%,rgba(0,71,255,0.1)_50.52%,rgba(219,183,255,0.14)_100%)] p-3">
+            <div className="space-y-2">
+              {memberWorkloadDots.rows.map((member) => (
+                <div
+                  key={`member-dot-row-${member.id}`}
+                  className="grid grid-cols-[190px_minmax(0,1fr)_44px] items-center gap-x-3"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[#DFE7F3] bg-white/80">
+                      {member.avatar ? (
+                        <img src={member.avatar} alt={member.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="text-[10px] font-semibold text-[#66708A]">{member.initials}</span>
+                      )}
+                    </span>
+                    <span className="truncate text-[13px] font-medium text-[#2B3244]">{member.name}</span>
+                  </div>
+
+                  <div
+                    className="grid gap-[2px]"
+                    style={{
+                      gridTemplateColumns: `repeat(${memberWorkloadDots.dotColumns}, minmax(0, 1fr))`,
+                    }}
+                    aria-hidden="true"
+                  >
+                    {member.cells.map((cell, index) => (
+                      <span
+                        key={`member-dot-cell-${member.id}-${index}`}
+                        className="block h-[10px] w-full rounded-none"
+                        style={{ backgroundColor: cell.color, opacity: cell.opacity }}
+                      />
+                    ))}
+                  </div>
+
+                  <span className="text-right text-[12px] font-semibold text-[#66708A]">{member.count}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="relative mt-3 ml-[193px] mr-[46px] h-[18px]">
+              {memberWorkloadDots.monthMarkers.map((marker) => {
+                const leftPct =
+                  (marker.index / Math.max(memberWorkloadDots.dotColumns - 1, 1)) * 100;
+                return (
+                  <span
+                    key={`member-dot-month-${marker.label}-${marker.index}`}
+                    className="absolute -translate-x-1/2 text-[11px] font-semibold tracking-[0.06em] text-[#9C907F]"
+                    style={{ left: `${leftPct}%` }}
+                  >
+                    {marker.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <TaskStatusDonutPanel tasks={workspaceTasks} />
+
+      <MonthlyChannelAreaPanel trials={analyticsTrialOptions} taskRows={taskTimelineRows} />
     </div>
   );
 }

@@ -25,6 +25,7 @@ import DocumentAIAssistant from "./pages/DocumentAIAssistant";
 import Tasks from "./pages/Tasks";
 import Collaboration from "./pages/Collaboration";
 import Analytics from "./pages/Analytics";
+import Analytics2 from "./pages/Analytics2";
 import AnalyticsHidden from "./pages/AnalyticsHidden";
 import BudgetIntelligence from "./pages/BudgetIntelligence";
 import Organization from "./pages/Organization";
@@ -42,6 +43,7 @@ const iconMap: Record<string, any> = {
   "/tasks": LayoutGrid,
   "/collaboration": MessageChatSquare,
   "/analytics": AnalyticsIcon,
+  "/analytics2": AnalyticsIcon,
   "/analytics-hidden": AnalyticsIcon,
   "/budget-intelligence": BudgetIntelligenceIcon,
   "/organization": Building,
@@ -81,6 +83,10 @@ const breadcrumbsMap: Record<string, BreadcrumbItem[]> = {
   "/analytics": [
     { label: "Workspace", href: "/" },
     { label: "Analytics Dashboard" },
+  ],
+  "/analytics2": [
+    { label: "Workspace", href: "/" },
+    { label: "Analytics Dashboard 2" },
   ],
   "/analytics-hidden": [
     { label: "Workspace", href: "/" },
@@ -124,6 +130,7 @@ function Router() {
   const [location] = useLocation();
   const lastLocationRef = useRef<string | null>(null);
   const lastTimestampRef = useRef<number>(Date.now());
+  const locationPath = location.split("?")[0];
 
   useEffect(() => {
     const now = Date.now();
@@ -142,15 +149,24 @@ function Router() {
     lastLocationRef.current = location;
     lastTimestampRef.current = now;
   }, [location]);
+
+  const isEmbeddedTaskModal =
+    locationPath === "/tasks" &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("embeddedTaskModal") === "1";
+
+  if (isEmbeddedTaskModal) {
+    return <Tasks />;
+  }
   
   // Handle dynamic breadcrumbs for trial detail pages
-  let breadcrumbs = breadcrumbsMap[location] || [];
-  let breadcrumbIcon = iconMap[location];
+  let breadcrumbs = breadcrumbsMap[locationPath] || [];
+  let breadcrumbIcon = iconMap[locationPath];
   
   // Check if we're on a trial detail page
-  if (location.startsWith('/trial/')) {
-    if (location.endsWith('/assistant')) {
-      const trialId = location.split('/')[2];
+  if (locationPath.startsWith('/trial/')) {
+    if (locationPath.endsWith('/assistant')) {
+      const trialId = locationPath.split('/')[2];
       breadcrumbs = [
         { label: "Workspace", href: "/" },
         { label: "Trial Workspace", href: "/trial-workspace" },
@@ -192,6 +208,7 @@ function Router() {
         <Route path="/tasks" component={Tasks} />
         <Route path="/collaboration" component={Collaboration} />
         <Route path="/analytics">{() => <Analytics />}</Route>
+        <Route path="/analytics2">{() => <Analytics2 />}</Route>
         <Route path="/analytics-hidden">{() => <AnalyticsHidden />}</Route>
         <Route path="/budget-intelligence" component={BudgetIntelligence} />
         <Route path="/organization" component={Organization} />

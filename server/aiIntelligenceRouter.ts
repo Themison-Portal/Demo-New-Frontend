@@ -154,6 +154,7 @@ export const aiIntelligenceRouter = router({
         messages: input.messages,
         protocolIds: input.documentIds,
         trialId: resolvedTrialId,
+        demoMode: mode,
         userId: ctx.user.id,
       });
 
