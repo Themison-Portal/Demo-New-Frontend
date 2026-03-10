@@ -15,6 +15,12 @@ type OrganizationRegistry = {
   organizations: OrganizationWorkspace[];
 };
 
+type CloneCurrentOrganizationOptions = {
+  nameOverride?: string;
+  activate?: boolean;
+  snapshotOverrides?: Record<string, string | null | undefined>;
+};
+
 const REGISTRY_STORAGE_KEY = "themison-organization-registry:v1";
 const SNAPSHOT_STORAGE_PREFIX = "themison-organization-snapshot:v1:";
 const PROFILE_STORAGE_KEY = "themison-organization-profile:v1";
@@ -78,6 +84,17 @@ const createUniqueOrgId = (name: string, existingIds: string[]) => {
     index += 1;
   }
   return `${base}-${index}`;
+};
+
+const createUniqueWorkspaceName = (name: string, existingNames: string[]) => {
+  const base = String(name || "").trim() || "Organization Copy";
+  const existing = new Set(existingNames.map((entry) => String(entry || "").trim().toLowerCase()).filter(Boolean));
+  if (!existing.has(base.toLowerCase())) return base;
+  let index = 2;
+  while (existing.has(`${base} ${index}`.toLowerCase())) {
+    index += 1;
+  }
+  return `${base} ${index}`;
 };
 
 const parseProfile = (raw: string | null): OrganizationProfile => {
@@ -311,8 +328,16 @@ export function useOrganizationWorkspaces() {
     [registry]
   );
 
-  const cloneCurrentOrganization = useCallback((nameOverride?: string) => {
+  const cloneCurrentOrganization = useCallback((options?: string | CloneCurrentOrganizationOptions) => {
     if (!isBrowser()) return null;
+    const normalizedOptions =
+      typeof options === "string"
+        ? { nameOverride: options, activate: false, snapshotOverrides: undefined }
+        : {
+            nameOverride: options?.nameOverride,
+            activate: Boolean(options?.activate),
+            snapshotOverrides: options?.snapshotOverrides,
+          };
     const now = new Date().toISOString();
     const sourceOrgId = registry.activeOrgId;
     const sourceWorkspace = registry.organizations.find((org) => org.id === sourceOrgId);
@@ -322,7 +347,12 @@ export function useOrganizationWorkspaces() {
     writeSnapshot(sourceOrgId, sourceSnapshot);
 
     const currentProfile = readCurrentProfile();
-    const cloneName = String(nameOverride || "").trim() || `${currentProfile.name || sourceWorkspace.name} Copy`;
+    const requestedCloneName =
+      String(normalizedOptions.nameOverride || "").trim() || `${currentProfile.name || sourceWorkspace.name} Copy`;
+    const cloneName = createUniqueWorkspaceName(
+      requestedCloneName,
+      registry.organizations.map((org) => org.name)
+    );
     const cloneProfile: OrganizationProfile = {
       ...currentProfile,
       name: cloneName,
@@ -333,17 +363,28 @@ export function useOrganizationWorkspaces() {
       ...sourceSnapshot,
       [PROFILE_STORAGE_KEY]: JSON.stringify(cloneProfile),
     };
+    Object.entries(normalizedOptions.snapshotOverrides || {}).forEach(([key, value]) => {
+      if (value == null) {
+        delete cloneSnapshot[key];
+        return;
+      }
+      cloneSnapshot[key] = value;
+    });
     writeSnapshot(cloneId, cloneSnapshot);
 
     const sourceUpdated = toWorkspace(currentProfile, sourceOrgId, sourceWorkspace.createdAt, now);
     const cloneWorkspace = toWorkspace(cloneProfile, cloneId, now, now);
     const nextRegistry: OrganizationRegistry = {
-      ...registry,
+      activeOrgId: normalizedOptions.activate ? cloneId : registry.activeOrgId,
       organizations: [...upsertWorkspace(registry.organizations, sourceUpdated), cloneWorkspace],
     };
 
     writeRegistry(nextRegistry);
     setRegistry(nextRegistry);
+    if (normalizedOptions.activate) {
+      applySnapshot(cloneSnapshot);
+      window.location.reload();
+    }
     return cloneId;
   }, [registry]);
 

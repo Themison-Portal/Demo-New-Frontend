@@ -103,7 +103,8 @@ export function Sidebar() {
     : isDocumentAssistant
       ? new URLSearchParams(window.location.search).get("trialId")
       : null;
-  const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode } = useDemoState();
+  const { resetDemo, loadSampleData, loadFullDataset, getCurrentDataMode, getCloneStorageOverridesForMode } =
+    useDemoState();
   const currentDataMode = getCurrentDataMode();
   const { profile, organizationInitial: profileInitial } = useOrganizationProfile();
   const {
@@ -138,6 +139,13 @@ export function Sidebar() {
     onSuccess: async () => {
       await utils.trials.list.invalidate({ demoMode: currentDataMode });
       await utils.documents.list.invalidate();
+    },
+  });
+  const cloneCurrentDemoToBuildingMutation = trpc.demo.cloneCurrentModeToBuilding.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: "building" });
+      await utils.documents.list.invalidate();
+      await utils.map.loadWorkspace.invalidate();
     },
   });
   // Get trials from database
@@ -1104,7 +1112,7 @@ export function Sidebar() {
                   {otherOrganizations.map((organization) => (
                     <DropdownMenuItem
                       key={organization.id}
-                      onClick={() => {
+                      onSelect={() => {
                         switchOrganization(organization.id);
                       }}
                     >
@@ -1125,13 +1133,29 @@ export function Sidebar() {
               ) : null}
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={() => {
-                  const cloneId = cloneCurrentOrganization();
+                onSelect={async () => {
+                  toast.loading("Creating demo copy...", { id: "organization-clone" });
+                  const cloneId = cloneCurrentOrganization({
+                    snapshotOverrides: getCloneStorageOverridesForMode("building"),
+                  });
                   if (!cloneId) {
-                    toast.error("Could not create organization copy.");
+                    toast.error("Could not create organization copy.", { id: "organization-clone" });
                     return;
                   }
-                  toast.success("Created a full copy of the current organization.");
+
+                  try {
+                    if (currentDataMode === "sample" || currentDataMode === "full") {
+                      await cloneCurrentDemoToBuildingMutation.mutateAsync({ sourceMode: currentDataMode });
+                    }
+                    toast.success("Created a demo copy in building mode. Switch to it from the organization list.", {
+                      id: "organization-clone",
+                    });
+                  } catch (error) {
+                    console.error(error);
+                    toast.warning("Organization copy created, but demo data copy failed. It still appears in the list.", {
+                      id: "organization-clone",
+                    });
+                  }
                 }}
               >
                 <div className="flex items-center gap-2">

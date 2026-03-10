@@ -181,6 +181,7 @@ export function MessageInput({
   variant = "default",
 }: MessageInputProps) {
   const [value, setValue] = useState("");
+  const [isSending, setIsSending] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [activeContextCategoryId, setActiveContextCategoryId] = useState(ADD_CONTEXT_CATEGORIES[0]?.id || "");
   const [selectedContextIds, setSelectedContextIds] = useState<Set<string>>(() => createDefaultSelectedContextIds());
@@ -211,12 +212,25 @@ export function MessageInput({
     };
   }, [contextMenuOpen]);
 
+  const submitValue = async () => {
+    const next = value.trim();
+    if (!next || disabled || isSending) return;
+    setIsSending(true);
+    setValue("");
+    try {
+      await onSend(next);
+    } catch (error) {
+      // Restore text if sending fails so the user can retry/edit.
+      setValue(next);
+      console.error(error);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const next = value.trim();
-    if (!next || disabled) return;
-    setValue("");
-    await onSend(next);
+    await submitValue();
   };
 
   const toggleContextOption = (option: ContextOption) => {
@@ -381,11 +395,12 @@ export function MessageInput({
                   <Mic className="h-4 w-4" />
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => void submitValue()}
                   className={`inline-flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors duration-150 focus:outline-none ${
                     value.trim() ? "bg-blue-600 hover:bg-blue-700" : "bg-[#8FAEF6] hover:bg-[#8FAEF6]"
                   } disabled:cursor-not-allowed disabled:opacity-100`}
-                  disabled={disabled || !value.trim()}
+                  disabled={disabled || isSending || !value.trim()}
                   aria-label="Send"
                 >
                   <ArrowUp className="h-4 w-4" />
@@ -443,11 +458,12 @@ export function MessageInput({
           </div>
 
           <button
-            type="submit"
+            type="button"
+            onClick={() => void submitValue()}
             className={
               "inline-flex h-10 w-10 items-center justify-center rounded-full bg-neutral-300 text-white transition hover:bg-neutral-400 disabled:cursor-not-allowed disabled:opacity-50"
             }
-            disabled={disabled || !value.trim()}
+            disabled={disabled || isSending || !value.trim()}
             aria-label="Send"
           >
             <Send className="h-4 w-4" />

@@ -6,6 +6,14 @@ import {
   normalizeInboxTriageSettings,
   saveInboxTriageSettings,
 } from "@/lib/inbox-triage-settings";
+import {
+  collaborationIdsMatch,
+  getCollaborationIdentityEmail,
+  getCollaborationIdentityId,
+  getCollaborationIdentityName,
+  getOtherConversationParticipant,
+  isLegacyDemoUserName,
+} from "@/lib/collaborationIdentity";
 import type {
   CollaborationLayer,
   CollaborationMessage,
@@ -122,12 +130,32 @@ const LOCAL_DEMO_INBOX_PREFIX = "themison-collab-demo-inbox-v3";
 const LOCAL_DEMO_CONVERSATION_PREFIX = "themison-collab-demo-conversations-v3";
 const LOCAL_DEMO_THREAD_PREFIX = "themison-collab-demo-threads-v1";
 const DEMO_SELF_USER_ID = 7101;
-const CONVERSATION_DEMO_SEED_VERSION = 4;
-const THREAD_DEMO_SEED_VERSION = 4;
+const CONVERSATION_DEMO_SEED_VERSION = 6;
+const THREAD_DEMO_SEED_VERSION = 5;
 const DEMO_STATE_STORAGE_PREFIX = "themison-demo-state";
 const DEMO_STATE_ACTIVE_MODE_KEY = `${DEMO_STATE_STORAGE_PREFIX}-active-mode`;
 const LEGACY_MEMBER_EMAIL_DOMAIN = "@themison.com";
 const CURRENT_MEMBER_EMAIL_DOMAIN = "@azorg.be";
+const LEGACY_DEMO_SELF_USER_ID = 1;
+const conversationDatasetMemoryCache = new Map<string, LocalDemoConversationDataset>();
+
+function readActiveDemoModeFromStorage(): DemoDataMode {
+  if (typeof window === "undefined") return "sample";
+  const raw = window.localStorage.getItem(DEMO_STATE_ACTIVE_MODE_KEY);
+  return raw === "sample" || raw === "full" || raw === "building" ? raw : "sample";
+}
+
+function readCurrentConversationDatasetMode(): DemoDataMode {
+  try {
+    const modeFromStore = state?.dataMode;
+    if (modeFromStore === "sample" || modeFromStore === "full" || modeFromStore === "building") {
+      return modeFromStore;
+    }
+  } catch {
+    // Store is not initialized yet; fallback to persisted mode.
+  }
+  return readActiveDemoModeFromStorage();
+}
 
 type DemoTeamMemberSeed = {
   id: string;
@@ -146,27 +174,25 @@ function normalizeDemoMemberEmail(value: string) {
 }
 
 function getRuntimeUserIdentity() {
+  const defaultIdentity = {
+    id: DEMO_SELF_USER_ID,
+    name: "Kaleb Sanders",
+    email: "kaleb.s@azorg.be",
+  };
+
+  let runtimeIdentity = defaultIdentity;
+
   if (typeof window === "undefined") {
-    return {
-      id: DEMO_SELF_USER_ID,
-      name: "Kaleb Sanders",
-      email: "kaleb.s@azorg.be",
-    };
+    return runtimeIdentity;
   }
 
   try {
     const raw = window.localStorage.getItem("manus-runtime-user-info");
-    if (!raw) {
-      return {
-        id: DEMO_SELF_USER_ID,
-        name: "Kaleb Sanders",
-        email: "kaleb.s@azorg.be",
-      };
-    }
+    if (!raw) return runtimeIdentity;
 
     const parsed = JSON.parse(raw) as { id?: unknown; name?: unknown; email?: unknown };
     const parsedId = Number(parsed.id);
-    return {
+    runtimeIdentity = {
       id: Number.isFinite(parsedId) ? parsedId : DEMO_SELF_USER_ID,
       name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Kaleb Sanders",
       email:
@@ -175,12 +201,24 @@ function getRuntimeUserIdentity() {
           : "kaleb.s@azorg.be",
     };
   } catch {
-    return {
-      id: DEMO_SELF_USER_ID,
-      name: "Kaleb Sanders",
-      email: "kaleb.s@azorg.be",
-    };
+    runtimeIdentity = defaultIdentity;
   }
+
+  const members = getTeamMembersFromDemoState();
+  if (!members.length) return runtimeIdentity;
+
+  const runtimeEmail = normalizeComparableEmail(runtimeIdentity.email);
+  const runtimeName = normalizeName(runtimeIdentity.name);
+  const matchedByEmail = members.find((member) => normalizeComparableEmail(member.email) === runtimeEmail);
+  const matchedByName = members.find((member) => namesLikelyMatch(member.name, runtimeName));
+  const effectiveMember = matchedByEmail || matchedByName || members[0];
+  if (!effectiveMember) return runtimeIdentity;
+
+  return {
+    id: runtimeIdentity.id,
+    name: effectiveMember.name,
+    email: normalizeDemoMemberEmail(effectiveMember.email),
+  };
 }
 
 function isDemoDataMode(value: string | null): value is DemoDataMode {
@@ -200,7 +238,121 @@ function getDemoStateStorageKey(mode: DemoDataMode) {
 }
 
 function normalizeName(value: string) {
-  return value.toLowerCase().replace(/\s+/g, " ").trim();
+  return value
+    .toLowerCase()
+    .replace(/\((you|me)\)/g, " ")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isWithinOneEditDistance(left: string, right: string) {
+  if (left === right) return true;
+  const leftLength = left.length;
+  const rightLength = right.length;
+  if (Math.abs(leftLength - rightLength) > 1) return false;
+
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+
+  while (leftIndex < leftLength && rightIndex < rightLength) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (leftLength > rightLength) {
+      leftIndex += 1;
+    } else if (rightLength > leftLength) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+
+  return true;
+}
+
+function namesLikelyMatch(left: string | null | undefined, right: string | null | undefined) {
+  const normalizedLeft = normalizeName(String(left || ""));
+  const normalizedRight = normalizeName(String(right || ""));
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+
+  const leftParts = normalizedLeft.split(" ").filter(Boolean);
+  const rightParts = normalizedRight.split(" ").filter(Boolean);
+  if (!leftParts.length || !rightParts.length) return false;
+
+  const leftFirst = leftParts[0];
+  const rightFirst = rightParts[0];
+  if (leftFirst !== rightFirst) return false;
+
+  const leftLast = leftParts[leftParts.length - 1];
+  const rightLast = rightParts[rightParts.length - 1];
+  if (leftLast === rightLast) return true;
+  if (leftLast.startsWith(rightLast) || rightLast.startsWith(leftLast)) return true;
+  return isWithinOneEditDistance(leftLast, rightLast);
+}
+
+function normalizeStoredEmail(value: string | null | undefined) {
+  return normalizeDemoMemberEmail(String(value || "").trim()).toLowerCase();
+}
+
+function normalizeComparableEmail(value: string | null | undefined) {
+  const normalized = normalizeStoredEmail(value);
+  if (!normalized) return "";
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex >= normalized.length - 1) return normalized;
+  const local = normalized.slice(0, atIndex).replace(/\+.*/g, "").replace(/[._-]/g, "");
+  const domain = normalized.slice(atIndex + 1);
+  return `${local}@${domain}`;
+}
+
+function matchesRuntimeUser(
+  candidate:
+    | {
+        id?: string | number | null;
+        userId?: string | number | null;
+        name?: string | null;
+        email?: string | null;
+        user?: { id?: string | number | null; name?: string | null; email?: string | null } | null;
+      }
+    | null
+    | undefined,
+  runtimeUser: ReturnType<typeof getRuntimeUserIdentity>,
+  options?: {
+    extraIds?: Array<string | number | null | undefined>;
+    allowLegacyDemoUser?: boolean;
+  }
+) {
+  if (!candidate) return false;
+
+  const candidateId = getCollaborationIdentityId(candidate);
+  if (collaborationIdsMatch(candidateId, runtimeUser.id)) {
+    return true;
+  }
+
+  const extraIds = options?.extraIds || [];
+  if (candidateId != null && extraIds.some((extraId) => collaborationIdsMatch(candidateId, extraId))) {
+    return true;
+  }
+
+  const candidateEmail = normalizeComparableEmail(getCollaborationIdentityEmail(candidate));
+  const runtimeEmail = normalizeComparableEmail(runtimeUser.email);
+  if (candidateEmail && runtimeEmail && candidateEmail === runtimeEmail) {
+    return true;
+  }
+
+  if (namesLikelyMatch(getCollaborationIdentityName(candidate), runtimeUser.name)) {
+    return true;
+  }
+
+  const candidateName = normalizeName(getCollaborationIdentityName(candidate) || "");
+  return Boolean(options?.allowLegacyDemoUser && isLegacyDemoUserName(candidateName));
 }
 
 function toInitials(value: string) {
@@ -296,13 +448,22 @@ function getSeedMembers(runtimeUser: ReturnType<typeof getRuntimeUserIdentity>):
   const candidates = allMembers.length ? allMembers : getFallbackTeamMembers();
 
   const withoutSelf = candidates.filter((member) => {
-    if (member.email.toLowerCase() === runtimeEmail) return false;
-    if (normalizeName(member.name) === runtimeName) return false;
+    if (
+      matchesRuntimeUser(member, runtimeUser, {
+        extraIds: [LEGACY_DEMO_SELF_USER_ID],
+        allowLegacyDemoUser: true,
+      })
+    ) {
+      return false;
+    }
+    if (collaborationIdsMatch(member.id, runtimeUser.id)) return false;
+    if (normalizeComparableEmail(member.email) === normalizeComparableEmail(runtimeEmail)) return false;
+    if (namesLikelyMatch(member.name, runtimeName)) return false;
     return true;
   });
 
   if (withoutSelf.length > 0) return withoutSelf;
-  return getFallbackTeamMembers().filter((member) => normalizeName(member.name) !== runtimeName);
+  return getFallbackTeamMembers().filter((member) => !namesLikelyMatch(member.name, runtimeName));
 }
 
 function getStableMemberUserId(seed: string, index: number, selfId: number) {
@@ -597,7 +758,11 @@ function isLikelyDemoConversationError(error: unknown) {
   );
 }
 
-function getConversationDemoStorageKey(trialId: string) {
+function getConversationDemoStorageKey(trialId: string, mode: DemoDataMode = readCurrentConversationDatasetMode()) {
+  return `${LOCAL_DEMO_CONVERSATION_PREFIX}:${mode}:${trialId}`;
+}
+
+function getLegacyConversationDemoStorageKey(trialId: string) {
   return `${LOCAL_DEMO_CONVERSATION_PREFIX}:${trialId}`;
 }
 
@@ -999,39 +1164,236 @@ function buildDefaultConversationDataset(trialId: string): LocalDemoConversation
   };
 }
 
-function loadOrInitConversationDataset(trialId: string): LocalDemoConversationDataset {
-  if (typeof window === "undefined") {
-    return buildDefaultConversationDataset(trialId);
+function sanitizeConversationMessage(
+  message: CollaborationMessage,
+  conversationId: string,
+  runtimeUser: ReturnType<typeof getRuntimeUserIdentity>,
+  selfIdHints: Array<string | number | null | undefined>
+): CollaborationMessage {
+  const isSelf = matchesRuntimeUser(message, runtimeUser, {
+    extraIds: selfIdHints,
+    allowLegacyDemoUser: true,
+  });
+
+  return {
+    ...message,
+    conversationId,
+    senderId: isSelf ? runtimeUser.id : message.senderId,
+    senderName: isSelf ? runtimeUser.name : message.senderName,
+    senderEmail: isSelf ? runtimeUser.email : normalizeDemoMemberEmail(String(message.senderEmail || "").trim()) || null,
+  };
+}
+
+function sanitizeConversationDemoDataset(
+  dataset: LocalDemoConversationDataset,
+  mode: DemoDataMode = readCurrentConversationDatasetMode()
+): LocalDemoConversationDataset {
+  const runtimeUser = getRuntimeUserIdentity();
+  const nextMessagesByConversation: Record<string, CollaborationMessage[]> = {};
+
+  const nextConversations = dataset.conversations
+    .map((conversation) => {
+      const selfIdHints = [runtimeUser.id, conversation.createdBy, LEGACY_DEMO_SELF_USER_ID];
+      const rawParticipants = conversation.participants || [];
+      const normalizedParticipants = rawParticipants.map((participant, index) => {
+        const isSelf = matchesRuntimeUser(participant, runtimeUser, {
+          extraIds: selfIdHints,
+          allowLegacyDemoUser: true,
+        });
+        const normalizedEmail = normalizeDemoMemberEmail(String(participant.user?.email || "").trim()) || null;
+        const userId = isSelf ? runtimeUser.id : participant.userId;
+        const user = {
+          id: isSelf ? runtimeUser.id : participant.user?.id ?? userId,
+          name: isSelf ? runtimeUser.name : participant.user?.name || null,
+          email: isSelf ? runtimeUser.email : normalizedEmail,
+        };
+
+        return {
+          ...participant,
+          id: participant.id || `${conversation.id}-participant-${isSelf ? runtimeUser.id : index + 1}`,
+          conversationId: conversation.id,
+          userId,
+          user,
+        };
+      });
+
+      const dedupedParticipants = normalizedParticipants.filter((participant, index, rows) => {
+        const isSelf = matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints });
+        return rows.findIndex((candidate) => {
+          if (isSelf) {
+            return matchesRuntimeUser(candidate, runtimeUser, { extraIds: selfIdHints });
+          }
+
+          const sameId = collaborationIdsMatch(candidate.userId, participant.userId);
+          const sameEmail =
+            normalizeStoredEmail(candidate.user?.email) &&
+            normalizeStoredEmail(candidate.user?.email) === normalizeStoredEmail(participant.user?.email);
+          const sameName =
+            normalizeName(candidate.user?.name || "") &&
+            normalizeName(candidate.user?.name || "") === normalizeName(participant.user?.name || "");
+          return sameId || sameEmail || sameName;
+        }) === index;
+      });
+
+      const directParticipants =
+        conversation.type === "direct"
+          ? [
+              ...(dedupedParticipants
+                .filter((participant) => matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints }))
+                .slice(0, 1).length
+                ? dedupedParticipants
+                    .filter((participant) => matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints }))
+                    .slice(0, 1)
+                : [
+                    {
+                      id: `${conversation.id}-participant-${runtimeUser.id}`,
+                      conversationId: conversation.id,
+                      userId: runtimeUser.id,
+                      joinedAt: conversation.createdAt,
+                      lastReadAt: null,
+                      user: {
+                        id: runtimeUser.id,
+                        name: runtimeUser.name,
+                        email: runtimeUser.email,
+                      },
+                    },
+                  ]),
+              ...dedupedParticipants.filter(
+                (participant) => !matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints })
+              ).slice(0, 1),
+            ]
+          : dedupedParticipants;
+
+      const otherParticipant =
+        conversation.type === "direct"
+          ? directParticipants.find(
+              (participant) => !matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints })
+            ) || null
+          : null;
+
+      if (conversation.type === "direct" && !otherParticipant) {
+        return null;
+      }
+
+      const rawMessages = dataset.messagesByConversation[conversation.id] || [];
+      const sanitizedMessages = rawMessages.map((message) =>
+        sanitizeConversationMessage(message, conversation.id, runtimeUser, selfIdHints)
+      );
+      nextMessagesByConversation[conversation.id] = sanitizedMessages;
+
+      const sanitizedLastMessage = conversation.lastMessage
+        ? sanitizeConversationMessage(conversation.lastMessage, conversation.id, runtimeUser, selfIdHints)
+        : null;
+      const lastMessage = sanitizedMessages[sanitizedMessages.length - 1] || sanitizedLastMessage;
+
+      return {
+        ...conversation,
+        createdBy: runtimeUser.id,
+        participants: directParticipants,
+        lastMessage,
+        updatedAt: lastMessage?.createdAt || conversation.updatedAt,
+      };
+    })
+    .filter(Boolean) as Conversation[];
+
+  nextConversations.sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+
+  if (mode === "building") {
+    const localConversations = nextConversations.filter((conversation) =>
+      isLocalConversationId(String(conversation.id || ""))
+    );
+    const localMessagesByConversation = localConversations.reduce<Record<string, CollaborationMessage[]>>(
+      (acc, conversation) => {
+        acc[conversation.id] = nextMessagesByConversation[conversation.id] || [];
+        return acc;
+      },
+      {}
+    );
+
+    return {
+      ...dataset,
+      conversations: localConversations,
+      messagesByConversation: localMessagesByConversation,
+    };
   }
 
-  const key = getConversationDemoStorageKey(trialId);
+  return {
+    ...dataset,
+    conversations: nextConversations,
+    messagesByConversation: nextMessagesByConversation,
+  };
+}
+
+function loadOrInitConversationDataset(
+  trialId: string,
+  mode: DemoDataMode = readCurrentConversationDatasetMode()
+): LocalDemoConversationDataset {
+  if (typeof window === "undefined") {
+    return sanitizeConversationDemoDataset(buildDefaultConversationDataset(trialId), mode);
+  }
+
+  const key = getConversationDemoStorageKey(trialId, mode);
+  const cached = conversationDatasetMemoryCache.get(key);
+  if (cached) {
+    return cached;
+  }
   const runtimeUser = getRuntimeUserIdentity();
   const expectedSignature = getConversationMemberSignature(runtimeUser, getSeedMembers(runtimeUser).slice(0, 8));
-  const existing = parseConversationDemoDataset(window.localStorage.getItem(key));
+  const existing =
+    parseConversationDemoDataset(window.localStorage.getItem(key)) ||
+    (mode === "sample"
+      ? parseConversationDemoDataset(window.localStorage.getItem(getLegacyConversationDemoStorageKey(trialId)))
+      : null);
   if (
     existing &&
     existing.seedVersion === CONVERSATION_DEMO_SEED_VERSION &&
     existing.memberSignature === expectedSignature
   ) {
-    return existing;
+    const sanitized = sanitizeConversationDemoDataset(existing, mode);
+    conversationDatasetMemoryCache.set(key, sanitized);
+    if (JSON.stringify(sanitized) !== JSON.stringify(existing)) {
+      try {
+        window.localStorage.setItem(key, JSON.stringify(sanitized));
+      } catch {
+        // Fallback to memory cache when localStorage is unavailable or full.
+      }
+    }
+    return sanitized;
   }
 
-  const created = buildDefaultConversationDataset(trialId);
-  window.localStorage.setItem(key, JSON.stringify(created));
+  const created = sanitizeConversationDemoDataset(buildDefaultConversationDataset(trialId), mode);
+  conversationDatasetMemoryCache.set(key, created);
+  try {
+    window.localStorage.setItem(key, JSON.stringify(created));
+  } catch {
+    // Fallback to memory cache when localStorage is unavailable or full.
+  }
   return created;
 }
 
-function saveConversationDemoDataset(trialId: string, dataset: LocalDemoConversationDataset) {
+function saveConversationDemoDataset(
+  trialId: string,
+  dataset: LocalDemoConversationDataset,
+  mode: DemoDataMode = readCurrentConversationDatasetMode()
+) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(getConversationDemoStorageKey(trialId), JSON.stringify(dataset));
+  const key = getConversationDemoStorageKey(trialId, mode);
+  const sanitized = sanitizeConversationDemoDataset(dataset, mode);
+  conversationDatasetMemoryCache.set(key, sanitized);
+  try {
+    window.localStorage.setItem(key, JSON.stringify(sanitized));
+  } catch {
+    // Fallback to memory cache when localStorage is unavailable or full.
+  }
 }
 
 function appendConversationDemoMessage(
   trialId: string,
   conversationId: string,
-  message: CollaborationMessage
+  message: CollaborationMessage,
+  mode: DemoDataMode = readCurrentConversationDatasetMode()
 ): LocalDemoConversationDataset {
-  const dataset = loadOrInitConversationDataset(trialId);
+  const dataset = loadOrInitConversationDataset(trialId, mode);
   const current = dataset.messagesByConversation[conversationId] || [];
   const nextMessages = [...current, message];
 
@@ -1050,28 +1412,20 @@ function appendConversationDemoMessage(
       : conversation
   );
 
-  saveConversationDemoDataset(trialId, dataset);
+  saveConversationDemoDataset(trialId, dataset, mode);
   return dataset;
-}
-
-function getOtherParticipantFromConversation(
-  conversation: Conversation,
-  runtimeUserId: number
-) {
-  const participants = conversation.participants || [];
-  return participants.find((participant) => participant.userId !== runtimeUserId) || participants[0] || null;
 }
 
 function findConversationForMember(
   conversations: Conversation[],
-  runtimeUserId: number,
+  runtimeUser: ReturnType<typeof getRuntimeUserIdentity>,
   member: DirectConversationMemberInput
 ) {
   const targetName = normalizeName(member.name);
   const targetEmail = normalizeDemoMemberEmail(member.email).toLowerCase();
   return conversations.find((conversation) => {
     if (conversation.type !== "direct") return false;
-    const other = getOtherParticipantFromConversation(conversation, runtimeUserId);
+    const other = getOtherConversationParticipant(conversation, runtimeUser);
     if (!other) return false;
     const otherName = normalizeName(other.user?.name || "");
     const otherEmail = normalizeDemoMemberEmail(other.user?.email || "").toLowerCase();
@@ -1085,14 +1439,28 @@ function isLocalConversationId(value: string) {
   return value.startsWith("local-");
 }
 
+function getTrialIdFromLocalConversationId(value: string) {
+  if (!isLocalConversationId(value)) return null;
+  const withoutPrefix = value.slice("local-".length);
+  const markerIndex = withoutPrefix.indexOf("-dm-");
+  if (markerIndex <= 0) return null;
+  const trialId = withoutPrefix.slice(0, markerIndex).trim();
+  return trialId || null;
+}
+
 function createOrGetLocalDirectConversation(
   trialId: string,
-  member: DirectConversationMemberInput
+  member: DirectConversationMemberInput,
+  mode: DemoDataMode = readCurrentConversationDatasetMode()
 ): Conversation {
   const runtimeUser = getRuntimeUserIdentity();
-  const dataset = loadOrInitConversationDataset(trialId);
-  const existing = findConversationForMember(dataset.conversations, runtimeUser.id, member);
-  if (existing) return existing;
+  const dataset = loadOrInitConversationDataset(trialId, mode);
+  if (matchesRuntimeUser(member, runtimeUser, { extraIds: [LEGACY_DEMO_SELF_USER_ID] })) {
+    throw new Error("Cannot start a direct conversation with the active user.");
+  }
+
+  const existing = findConversationForMember(dataset.conversations, runtimeUser, member);
+  if (existing && (mode !== "building" || isLocalConversationId(existing.id))) return existing;
 
   const memberName = member.name.trim() || "Team Member";
   const memberEmail =
@@ -1150,7 +1518,7 @@ function createOrGetLocalDirectConversation(
     ...dataset.messagesByConversation,
     [conversationId]: [],
   };
-  saveConversationDemoDataset(trialId, dataset);
+  saveConversationDemoDataset(trialId, dataset, mode);
   return created;
 }
 
@@ -1814,6 +2182,116 @@ function buildDefaultThreadDataset(trialId: string): LocalDemoThreadDataset {
   };
 }
 
+function sanitizeThreadMessage(
+  message: CollaborationMessage,
+  threadId: string,
+  runtimeUser: ReturnType<typeof getRuntimeUserIdentity>,
+  selfIdHints: Array<string | number | null | undefined>
+): CollaborationMessage {
+  const isSelf = matchesRuntimeUser(message, runtimeUser, {
+    extraIds: selfIdHints,
+    allowLegacyDemoUser: true,
+  });
+
+  return {
+    ...message,
+    threadId,
+    senderId: isSelf ? runtimeUser.id : message.senderId,
+    senderName: isSelf ? runtimeUser.name : message.senderName,
+    senderEmail: isSelf ? runtimeUser.email : normalizeDemoMemberEmail(String(message.senderEmail || "").trim()) || null,
+  };
+}
+
+function sanitizeThreadDemoDataset(dataset: LocalDemoThreadDataset): LocalDemoThreadDataset {
+  const runtimeUser = getRuntimeUserIdentity();
+  const nextMessagesByThread: Record<string, CollaborationMessage[]> = {};
+
+  const nextThreads = dataset.threads
+    .map((thread) => {
+      const selfIdHints = [runtimeUser.id, thread.createdBy, LEGACY_DEMO_SELF_USER_ID];
+      const normalizedParticipants = (thread.participants || []).map((participant, index) => {
+        const isSelf = matchesRuntimeUser(participant, runtimeUser, {
+          extraIds: selfIdHints,
+          allowLegacyDemoUser: true,
+        });
+
+        return {
+          ...participant,
+          id: participant.id || `${thread.id}-participant-${isSelf ? runtimeUser.id : index + 1}`,
+          threadId: thread.id,
+          userId: isSelf ? runtimeUser.id : participant.userId,
+          user: {
+            id: isSelf ? runtimeUser.id : participant.user?.id ?? participant.userId,
+            name: isSelf ? runtimeUser.name : participant.user?.name || null,
+            email: isSelf
+              ? runtimeUser.email
+              : normalizeDemoMemberEmail(String(participant.user?.email || "").trim()) || null,
+          },
+        };
+      });
+
+      const dedupedParticipants = normalizedParticipants.filter((participant, index, rows) => {
+        const isSelf = matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints });
+        return rows.findIndex((candidate) => {
+          if (isSelf) {
+            return matchesRuntimeUser(candidate, runtimeUser, { extraIds: selfIdHints });
+          }
+
+          const sameId = collaborationIdsMatch(candidate.userId, participant.userId);
+          const sameEmail =
+            normalizeStoredEmail(candidate.user?.email) &&
+            normalizeStoredEmail(candidate.user?.email) === normalizeStoredEmail(participant.user?.email);
+          const sameName =
+            normalizeName(candidate.user?.name || "") &&
+            normalizeName(candidate.user?.name || "") === normalizeName(participant.user?.name || "");
+          return sameId || sameEmail || sameName;
+        }) === index;
+      });
+
+      const nextParticipants = dedupedParticipants.some((participant) =>
+        matchesRuntimeUser(participant, runtimeUser, { extraIds: selfIdHints })
+      )
+        ? dedupedParticipants
+        : [
+            {
+              id: `${thread.id}-participant-${runtimeUser.id}`,
+              threadId: thread.id,
+              userId: runtimeUser.id,
+              joinedAt: thread.createdAt,
+              lastReadAt: null,
+              user: {
+                id: runtimeUser.id,
+                name: runtimeUser.name,
+                email: runtimeUser.email,
+              },
+            },
+            ...dedupedParticipants,
+          ];
+
+      const rawMessages = dataset.messagesByThread[thread.id] || [];
+      const sanitizedMessages = rawMessages.map((message) =>
+        sanitizeThreadMessage(message, thread.id, runtimeUser, selfIdHints)
+      );
+      nextMessagesByThread[thread.id] = sanitizedMessages;
+
+      return {
+        ...thread,
+        createdBy: matchesRuntimeUser({ id: thread.createdBy }, runtimeUser, { extraIds: [LEGACY_DEMO_SELF_USER_ID] })
+          ? runtimeUser.id
+          : thread.createdBy,
+        participants: nextParticipants,
+        updatedAt: sanitizedMessages[sanitizedMessages.length - 1]?.createdAt || thread.updatedAt,
+      };
+    })
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+
+  return {
+    ...dataset,
+    threads: nextThreads,
+    messagesByThread: nextMessagesByThread,
+  };
+}
+
 function loadOrInitThreadDataset(trialId: string): LocalDemoThreadDataset {
   if (typeof window === "undefined") {
     return buildDefaultThreadDataset(trialId);
@@ -1829,7 +2307,11 @@ function loadOrInitThreadDataset(trialId: string): LocalDemoThreadDataset {
     existing.memberSignature === expectedSignature &&
     hasRequiredThreadDemoData(existing)
   ) {
-    return existing;
+    const sanitized = sanitizeThreadDemoDataset(existing);
+    if (JSON.stringify(sanitized) !== JSON.stringify(existing)) {
+      window.localStorage.setItem(key, JSON.stringify(sanitized));
+    }
+    return sanitized;
   }
 
   const created = buildDefaultThreadDataset(trialId);
@@ -1899,15 +2381,22 @@ const state: CollaborationStore = {
   },
   async loadConversations(trialId) {
     if (state.dataMode === "building") {
-      state.conversations = [];
-      state.activeConversationId = null;
-      state.messages = {};
+      const localConversations = loadOrInitConversationDataset(trialId, state.dataMode).conversations
+        .filter((conversation) => isLocalConversationId(String(conversation.id || "")))
+        .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+      state.conversations = localConversations;
+      if (
+        state.activeConversationId &&
+        !state.conversations.some((conversation) => conversation.id === state.activeConversationId)
+      ) {
+        state.activeConversationId = state.conversations[0]?.id || null;
+      }
       state.error = null;
       emit();
       return;
     }
     if (state.dataMode === "sample" || state.dataMode === "full") {
-      state.conversations = loadOrInitConversationDataset(trialId).conversations;
+      state.conversations = loadOrInitConversationDataset(trialId, state.dataMode).conversations;
       if (
         state.activeConversationId &&
         !state.conversations.some((conversation) => conversation.id === state.activeConversationId)
@@ -1924,9 +2413,9 @@ const state: CollaborationStore = {
     try {
       let rows = (await collabApi.listConversations(trialId)) as Conversation[];
       if (rows.length === 0) {
-        rows = loadOrInitConversationDataset(trialId).conversations;
+        rows = loadOrInitConversationDataset(trialId, state.dataMode).conversations;
       }
-      const localOnlyRows = loadOrInitConversationDataset(trialId).conversations.filter((conversation) =>
+      const localOnlyRows = loadOrInitConversationDataset(trialId, state.dataMode).conversations.filter((conversation) =>
         isLocalConversationId(String(conversation.id || ""))
       );
       if (localOnlyRows.length) {
@@ -1948,7 +2437,7 @@ const state: CollaborationStore = {
       state.error = null;
     } catch (error) {
       if (isLikelyDemoConversationError(error)) {
-        state.conversations = loadOrInitConversationDataset(trialId).conversations;
+        state.conversations = loadOrInitConversationDataset(trialId, state.dataMode).conversations;
         state.error = null;
       } else {
         state.error = error instanceof Error ? error.message : "Failed to load conversations";
@@ -1960,7 +2449,15 @@ const state: CollaborationStore = {
   },
   async loadMessages(conversationId) {
     if (state.dataMode === "building") {
-      state.messages[conversationId] = [];
+      const localConversation = state.conversations.find(
+        (conversation) => conversation.id === conversationId && isLocalConversationId(conversation.id)
+      );
+      if (localConversation) {
+        const dataset = loadOrInitConversationDataset(localConversation.trialId, state.dataMode);
+        state.messages[conversationId] = dataset.messagesByConversation[conversationId] || [];
+      } else {
+        state.messages[conversationId] = [];
+      }
       state.error = null;
       emit();
       return;
@@ -1971,7 +2468,7 @@ const state: CollaborationStore = {
         subscribedTrialId;
       if (trialId) {
         state.messages[conversationId] =
-          loadOrInitConversationDataset(trialId).messagesByConversation[conversationId] || [];
+          loadOrInitConversationDataset(trialId, state.dataMode).messagesByConversation[conversationId] || [];
       } else {
         state.messages[conversationId] = state.messages[conversationId] || [];
       }
@@ -1984,7 +2481,7 @@ const state: CollaborationStore = {
         (conversation) => conversation.id === conversationId && isLocalConversationId(conversation.id)
       );
       if (localConversation) {
-        const localDataset = loadOrInitConversationDataset(localConversation.trialId);
+        const localDataset = loadOrInitConversationDataset(localConversation.trialId, state.dataMode);
         state.messages[conversationId] = localDataset.messagesByConversation[conversationId] || [];
         state.error = null;
         emit();
@@ -1997,7 +2494,7 @@ const state: CollaborationStore = {
           state.conversations.find((conversation) => conversation.id === conversationId)?.trialId ||
           subscribedTrialId;
         if (trialId) {
-          rows = loadOrInitConversationDataset(trialId).messagesByConversation[conversationId] || rows;
+          rows = loadOrInitConversationDataset(trialId, state.dataMode).messagesByConversation[conversationId] || rows;
         }
       }
       state.messages[conversationId] = rows;
@@ -2009,7 +2506,7 @@ const state: CollaborationStore = {
         subscribedTrialId;
       if (trialId && isLikelyDemoConversationError(error)) {
         state.messages[conversationId] =
-          loadOrInitConversationDataset(trialId).messagesByConversation[conversationId] || [];
+          loadOrInitConversationDataset(trialId, state.dataMode).messagesByConversation[conversationId] || [];
         state.error = null;
       } else {
         state.error = error instanceof Error ? error.message : "Failed to load messages";
@@ -2022,6 +2519,7 @@ const state: CollaborationStore = {
     const runtimeUser = getRuntimeUserIdentity();
     const selfId = runtimeUser.id;
     const selfName = runtimeUser.name;
+    const selfEmail = runtimeUser.email;
     const nowIso = new Date().toISOString();
     const optimistic: CollaborationMessage = {
       id: `tmp-${Date.now()}`,
@@ -2031,7 +2529,7 @@ const state: CollaborationStore = {
       senderId: selfId,
       senderType: "user",
       senderName: selfName,
-      senderEmail: null,
+      senderEmail: selfEmail,
       content,
       contentType,
       embeddedContent: embeddedContent ?? null,
@@ -2047,8 +2545,9 @@ const state: CollaborationStore = {
     emit();
 
     const targetConversation = state.conversations.find((conversation) => conversation.id === conversationId);
-    const trialId = targetConversation?.trialId || subscribedTrialId;
-    const isLocalConversation = Boolean(targetConversation && isLocalConversationId(targetConversation.id));
+    const localTrialId = isLocalConversationId(conversationId) ? getTrialIdFromLocalConversationId(conversationId) : null;
+    const trialId = targetConversation?.trialId || localTrialId || subscribedTrialId;
+    const isLocalConversation = isLocalConversationId(conversationId);
 
     if (state.dataMode === "sample" || state.dataMode === "full" || isLocalConversation) {
       const persisted: CollaborationMessage = {
@@ -2058,7 +2557,7 @@ const state: CollaborationStore = {
       };
 
       if (trialId) {
-        const dataset = appendConversationDemoMessage(trialId, conversationId, persisted);
+        const dataset = appendConversationDemoMessage(trialId, conversationId, persisted, state.dataMode);
         if (dataset.messagesByConversation[conversationId]) {
           state.messages[conversationId] = dataset.messagesByConversation[conversationId];
         } else {
@@ -2119,7 +2618,7 @@ const state: CollaborationStore = {
           senderId: selfId,
           createdAt: nowIso,
         };
-        const dataset = appendConversationDemoMessage(trialId, conversationId, persisted);
+        const dataset = appendConversationDemoMessage(trialId, conversationId, persisted, state.dataMode);
         state.messages[conversationId] = dataset.messagesByConversation[conversationId] || [persisted];
         state.conversations = dataset.conversations;
         state.error = null;
@@ -2133,7 +2632,7 @@ const state: CollaborationStore = {
   },
   async createDirectConversationWithMember(trialId, member) {
     try {
-      const created = createOrGetLocalDirectConversation(trialId, member);
+      const created = createOrGetLocalDirectConversation(trialId, member, state.dataMode);
       await state.loadConversations(trialId);
       return created;
     } catch (error) {
@@ -2612,4 +3111,20 @@ export function useCollaborationStore<T>(selector: (snapshot: CollaborationStore
 
 export function getCollaborationStore() {
   return store;
+}
+
+export function clearCollaborationDemoRuntimeCache() {
+  conversationDatasetMemoryCache.clear();
+  state.conversations = [];
+  state.activeConversationId = null;
+  state.messages = {};
+  state.threads = [];
+  state.activeThreadId = null;
+  state.threadMessages = {};
+  state.emailChains = [];
+  state.activeEmailChainId = null;
+  state.emailMessages = {};
+  state.aiIsTyping = false;
+  state.error = null;
+  emit();
 }

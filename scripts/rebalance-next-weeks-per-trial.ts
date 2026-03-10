@@ -811,6 +811,10 @@ async function main() {
           const weekRandom = seededRandom(`${trial.trialId}:${trial.mapId}:task-create:${weekIdx}:${createdTasksForTrial}`);
           const dueDate = addDays(weekStarts[weekIdx]!, 2 + drawInt(weekRandom, 0, 4));
           const suggestedDate = addDays(dueDate, -drawInt(weekRandom, 1, 3));
+          const dueWeekStart = startOfIsoWeek(dueDate);
+          const createdAnchorWeekStart =
+            dueWeekStart.getTime() <= baseWeekStart.getTime() ? addDays(baseWeekStart, 7) : dueWeekStart;
+          const createdAt = addDays(createdAnchorWeekStart, 1 + drawInt(weekRandom, 0, 2));
           const nextOrder = (orderByPhase.get(phaseId) ?? -1) + 1;
           orderByPhase.set(phaseId, nextOrder);
 
@@ -842,7 +846,7 @@ async function main() {
             isCustom: false,
             tags: ["future", "rebalance", "weekly-coverage"],
             protocolRefs: [],
-            createdAt: now,
+            createdAt,
             updatedAt: now,
           };
 

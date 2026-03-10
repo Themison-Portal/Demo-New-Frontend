@@ -73,6 +73,145 @@ function normalizeLookupKey(value: string | null | undefined) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isLocalConversationId(value: string | null | undefined) {
+  return String(value || "").startsWith("local-");
+}
+
+function normalizeIdentityName(value: string | null | undefined) {
+  return normalizeLookupKey(value)
+    .replace(/\((you|me)\)/g, " ")
+    .replace(/[^a-z0-9\s@._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeIdentityEmail(value: string | null | undefined) {
+  const normalized = normalizeLookupKey(value);
+  if (!normalized) return "";
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === normalized.length - 1) return normalized;
+  const localPart = normalized.slice(0, atIndex).replace(/\+.*/g, "");
+  const domain = normalized.slice(atIndex + 1);
+  return `${localPart}@${domain}`;
+}
+
+function normalizeComparableEmail(value: string | null | undefined) {
+  const normalized = normalizeIdentityEmail(value);
+  if (!normalized) return "";
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === normalized.length - 1) return normalized;
+  const localPart = normalized.slice(0, atIndex).replace(/[._-]/g, "");
+  const domain = normalized.slice(atIndex + 1);
+  return `${localPart}@${domain}`;
+}
+
+function isWithinOneEditDistance(left: string, right: string) {
+  if (left === right) return true;
+  const leftLength = left.length;
+  const rightLength = right.length;
+  if (Math.abs(leftLength - rightLength) > 1) return false;
+
+  let leftIndex = 0;
+  let rightIndex = 0;
+  let edits = 0;
+
+  while (leftIndex < leftLength && rightIndex < rightLength) {
+    if (left[leftIndex] === right[rightIndex]) {
+      leftIndex += 1;
+      rightIndex += 1;
+      continue;
+    }
+    edits += 1;
+    if (edits > 1) return false;
+    if (leftLength > rightLength) {
+      leftIndex += 1;
+    } else if (rightLength > leftLength) {
+      rightIndex += 1;
+    } else {
+      leftIndex += 1;
+      rightIndex += 1;
+    }
+  }
+
+  return true;
+}
+
+function namesLikelyMatch(left: string | null | undefined, right: string | null | undefined) {
+  const normalizedLeft = normalizeIdentityName(left);
+  const normalizedRight = normalizeIdentityName(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+
+  const leftParts = normalizedLeft.split(" ").filter(Boolean);
+  const rightParts = normalizedRight.split(" ").filter(Boolean);
+  if (!leftParts.length || !rightParts.length) return false;
+
+  const leftFirst = leftParts[0];
+  const rightFirst = rightParts[0];
+  if (leftFirst !== rightFirst) return false;
+
+  const leftLast = leftParts[leftParts.length - 1];
+  const rightLast = rightParts[rightParts.length - 1];
+  if (leftLast === rightLast) return true;
+  if (leftLast.startsWith(rightLast) || rightLast.startsWith(leftLast)) return true;
+  return isWithinOneEditDistance(leftLast, rightLast);
+}
+
+function idsMatch(a: number | string | null | undefined, b: number | string | null | undefined) {
+  if (a == null || b == null) return false;
+  const left = String(a).trim();
+  const right = String(b).trim();
+  return Boolean(left && right && left === right);
+}
+
+type RuntimeUserIdentity = {
+  id: number;
+  name: string;
+  email: string;
+} | null;
+
+function isSelfConversationParticipant(
+  participant: NonNullable<Conversation["participants"]>[number] | null | undefined,
+  currentUserId: number | null,
+  runtimeUser: RuntimeUserIdentity
+) {
+  if (!participant) return false;
+
+  const participantIds = [participant.userId, participant.user?.id];
+  if (currentUserId != null && participantIds.some((participantId) => idsMatch(participantId, currentUserId))) {
+    return true;
+  }
+  if (runtimeUser?.id != null && participantIds.some((participantId) => idsMatch(participantId, runtimeUser.id))) {
+    return true;
+  }
+
+  const participantEmail = normalizeIdentityEmail(participant.user?.email);
+  const runtimeEmail = normalizeIdentityEmail(runtimeUser?.email);
+  if (participantEmail && runtimeEmail && participantEmail === runtimeEmail) {
+    return true;
+  }
+  const participantComparableEmail = normalizeComparableEmail(participant.user?.email);
+  const runtimeComparableEmail = normalizeComparableEmail(runtimeUser?.email);
+  if (
+    participantComparableEmail &&
+    runtimeComparableEmail &&
+    participantComparableEmail === runtimeComparableEmail
+  ) {
+    return true;
+  }
+
+  const participantName = normalizeIdentityName(participant.user?.name);
+  const runtimeName = normalizeIdentityName(runtimeUser?.name);
+  if (participantName && runtimeName && participantName === runtimeName) {
+    return true;
+  }
+  if (namesLikelyMatch(participantName, runtimeName)) {
+    return true;
+  }
+
+  return participantName === "demo user";
+}
+
 const SAMPLE_STATE_STORAGE_KEY = "themison-demo-state-sample";
 const SAMPLE_DEFAULT_STATE_STORAGE_KEY = "themison-demo-state-default-sample";
 const COLLAB_CARD_BOTTOM_GAP_STORAGE_KEY = "ui:collab_card_bottom_gap_px";
@@ -103,16 +242,30 @@ function generatedAvatarDataUrl(nameOrEmail: string) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-function getOtherConversationParticipant(conversation: Conversation, currentUserId: number | null) {
+function getOtherConversationParticipant(
+  conversation: Conversation,
+  currentUserId: number | null,
+  runtimeUser: RuntimeUserIdentity
+) {
   const participants = conversation.participants || [];
   if (!participants.length) return null;
+
+  const other = participants.find(
+    (participant) => !isSelfConversationParticipant(participant, currentUserId, runtimeUser)
+  );
+  if (other) return other;
+
   if (currentUserId != null) {
-    return participants.find((participant) => participant.userId !== currentUserId) || participants[0];
+    return participants.find((participant) => participant.userId !== currentUserId) || null;
   }
-  return participants.find((participant) => participant.userId !== conversation.createdBy) || participants[0];
+  return participants.find((participant) => participant.userId !== conversation.createdBy) || null;
 }
 
-function getConversationDisplayName(conversation: Conversation, currentUserId: number | null) {
+function getConversationDisplayName(
+  conversation: Conversation,
+  currentUserId: number | null,
+  runtimeUser: RuntimeUserIdentity
+) {
   if (conversation.type === "group") {
     return conversation.name || "Group Conversation";
   }
@@ -120,15 +273,17 @@ function getConversationDisplayName(conversation: Conversation, currentUserId: n
   const participants = (conversation.participants || []).filter((participant) => participant.user?.name);
   if (!participants.length) return conversation.name || "Conversation";
 
-  if (currentUserId != null) {
-    const other = participants.find((participant) => participant.userId !== currentUserId);
-    if (other?.user?.name) return other.user.name;
-  } else {
-    const other = participants.find((participant) => participant.userId !== conversation.createdBy);
-    if (other?.user?.name) return other.user.name;
-  }
+  const other = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
+  if (other?.user?.name) return other.user.name;
 
-  return participants[0]?.user?.name || conversation.name || "Conversation";
+  const nonSelfByName = participants.find(
+    (participant) => !isSelfConversationParticipant(participant, currentUserId, runtimeUser)
+  );
+  const fallback = nonSelfByName?.user?.name || conversation.name || "Conversation";
+  if (namesLikelyMatch(fallback, runtimeUser?.name)) {
+    return "Direct Message";
+  }
+  return fallback;
 }
 
 function normalizeThreadFilters(filters: ThreadFilters): ThreadFilters {
@@ -219,7 +374,6 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   const [isNewConversationDraft, setIsNewConversationDraft] = useState(false);
   const [newConversationQuery, setNewConversationQuery] = useState("");
   const [selectedNewConversationMemberId, setSelectedNewConversationMemberId] = useState<string | null>(null);
-  const [creatingConversationFor, setCreatingConversationFor] = useState<string | null>(null);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberPanelMemberId, setMemberPanelMemberId] = useState<string | null>(null);
   const [memberPanelValues, setMemberPanelValues] = useState({
@@ -236,11 +390,11 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   const collaborationCardRef = useRef<HTMLDivElement | null>(null);
   const quickComposeHandledRef = useRef<string | null>(null);
 
-  useRealtimeCollab(trialId);
-
   useEffect(() => {
     setDataMode(dataMode);
   }, [dataMode, setDataMode]);
+
+  useRealtimeCollab(trialId);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -333,6 +487,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   }, [activeEmailChainId, loadEmailMessages]);
 
   useEffect(() => {
+    if (dataMode === "building") return;
     if (detailMode === "conversation" && !activeConversationId && activeThreadId && !isNewConversationDraft) {
       setDetailMode("thread");
       return;
@@ -344,11 +499,11 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     if (detailMode === "email" && !activeEmailChainId && activeConversationId) {
       setDetailMode("conversation");
     }
-  }, [activeConversationId, activeEmailChainId, activeThreadId, detailMode, isNewConversationDraft]);
+  }, [activeConversationId, activeEmailChainId, activeThreadId, dataMode, detailMode, isNewConversationDraft]);
 
   const activeConversation = useMemo(
-    () => (dataMode === "building" ? null : conversations.find((conversation) => conversation.id === activeConversationId) || null),
-    [activeConversationId, conversations, dataMode]
+    () => conversations.find((conversation) => conversation.id === activeConversationId) || null,
+    [activeConversationId, conversations]
   );
 
   const activeThread = useMemo<TrialThread | null>(
@@ -381,8 +536,10 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     return options;
   }, [trialId, trials]);
 
-  const runtimeUser = useMemo(() => {
-    if (typeof window === "undefined") return null;
+  const baseRuntimeUser = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { id: 7101, name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+    }
     try {
       const raw = window.localStorage.getItem("manus-runtime-user-info");
       if (!raw) {
@@ -400,6 +557,31 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
       return { id: 7101, name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
     }
   }, []);
+
+  const effectiveRuntimeMember = useMemo(() => {
+    const members = demoState.teamMembers || [];
+    if (!members.length) return null;
+
+    const runtimeEmail = normalizeComparableEmail(baseRuntimeUser.email);
+    const matchedByEmail = members.find(
+      (member) => normalizeComparableEmail(member.email) === runtimeEmail
+    );
+    if (matchedByEmail) return matchedByEmail;
+
+    const matchedByName = members.find((member) =>
+      namesLikelyMatch(member.name, baseRuntimeUser.name)
+    );
+    return matchedByName || members[0] || null;
+  }, [baseRuntimeUser.email, baseRuntimeUser.name, demoState.teamMembers]);
+
+  const runtimeUser = useMemo(
+    () => ({
+      id: baseRuntimeUser.id,
+      name: effectiveRuntimeMember?.name || baseRuntimeUser.name,
+      email: effectiveRuntimeMember?.email || baseRuntimeUser.email,
+    }),
+    [baseRuntimeUser.id, baseRuntimeUser.name, baseRuntimeUser.email, effectiveRuntimeMember?.name, effectiveRuntimeMember?.email]
+  );
 
   const currentUserId = runtimeUser?.id ?? null;
 
@@ -463,30 +645,53 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   };
 
   const resolveConversationAvatar = (conversation: Conversation) => {
-    const participants = conversation.participants || [];
-    const otherParticipant =
-      currentUserId != null
-        ? participants.find((participant) => participant.userId !== currentUserId)
-        : participants.find((participant) => participant.userId !== conversation.createdBy) || participants[0];
+    const otherParticipant = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
     return resolveMemberAvatar(otherParticipant?.user?.name, otherParticipant?.user?.email);
   };
 
-  const filteredConversations = useMemo(() => {
-    if (dataMode === "building") return [];
-    const normalized = dmSearch.trim().toLowerCase();
-    if (!normalized) return conversations;
+  const visibleConversations = useMemo(() => {
     return conversations.filter((conversation) => {
-      const name = getConversationDisplayName(conversation, currentUserId).toLowerCase();
+      if (dataMode === "building" && !isLocalConversationId(conversation.id)) {
+        return false;
+      }
+      if (conversation.type !== "direct") return true;
+      const otherParticipant = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
+      if (!otherParticipant) return false;
+
+      const selfName = normalizeIdentityName(runtimeUser?.name);
+      const selfEmail = normalizeComparableEmail(runtimeUser?.email);
+      const otherName = normalizeIdentityName(otherParticipant.user?.name);
+      const otherEmail = normalizeComparableEmail(otherParticipant.user?.email);
+
+      if (otherEmail && selfEmail && otherEmail === selfEmail) return false;
+      if (namesLikelyMatch(otherName, selfName)) return false;
+      return true;
+    });
+  }, [conversations, currentUserId, dataMode, runtimeUser?.email, runtimeUser?.name]);
+
+  const filteredConversations = useMemo(() => {
+    const normalized = dmSearch.trim().toLowerCase();
+    if (!normalized) return visibleConversations;
+    return visibleConversations.filter((conversation) => {
+      const name = getConversationDisplayName(conversation, currentUserId, runtimeUser).toLowerCase();
       const preview = String(conversation.lastMessage?.content || "").toLowerCase();
       return `${name} ${preview}`.includes(normalized);
     });
-  }, [conversations, currentUserId, dmSearch]);
+  }, [currentUserId, dmSearch, runtimeUser, visibleConversations]);
+
+  useEffect(() => {
+    if (isNewConversationDraft) return;
+    if (!visibleConversations.length) return;
+    if (!activeConversationId || !visibleConversations.some((conversation) => conversation.id === activeConversationId)) {
+      setActiveConversation(visibleConversations[0].id);
+    }
+  }, [activeConversationId, isNewConversationDraft, setActiveConversation, visibleConversations]);
 
   const availableMembers = useMemo(() => {
-    const selfName = normalizeLookupKey(runtimeUser?.name);
-    const selfEmail = normalizeLookupKey(runtimeUser?.email);
     return (demoState.teamMembers || [])
       .filter((member) => {
+        const selfName = normalizeLookupKey(runtimeUser?.name);
+        const selfEmail = normalizeLookupKey(runtimeUser?.email);
         const memberName = normalizeLookupKey(member.name);
         const memberEmail = normalizeLookupKey(member.email);
         if (!memberName) return false;
@@ -509,7 +714,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
   const selectedNewConversationMember = useMemo(
     () =>
       selectedNewConversationMemberId
-        ? availableMembers.find((member) => member.id === selectedNewConversationMemberId) || null
+        ? availableMembers.find((member) => String(member.id) === selectedNewConversationMemberId) || null
         : null,
     [availableMembers, selectedNewConversationMemberId]
   );
@@ -578,8 +783,9 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     const targetEmail = normalizeLookupKey(targetMember.email);
     const targetName = normalizeLookupKey(targetMember.name);
     const existingConversation = conversations.find((conversation) => {
+      if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
       if (conversation.type !== "direct") return false;
-      const other = getOtherConversationParticipant(conversation, currentUserId);
+      const other = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
       if (!other) return false;
       const otherEmail = normalizeLookupKey(other.user?.email);
       const otherName = normalizeLookupKey(other.user?.name);
@@ -599,7 +805,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     } else {
       setIsNewConversationDraft(true);
       setActiveConversation(null);
-      setSelectedNewConversationMemberId(targetMember.id);
+      setSelectedNewConversationMemberId(String(targetMember.id));
       setNewConversationQuery("");
     }
 
@@ -611,10 +817,10 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
         // Ignore storage failures.
       }
     }
-  }, [availableMembers, collaborationRouteParams, conversations, currentUserId, setActiveConversation, setActiveLayer]);
+  }, [availableMembers, collaborationRouteParams, conversations, currentUserId, dataMode, runtimeUser, setActiveConversation, setActiveLayer]);
 
   const selectDraftMember = (member: TeamMember) => {
-    setSelectedNewConversationMemberId(member.id);
+    setSelectedNewConversationMemberId(String(member.id));
     setNewConversationQuery("");
   };
 
@@ -656,13 +862,13 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
       return;
     }
 
-    setCreatingConversationFor(selectedNewConversationMember.id);
     try {
       const selectedEmail = normalizeLookupKey(selectedNewConversationMember.email);
       const selectedName = normalizeLookupKey(selectedNewConversationMember.name);
       const existing = conversations.find((conversation) => {
+        if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
         if (conversation.type !== "direct") return false;
-        const other = getOtherConversationParticipant(conversation, currentUserId);
+        const other = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
         if (!other) return false;
         const otherEmail = normalizeLookupKey(other.user?.email);
         const otherName = normalizeLookupKey(other.user?.name);
@@ -682,17 +888,16 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
         return;
       }
 
-      await sendConversationMessage(created.id, payload.content, payload.embeddedContent, payload.contentType);
+      // Move to the conversation view immediately so send can't leave the user stuck in draft mode.
+      selectConversation(created.id);
       setIsNewConversationDraft(false);
       setSelectedNewConversationMemberId(null);
       setNewConversationQuery("");
-      selectConversation(created.id);
-      await loadConversationMessages(created.id);
+      await sendConversationMessage(created.id, payload.content, payload.embeddedContent, payload.contentType);
+      void loadConversationMessages(created.id);
     } catch (error) {
       console.error(error);
-      toast.error("Could not start conversation. Please try again.");
-    } finally {
-      setCreatingConversationFor(null);
+      toast.error("Could not send message. Please try again.");
     }
   };
 
@@ -1229,7 +1434,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
 
               <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2 py-2">
                 {filteredConversations.slice(0, 24).map((conversation) => {
-                  const displayName = getConversationDisplayName(conversation, currentUserId);
+                  const displayName = getConversationDisplayName(conversation, currentUserId, runtimeUser);
                   const selected = activeConversationId === conversation.id;
                   const unread = conversation.unreadCount || 0;
                   const avatarSrc = resolveConversationAvatar(conversation);
@@ -1319,6 +1524,12 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                           <input
                             value={newConversationQuery}
                             onChange={(event) => setNewConversationQuery(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return;
+                              event.preventDefault();
+                              if (!filteredMembers.length) return;
+                              selectDraftMember(filteredMembers[0]);
+                            }}
                             placeholder="Search members"
                             className="h-8 w-full rounded-md border border-gray-200 bg-gray-50 px-3 text-sm text-gray-700 placeholder:text-gray-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                           />
@@ -1330,8 +1541,12 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                               ) : (
                                 filteredMembers.map((member) => (
                                   <button
-                                    key={member.id}
+                                    key={String(member.id)}
                                     type="button"
+                                    onMouseDown={(event) => {
+                                      event.preventDefault();
+                                      selectDraftMember(member);
+                                    }}
                                     onClick={() => selectDraftMember(member)}
                                     className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-gray-50"
                                   >
@@ -1398,7 +1613,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                         ? `Message ${selectedNewConversationMember.name}`
                         : "Select a member to start a conversation"
                     }
-                    disabled={!selectedNewConversationMember || Boolean(creatingConversationFor)}
+                    disabled={false}
                     onSend={sendFirstDirectMessage}
                     onStructuredSend={sendFirstDirectMessage}
                   />
@@ -1409,6 +1624,8 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                   messages={activeConversationId ? conversationMessagesMap[activeConversationId] || [] : []}
                   aiIsTyping={aiIsTyping && detailMode === "conversation"}
                   currentUserId={currentUserId}
+                  currentUserName={runtimeUser?.name || null}
+                  currentUserEmail={runtimeUser?.email || null}
                   resolveAvatar={resolveMemberAvatar}
                   onSend={(content) =>
                     activeConversationId ? sendConversationMessage(activeConversationId, content) : Promise.resolve()
@@ -1601,6 +1818,8 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                 messages={activeThreadId ? threadMessages[activeThreadId] || [] : []}
                 aiIsTyping={aiIsTyping && detailMode === "thread"}
                 currentUserId={currentUserId}
+                currentUserName={runtimeUser?.name || null}
+                currentUserEmail={runtimeUser?.email || null}
                 resolveAvatar={resolveMemberAvatar}
                 onSendMessage={sendThreadMessage}
                 onResolve={resolveActiveThread}

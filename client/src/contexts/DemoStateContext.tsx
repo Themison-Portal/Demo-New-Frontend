@@ -6,6 +6,7 @@
 
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from "react";
 import { toast } from "sonner";
+import { clearCollaborationDemoRuntimeCache } from "@/stores/collaborationStore";
 
 // Task status types
 export type TaskStatus = "due_today" | "waiting_on_monitor" | "review_pending" | "need_answers" | "completed";
@@ -372,6 +373,7 @@ interface DemoStateContextType {
   getCompletedTasksCount: () => number;
   getActiveTasksCount: () => number;
   getCurrentDataMode: () => 'sample' | 'full' | 'building';
+  getCloneStorageOverridesForMode: (mode: DemoState["dataMode"]) => Record<string, string>;
 }
 
 const DemoStateContext = createContext<DemoStateContextType | undefined>(undefined);
@@ -385,13 +387,13 @@ const STORAGE_KEY_DEFAULT_SAMPLE = `${STORAGE_KEY}-default-sample`;
 const STORAGE_KEY_DEFAULT_FULL = `${STORAGE_KEY}-default-full`;
 const STORAGE_KEY_DEFAULT_BUILDING = `${STORAGE_KEY}-default-building`;
 const ORGANIZATION_PROFILE_STORAGE_KEY = "themison-organization-profile:v1";
+const ORGANIZATION_PROFILE_UPDATED_EVENT = "themison:organization-profile-updated";
 const LEGACY_MEMBER_EMAIL_DOMAIN = "@themison.com";
 const CURRENT_MEMBER_EMAIL_DOMAIN = "@azorg.be";
-const ZAS_MEMBER_EMAIL_DOMAIN = "@zas.be";
-const ZAS_MEMBER_SITE = "Antwerp";
 const COLLAB_DEMO_STORAGE_PREFIXES = [
   "themison-collab-demo-conversations-",
   "themison-collab-demo-inbox-",
+  "themison-collab-demo-threads-",
 ];
 
 const isDemoDataMode = (value: string | null): value is DemoState["dataMode"] => {
@@ -503,31 +505,67 @@ const buildMemberEmailLocalPart = (member: TeamMember) => {
   return idToken || "member";
 };
 
-const shouldUseZasMemberRules = () => {
-  if (typeof window === "undefined") return false;
+const extractEmailDomain = (email: string | null | undefined) => {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized) return "";
+  const atIndex = normalized.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex >= normalized.length - 1) return "";
+  return normalized.slice(atIndex + 1).replace(/[^a-z0-9.-]/g, "");
+};
+
+const extractWebsiteDomain = (website: string | null | undefined) => {
+  const normalized = String(website || "").trim();
+  if (!normalized) return "";
+  try {
+    const withProtocol = /^https?:\/\//i.test(normalized) ? normalized : `https://${normalized}`;
+    const url = new URL(withProtocol);
+    return url.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+};
+
+const extractCityFromLocation = (location: string | null | undefined) => {
+  const normalized = String(location || "").trim();
+  if (!normalized) return "";
+  const [cityToken] = normalized.split(",");
+  return String(cityToken || "").trim();
+};
+
+const readOrganizationMemberRules = () => {
+  if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(ORGANIZATION_PROFILE_STORAGE_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as Partial<{ name: string; legalName: string; website: string }>;
-    const probe = `${parsed?.name || ""} ${parsed?.legalName || ""} ${parsed?.website || ""}`
-      .toLowerCase()
-      .trim();
-    if (!probe) return false;
-    return /\bzas\b/.test(probe) || probe.includes("zas.be");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<{
+      contactEmail: string;
+      website: string;
+      location: string;
+    }>;
+    const domain = extractEmailDomain(parsed.contactEmail) || extractWebsiteDomain(parsed.website);
+    const siteCity = extractCityFromLocation(parsed.location);
+    if (!domain && !siteCity) return null;
+    return { domain, siteCity };
   } catch {
-    return false;
+    return null;
   }
 };
 
 const alignStateToActiveOrganization = (targetState: DemoState): DemoState => {
-  if (!shouldUseZasMemberRules()) return targetState;
+  const rules = readOrganizationMemberRules();
+  if (!rules) return targetState;
   if (!Array.isArray(targetState.teamMembers) || targetState.teamMembers.length === 0) return targetState;
 
   let changed = false;
   const nextTeamMembers = targetState.teamMembers.map((member) => {
-    const localPart = buildMemberEmailLocalPart(member);
-    const nextEmail = `${localPart}${ZAS_MEMBER_EMAIL_DOMAIN}`;
-    const nextSite = ZAS_MEMBER_SITE;
+    const nextEmail = (() => {
+      if (!rules.domain) return member.email;
+      const current = String(member.email || "").trim();
+      const currentDomain = extractEmailDomain(current);
+      if (current && currentDomain === rules.domain) return current;
+      return `${buildMemberEmailLocalPart(member)}@${rules.domain}`;
+    })();
+    const nextSite = rules.siteCity || member.site || "";
     if (member.email === nextEmail && member.site === nextSite) {
       return member;
     }
@@ -712,6 +750,19 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     }
   }, [state]);
 
+  useEffect(() => {
+    const alignFromProfile = () => {
+      setState((prev) => alignStateToActiveOrganization(prev));
+    };
+
+    window.addEventListener("storage", alignFromProfile);
+    window.addEventListener(ORGANIZATION_PROFILE_UPDATED_EVENT, alignFromProfile as EventListener);
+    return () => {
+      window.removeEventListener("storage", alignFromProfile);
+      window.removeEventListener(ORGANIZATION_PROFILE_UPDATED_EVENT, alignFromProfile as EventListener);
+    };
+  }, []);
+
   // Save to localStorage whenever state changes
   useEffect(() => {
     const key = getStorageKeyForMode(state.dataMode);
@@ -813,6 +864,8 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     const nextState = syncModeAvatarsFromStoredSources(
       syncBuildingTeamMembersFromSample(withMode(emptyState, "building"))
     );
+    clearCollaborationDemoStorage();
+    clearCollaborationDemoRuntimeCache();
     setState(nextState);
     localStorage.setItem(STORAGE_KEY_BUILDING, JSON.stringify(nextState));
   };
@@ -962,6 +1015,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY_SAMPLE, JSON.stringify(sampleState));
     localStorage.setItem(STORAGE_KEY_FULL, JSON.stringify(fullState));
     clearCollaborationDemoStorage();
+    clearCollaborationDemoRuntimeCache();
     const targetMode = modeOverride ?? state.dataMode;
     if (targetMode === "full") {
       setState(fullState);
@@ -1000,6 +1054,27 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     return state.dataMode;
   };
 
+  const getCloneStorageOverridesForMode = (mode: DemoState["dataMode"]) => {
+    const baseState = alignStateToActiveOrganization(state);
+    const nextState = (() => {
+      if (mode === "building") {
+        return syncModeAvatarsFromStoredSources(
+          syncBuildingTeamMembersFromSample(withMode(baseState, "building"))
+        );
+      }
+      if (mode === "full") {
+        return syncModeAvatarsFromStoredSources(withMode(baseState, "full"));
+      }
+      return withMode(baseState, "sample");
+    })();
+
+    return {
+      [getStorageKeyForMode(mode)]: JSON.stringify(nextState),
+      [getDefaultStorageKeyForMode(mode)]: JSON.stringify(nextState),
+      [STORAGE_KEY_ACTIVE_MODE]: mode,
+    };
+  };
+
   return (
     <DemoStateContext.Provider
       value={{
@@ -1019,6 +1094,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
         getCompletedTasksCount,
         getActiveTasksCount,
         getCurrentDataMode,
+        getCloneStorageOverridesForMode,
       }}
     >
       {children}

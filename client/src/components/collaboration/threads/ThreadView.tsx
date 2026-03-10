@@ -10,12 +10,15 @@ import { MessageInput } from "@/components/collaboration/shared/MessageInput";
 import { AITypingIndicator } from "@/components/collaboration/shared/AITypingIndicator";
 import { ProtocolSnippetCard } from "@/components/collaboration/shared/ProtocolSnippetCard";
 import { TaskCard } from "@/components/collaboration/shared/TaskCard";
+import { matchesCollaborationIdentity } from "@/lib/collaborationIdentity";
 
 interface ThreadViewProps {
   thread: TrialThread | null;
   messages: CollaborationMessage[];
   aiIsTyping: boolean;
   currentUserId: number | null;
+  currentUserName?: string | null;
+  currentUserEmail?: string | null;
   resolveAvatar?: (name?: string | null, email?: string | null) => string | null;
   onSendMessage: (content: string) => Promise<void>;
   onResolve: (summary: string, useAiSummary: boolean) => Promise<void>;
@@ -55,6 +58,8 @@ export function ThreadView({
   messages,
   aiIsTyping,
   currentUserId,
+  currentUserName,
+  currentUserEmail,
   resolveAvatar,
   onSendMessage,
   onResolve,
@@ -81,10 +86,18 @@ export function ThreadView({
     }
   };
 
-  const resolveSelf = (message: CollaborationMessage) => {
-    if (message.senderId != null && currentUserId != null && message.senderId === currentUserId) return true;
-    return /^(you|kaleb sanders)$/i.test(message.senderName || "");
+  const currentUserIdentity = {
+    id: currentUserId,
+    name: currentUserName,
+    email: currentUserEmail,
   };
+
+  const selfDisplayName =
+    currentUserName?.trim() ||
+    (thread.participants || []).find((participant) => matchesCollaborationIdentity(participant, currentUserIdentity))?.user?.name ||
+    "You";
+
+  const resolveSelf = (message: CollaborationMessage) => matchesCollaborationIdentity(message, currentUserIdentity);
 
   const orderedMessages = [...messages].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
@@ -172,7 +185,7 @@ export function ThreadView({
           const hasTextBubble =
             Boolean(message.content?.trim()) &&
             (message.contentType === "text" || message.contentType === "email" || message.contentType === "ai_response");
-          const senderLabel = message.senderName || "Team";
+          const senderLabel = isSelf ? selfDisplayName : message.senderName || "Team";
           const senderAvatar = !isSelf ? resolveAvatar?.(senderLabel, message.senderEmail) || null : null;
 
           return (

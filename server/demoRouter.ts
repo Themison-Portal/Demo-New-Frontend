@@ -1,5 +1,6 @@
 import { protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
+import { randomUUID } from "crypto";
 import {
   aiAnalyticsRollups,
   aiFeatureSnapshots,
@@ -37,7 +38,7 @@ import {
   trialInboxes,
   trials,
 } from "../drizzle/schema";
-import { toDemoId, type DemoMode } from "./_core/demoMode";
+import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
 import { eq, inArray, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
@@ -1060,6 +1061,10 @@ function toRowObjects(rows: unknown[]): Array<Record<string, unknown>> {
     (row): row is Record<string, unknown> =>
       Boolean(row) && typeof row === "object" && !Array.isArray(row)
   );
+}
+
+function asTypedRows<T extends Record<string, unknown>>(rows: unknown[]): T[] {
+  return toRowObjects(rows) as T[];
 }
 
 function normalizeRowsForInsert(
@@ -3264,6 +3269,350 @@ async function resetModeToDefault(
   return { restoredFromSavedDefault: false };
 }
 
+function remapLinkedIds(value: unknown, idMap: Map<string, string>) {
+  if (!Array.isArray(value)) return value;
+  return value.map((entry) => {
+    if (typeof entry !== "string") return entry;
+    return idMap.get(entry) ?? entry;
+  });
+}
+
+function remapKnownEntityId(
+  value: string | null | undefined,
+  idMaps: Array<Map<string, string>>
+) {
+  if (!value) return value ?? null;
+  for (const idMap of idMaps) {
+    const next = idMap.get(value);
+    if (next) return next;
+  }
+  return value;
+}
+
+async function cloneModeIntoBuilding(
+  sourceMode: DemoMode,
+  createdBy: number,
+  dbClient?: DbClient
+) {
+  if (sourceMode === "building") {
+    throw new Error("Building mode cannot be copied into itself.");
+  }
+
+  const db = dbClient ?? await getDb();
+  if (!db) throw new Error("Database not available");
+
+  await ensureMapTaskStatusHistoryTable(db);
+  await seedCategories(db);
+
+  const sourceSnapshot = await captureModeSnapshot(sourceMode, db);
+  const rows = normalizeSnapshotRows(sourceSnapshot.rows);
+
+  await db.transaction(async (tx) => {
+    await wipeModeData("building", tx as unknown as DbClient);
+
+    const trialIdMap = new Map<string, string>();
+    const protocolIdMap = new Map<number, number>();
+    const protocolSectionIdMap = new Map<number, number>();
+    const scaffoldIdMap = new Map<number, number>();
+    const phaseIdMap = new Map<number, number>();
+    const taskIdMap = new Map<number, number>();
+    const mapIdMap = new Map<string, string>();
+    const mapPhaseIdMap = new Map<string, string>();
+    const mapTaskIdMap = new Map<string, string>();
+    const protocolMapSectionIdMap = new Map<string, string>();
+
+    const trialRows = asTypedRows<typeof trials.$inferSelect>(rows.trials);
+    for (const row of trialRows) {
+      const nextTrialId = toDemoId("building", stripDemoId(String(row.id)));
+      trialIdMap.set(String(row.id), nextTrialId);
+      await tx.insert(trials).values({
+        ...row,
+        id: nextTrialId,
+      });
+    }
+
+    const protocolRows = asTypedRows<typeof protocols.$inferSelect>(rows.protocols);
+    for (const row of protocolRows) {
+      const { id: _protocolId, ...protocolInsert } = row;
+      const [inserted] = await tx
+        .insert(protocols)
+        .values({
+          ...protocolInsert,
+          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+        })
+        .$returningId();
+      if (typeof inserted?.id === "number") {
+        protocolIdMap.set(Number(row.id), inserted.id);
+      }
+    }
+
+    const protocolSectionRows = asTypedRows<typeof protocolSections.$inferSelect>(rows.protocolSections);
+    for (const row of protocolSectionRows) {
+      const { id: _protocolSectionId, ...protocolSectionInsert } = row;
+      const [inserted] = await tx
+        .insert(protocolSections)
+        .values({
+          ...protocolSectionInsert,
+          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+          parentSectionId: null,
+        })
+        .$returningId();
+      if (typeof inserted?.id === "number") {
+        protocolSectionIdMap.set(Number(row.id), inserted.id);
+      }
+    }
+    for (const row of protocolSectionRows) {
+      if (!row.parentSectionId) continue;
+      const nextId = protocolSectionIdMap.get(Number(row.id));
+      const nextParentId = protocolSectionIdMap.get(Number(row.parentSectionId));
+      if (!nextId || !nextParentId) continue;
+      await tx
+        .update(protocolSections)
+        .set({ parentSectionId: nextParentId })
+        .where(eq(protocolSections.id, nextId));
+    }
+
+    const protocolChunkRows = asTypedRows<typeof protocolChunks.$inferSelect>(rows.protocolChunks);
+    for (const row of protocolChunkRows) {
+      const { id: _protocolChunkId, ...protocolChunkInsert } = row;
+      await tx.insert(protocolChunks).values({
+        ...protocolChunkInsert,
+        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+      });
+    }
+
+    const scaffoldRows = asTypedRows<typeof taskScaffolds.$inferSelect>(rows.taskScaffolds);
+    for (const row of scaffoldRows) {
+      const { id: _scaffoldId, ...scaffoldInsert } = row;
+      const [inserted] = await tx
+        .insert(taskScaffolds)
+        .values({
+          ...scaffoldInsert,
+          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+        })
+        .$returningId();
+      if (typeof inserted?.id === "number") {
+        scaffoldIdMap.set(Number(row.id), inserted.id);
+      }
+    }
+
+    const phaseRows = asTypedRows<typeof phases.$inferSelect>(rows.phases);
+    for (const row of phaseRows) {
+      const { id: _phaseId, ...phaseInsert } = row;
+      const [inserted] = await tx
+        .insert(phases)
+        .values({
+          ...phaseInsert,
+          scaffoldId: scaffoldIdMap.get(Number(row.scaffoldId)) ?? Number(row.scaffoldId),
+        })
+        .$returningId();
+      if (typeof inserted?.id === "number") {
+        phaseIdMap.set(Number(row.id), inserted.id);
+      }
+    }
+
+    const taskRows = asTypedRows<typeof tasks.$inferSelect>(rows.tasks);
+    for (const row of taskRows) {
+      const { id: _taskId, ...taskInsert } = row;
+      const [inserted] = await tx
+        .insert(tasks)
+        .values({
+          ...taskInsert,
+          phaseId: phaseIdMap.get(Number(row.phaseId)) ?? Number(row.phaseId),
+        })
+        .$returningId();
+      if (typeof inserted?.id === "number") {
+        taskIdMap.set(Number(row.id), inserted.id);
+      }
+    }
+
+    const taskDependencyRows = asTypedRows<typeof taskDependencies.$inferSelect>(rows.taskDependencies);
+    for (const row of taskDependencyRows) {
+      const { id: _taskDependencyId, ...taskDependencyInsert } = row;
+      await tx.insert(taskDependencies).values({
+        ...taskDependencyInsert,
+        taskId: taskIdMap.get(Number(row.taskId)) ?? Number(row.taskId),
+        dependsOnTaskId: taskIdMap.get(Number(row.dependsOnTaskId)) ?? Number(row.dependsOnTaskId),
+      });
+    }
+
+    const phaseTransitionRows = asTypedRows<typeof phaseTransitions.$inferSelect>(rows.phaseTransitions);
+    for (const row of phaseTransitionRows) {
+      const { id: _phaseTransitionId, ...phaseTransitionInsert } = row;
+      await tx.insert(phaseTransitions).values({
+        ...phaseTransitionInsert,
+        fromPhaseId: phaseIdMap.get(Number(row.fromPhaseId)) ?? Number(row.fromPhaseId),
+        toPhaseId: phaseIdMap.get(Number(row.toPhaseId)) ?? Number(row.toPhaseId),
+      });
+    }
+
+    const mapRows = asTypedRows<typeof executionMaps.$inferSelect>(rows.executionMaps);
+    for (const row of mapRows) {
+      const nextMapId = randomUUID();
+      mapIdMap.set(String(row.id), nextMapId);
+      await tx.insert(executionMaps).values({
+        ...row,
+        id: nextMapId,
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+      });
+    }
+
+    const mapPhaseRows = asTypedRows<typeof mapPhases.$inferSelect>(rows.mapPhases);
+    for (const row of mapPhaseRows) {
+      const nextMapPhaseId = randomUUID();
+      mapPhaseIdMap.set(String(row.id), nextMapPhaseId);
+      await tx.insert(mapPhases).values({
+        ...row,
+        id: nextMapPhaseId,
+        mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
+      });
+    }
+
+    const mapTaskRows = asTypedRows<typeof mapTasks.$inferSelect>(rows.mapTasks);
+    for (const row of mapTaskRows) {
+      const nextMapTaskId = randomUUID();
+      mapTaskIdMap.set(String(row.id), nextMapTaskId);
+      await tx.insert(mapTasks).values({
+        ...row,
+        id: nextMapTaskId,
+        phaseId: mapPhaseIdMap.get(String(row.phaseId)) ?? String(row.phaseId),
+        mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
+      });
+    }
+
+    const mapTaskDependencyRows = asTypedRows<typeof mapTaskDependencies.$inferSelect>(rows.mapTaskDependencies);
+    for (const row of mapTaskDependencyRows) {
+      await tx.insert(mapTaskDependencies).values({
+        ...row,
+        id: randomUUID(),
+        sourceTaskId: mapTaskIdMap.get(String(row.sourceTaskId)) ?? String(row.sourceTaskId),
+        targetTaskId: mapTaskIdMap.get(String(row.targetTaskId)) ?? String(row.targetTaskId),
+      });
+    }
+
+    const mapPhaseTransitionRows = asTypedRows<typeof mapPhaseTransitions.$inferSelect>(rows.mapPhaseTransitions);
+    for (const row of mapPhaseTransitionRows) {
+      await tx.insert(mapPhaseTransitions).values({
+        ...row,
+        id: randomUUID(),
+        fromPhaseId: mapPhaseIdMap.get(String(row.fromPhaseId)) ?? String(row.fromPhaseId),
+        toPhaseId: mapPhaseIdMap.get(String(row.toPhaseId)) ?? String(row.toPhaseId),
+      });
+    }
+
+    const protocolMapSectionRows = asTypedRows<typeof protocolMapSections.$inferSelect>(rows.protocolMapSections);
+    for (const row of protocolMapSectionRows) {
+      const nextSectionId = randomUUID();
+      protocolMapSectionIdMap.set(String(row.id), nextSectionId);
+      await tx.insert(protocolMapSections).values({
+        ...row,
+        id: nextSectionId,
+        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
+        parentSectionId: null,
+        linkedPhaseIds: remapLinkedIds(row.linkedPhaseIds, mapPhaseIdMap),
+        linkedTaskIds: remapLinkedIds(row.linkedTaskIds, mapTaskIdMap),
+      });
+    }
+    for (const row of protocolMapSectionRows) {
+      if (!row.parentSectionId) continue;
+      const nextId = protocolMapSectionIdMap.get(String(row.id));
+      const nextParentId = protocolMapSectionIdMap.get(String(row.parentSectionId));
+      if (!nextId || !nextParentId) continue;
+      await tx
+        .update(protocolMapSections)
+        .set({ parentSectionId: nextParentId })
+        .where(eq(protocolMapSections.id, nextId));
+    }
+
+    const mapTelemetryRows = asTypedRows<typeof mapTelemetryEvents.$inferSelect>(rows.mapTelemetryEvents);
+    for (const row of mapTelemetryRows) {
+      await tx.insert(mapTelemetryEvents).values({
+        ...row,
+        id: randomUUID(),
+        mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+        targetId: remapKnownEntityId(row.targetId, [mapTaskIdMap, mapPhaseIdMap, mapIdMap]),
+      });
+    }
+
+    const mapTaskStatusHistoryRows = asTypedRows<typeof mapTaskStatusHistory.$inferSelect>(rows.mapTaskStatusHistory);
+    for (const row of mapTaskStatusHistoryRows) {
+      await tx.insert(mapTaskStatusHistory).values({
+        ...row,
+        id: randomUUID(),
+        mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+        taskId: mapTaskIdMap.get(String(row.taskId)) ?? String(row.taskId),
+      });
+    }
+
+    const aiFeatureSnapshotRows = asTypedRows<typeof aiFeatureSnapshots.$inferSelect>(rows.aiFeatureSnapshots);
+    for (const row of aiFeatureSnapshotRows) {
+      const { id: _aiFeatureSnapshotId, ...aiFeatureSnapshotInsert } = row;
+      await tx.insert(aiFeatureSnapshots).values({
+        ...aiFeatureSnapshotInsert,
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+      });
+    }
+
+    const aiAnalyticsRollupRows = asTypedRows<typeof aiAnalyticsRollups.$inferSelect>(rows.aiAnalyticsRollups);
+    for (const row of aiAnalyticsRollupRows) {
+      const { id: _aiAnalyticsRollupId, ...aiAnalyticsRollupInsert } = row;
+      await tx.insert(aiAnalyticsRollups).values({
+        ...aiAnalyticsRollupInsert,
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+      });
+    }
+
+    const aiTrainingExampleRows = asTypedRows<typeof aiTrainingExamples.$inferSelect>(rows.aiTrainingExamples);
+    for (const row of aiTrainingExampleRows) {
+      const { id: _aiTrainingExampleId, ...aiTrainingExampleInsert } = row;
+      await tx.insert(aiTrainingExamples).values({
+        ...aiTrainingExampleInsert,
+        trialId: row.trialId ? trialIdMap.get(String(row.trialId)) ?? String(row.trialId) : null,
+      });
+    }
+
+    const knowledgeGraphNodeRows = asTypedRows<typeof knowledgeGraphNodes.$inferSelect>(rows.knowledgeGraphNodes);
+    for (const row of knowledgeGraphNodeRows) {
+      const { id: _knowledgeGraphNodeId, ...knowledgeGraphNodeInsert } = row;
+      await tx.insert(knowledgeGraphNodes).values({
+        ...knowledgeGraphNodeInsert,
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+      });
+    }
+
+    const knowledgeGraphEdgeRows = asTypedRows<typeof knowledgeGraphEdges.$inferSelect>(rows.knowledgeGraphEdges);
+    for (const row of knowledgeGraphEdgeRows) {
+      const { id: _knowledgeGraphEdgeId, ...knowledgeGraphEdgeInsert } = row;
+      await tx.insert(knowledgeGraphEdges).values({
+        ...knowledgeGraphEdgeInsert,
+        trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
+      });
+    }
+  });
+
+  const buildingSnapshot = await captureModeSnapshot("building", db);
+  await writeSavedModeSnapshot(db, "building", buildingSnapshot, createdBy);
+
+  return {
+    ok: true,
+    sourceMode,
+    copiedTrials: asTypedRows<typeof trials.$inferSelect>(rows.trials).length,
+    copiedProtocols: asTypedRows<typeof protocols.$inferSelect>(rows.protocols).length,
+    copiedMaps: asTypedRows<typeof executionMaps.$inferSelect>(rows.executionMaps).length,
+    skippedFileSearchStores: asTypedRows<typeof fileSearchStores.$inferSelect>(rows.fileSearchStores).length,
+    skippedCollaborationRecords:
+      asTypedRows<typeof conversations.$inferSelect>(rows.conversations).length +
+      asTypedRows<typeof threads.$inferSelect>(rows.threads).length +
+      asTypedRows<typeof trialInboxes.$inferSelect>(rows.trialInboxes).length,
+  };
+}
+
 export const demoRouter = router({
   resetToEmpty: protectedProcedure.mutation(async () => {
     await wipeModeData("building");
@@ -3425,6 +3774,14 @@ export const demoRouter = router({
       }
       const result = await resetModeToDefault("building", ctx.user.id, db);
       return { ok: true, mode: "building" as const, ...result };
+    }),
+
+  cloneCurrentModeToBuilding: protectedProcedure
+    .input(z.object({ sourceMode: z.enum(["sample", "full"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = await getDb();
+      if (!db) throw new Error("Database not available");
+      return cloneModeIntoBuilding(input.sourceMode, ctx.user.id, db);
     }),
 
   fullReset: protectedProcedure.mutation(async ({ ctx }) => {

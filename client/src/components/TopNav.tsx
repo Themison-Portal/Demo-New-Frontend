@@ -118,7 +118,9 @@ export function TopNav() {
   const displayAvatar = currentMember?.avatar || "";
   
   // Fetch trials from database for breadcrumb display
-  const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
+  const { data: trials = [], isLoading: trialsLoading } = trpc.trials.list.useQuery({
+    demoMode: currentDataMode,
+  });
 
   useEffect(() => {
     if (currentDataMode !== "sample") return;
@@ -179,6 +181,7 @@ export function TopNav() {
   }, [currentDataMode]);
 
   useEffect(() => {
+    if (trialsLoading) return;
     if (hasModeSessionBootstrap(currentDataMode)) return;
     if (modeBootstrapInFlightRef.current[currentDataMode]) return;
 
@@ -188,12 +191,17 @@ export function TopNav() {
 
     const bootstrapModeFromSavedDefault = async () => {
       try {
-        if (targetMode === "sample") {
-          await loadSampleMutation.mutateAsync({ resetToDefault: true });
-        } else if (targetMode === "full") {
-          await loadFullMutation.mutateAsync({ resetToDefault: true });
-        } else {
-          await loadBuildingMutation.mutateAsync({ resetToDefault: true });
+        // Do not mutate DB on every browser session.
+        // Only trigger mode load when selected mode has no trials yet.
+        const modeHasTrials = trials.length > 0;
+        if (!modeHasTrials) {
+          if (targetMode === "sample") {
+            await loadSampleMutation.mutateAsync();
+          } else if (targetMode === "full") {
+            await loadFullMutation.mutateAsync();
+          } else {
+            await loadBuildingMutation.mutateAsync();
+          }
         }
 
         if (cancelled) return;
@@ -214,7 +222,15 @@ export function TopNav() {
     return () => {
       cancelled = true;
     };
-  }, [currentDataMode]);
+  }, [
+    currentDataMode,
+    trials.length,
+    trialsLoading,
+    loadBuildingMutation,
+    loadFullMutation,
+    loadSampleMutation,
+    restoreModeFromDefaultLocal,
+  ]);
 
   const handleConfirmAction = async () => {
     const needsLoading = confirmDialog.type !== 'building';

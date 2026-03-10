@@ -18,7 +18,10 @@ export default function Collaboration() {
     full: "full-workspace",
     building: "building-workspace",
   };
-  const trialId = trialIdFromQuery || trials[0]?.id || fallbackTrialIdByMode[currentDataMode];
+  const trialId =
+    currentDataMode === "building"
+      ? fallbackTrialIdByMode.building
+      : trialIdFromQuery || trials[0]?.id || fallbackTrialIdByMode[currentDataMode];
 
   useEffect(() => {
     logEvent({
@@ -28,7 +31,10 @@ export default function Collaboration() {
       entityId: trialId,
       payload: {
         demoMode: currentDataMode,
-        source: trialIdFromQuery
+        source:
+          currentDataMode === "building"
+            ? "building_workspace_pinned"
+            : trialIdFromQuery
           ? "query_param"
           : trials[0]?.id
             ? "default_first_trial"

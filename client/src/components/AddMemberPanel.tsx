@@ -144,6 +144,11 @@ export function AddMemberPanel({
                 <option>Principal Investigator</option>
                 <option>Sub-Investigator</option>
                 <option>CRC</option>
+                <option>CRA</option>
+                <option>Lead CRA</option>
+                <option>Clinical Trial Manager (CTM)</option>
+                <option>Site Management Associate (SMA)</option>
+                <option>Clinical Project Manager</option>
                 <option>Nurse</option>
                 <option>Lab</option>
                 <option>Data Manager</option>

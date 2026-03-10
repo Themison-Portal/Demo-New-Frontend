@@ -7,6 +7,11 @@ import { AITypingIndicator } from "@/components/collaboration/shared/AITypingInd
 import { MessageInput } from "@/components/collaboration/shared/MessageInput";
 import { ProtocolSnippetCard } from "@/components/collaboration/shared/ProtocolSnippetCard";
 import { TaskCard } from "@/components/collaboration/shared/TaskCard";
+import {
+  getConversationDisplayName,
+  getOtherConversationParticipant,
+  matchesCollaborationIdentity,
+} from "@/lib/collaborationIdentity";
 
 type StructuredConversationMessage = {
   content: string;
@@ -19,6 +24,8 @@ interface ConversationViewProps {
   messages: CollaborationMessage[];
   aiIsTyping: boolean;
   currentUserId: number | null;
+  currentUserName?: string | null;
+  currentUserEmail?: string | null;
   resolveAvatar?: (name?: string | null, email?: string | null) => string | null;
   onSend: (content: string) => Promise<void>;
   onStructuredSend?: (payload: StructuredConversationMessage) => Promise<void>;
@@ -52,45 +59,13 @@ function initials(value: string) {
   return (parts[0]?.[0] || "?") + (parts[1]?.[0] || "");
 }
 
-function getConversationDisplayName(conversation: Conversation, currentUserId: number | null) {
-  if (conversation.type === "group") {
-    return conversation.name || "Group Conversation";
-  }
-
-  const participants = (conversation.participants || []).filter((participant) => participant.user?.name);
-  if (!participants.length) return conversation.name || "Conversation";
-
-  if (currentUserId != null) {
-    const other = participants.find((participant) => participant.userId !== currentUserId);
-    if (other?.user?.name) return other.user.name;
-  } else {
-    const other = participants.find((participant) => participant.userId !== conversation.createdBy);
-    if (other?.user?.name) return other.user.name;
-  }
-
-  return participants[0]?.user?.name || conversation.name || "Conversation";
-}
-
-function getPrimaryParticipantRecord(conversation: Conversation, currentUserId: number | null) {
-  const participants = (conversation.participants || []).filter((participant) => participant.user?.name);
-  if (!participants.length) return null;
-
-  if (currentUserId != null) {
-    const other = participants.find((participant) => participant.userId !== currentUserId);
-    if (other) return other;
-  } else {
-    const other = participants.find((participant) => participant.userId !== conversation.createdBy);
-    if (other) return other;
-  }
-
-  return participants[0] || null;
-}
-
 export function ConversationView({
   conversation,
   messages,
   aiIsTyping,
   currentUserId,
+  currentUserName,
+  currentUserEmail,
   resolveAvatar,
   onSend,
   onStructuredSend,
@@ -138,21 +113,24 @@ export function ConversationView({
     );
   }
 
-  const displayName = getConversationDisplayName(conversation, currentUserId);
+  const currentUserIdentity = {
+    id: currentUserId,
+    name: currentUserName,
+    email: currentUserEmail,
+  };
+  const displayName = getConversationDisplayName(conversation, currentUserIdentity);
 
-  const primaryParticipantRecord = getPrimaryParticipantRecord(conversation, currentUserId);
+  const primaryParticipantRecord = getOtherConversationParticipant(conversation, currentUserIdentity);
   const primaryParticipant = primaryParticipantRecord?.user?.name || displayName;
   const primaryAvatar = resolveAvatar?.(primaryParticipantRecord?.user?.name || primaryParticipant, primaryParticipantRecord?.user?.email || null) || null;
 
   const selfDisplayName =
-    (conversation.participants || []).find((participant) =>
-      currentUserId != null ? participant.userId === currentUserId : participant.userId === conversation.createdBy
-    )?.user?.name || "Kaleb Sanders";
+    currentUserName?.trim() ||
+    (conversation.participants || []).find((participant) => matchesCollaborationIdentity(participant, currentUserIdentity))?.user?.name ||
+    "You";
 
   const resolveSelf = (message: CollaborationMessage) => {
-    if (message.senderId != null && currentUserId != null && message.senderId === currentUserId) return true;
-    if (message.senderId != null && message.senderId === conversation.createdBy) return true;
-    return /^(you|kaleb sanders)$/i.test(message.senderName || "");
+    return matchesCollaborationIdentity(message, currentUserIdentity);
   };
 
   const orderedMessages = [...messages].sort(

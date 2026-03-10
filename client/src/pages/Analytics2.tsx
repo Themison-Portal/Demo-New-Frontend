@@ -313,6 +313,18 @@ function isDoneStatus(status?: string | null): boolean {
   return token === "done" || token === "completed" || token === "skipped" || token === "cancelled";
 }
 
+function isBlockedLikeStatus(status?: string | null): boolean {
+  const token = normalizeStatus(status);
+  return token === "blocked" || token === "waiting";
+}
+
+function isBlockedLikeTask(task: WorkspaceTask): boolean {
+  if (isDoneStatus(task.status)) return false;
+  if (isBlockedLikeStatus(task.status)) return true;
+  const blockedReason = String(task.blockedReason ?? "").trim();
+  return blockedReason.length > 0;
+}
+
 function isResolvedThreadStatus(status?: string | null): boolean {
   const token = normalizeStatus(status);
   return token === "resolved" || token === "closed";
@@ -464,9 +476,20 @@ function formatCountAxis(value: number) {
 }
 
 function computeWorkloadYAxis(points: WorkloadPoint[]): { yAxisMax: number; yAxisTicks: number[] } {
-  // Keep workload chart on fixed 16-unit bands up to 80.
-  void points;
-  return { yAxisMax: 80, yAxisTicks: [0, 16, 32, 48, 64, 80] };
+  const maxValue = points.reduce((max, point) => Math.max(max, point.tasks, point.visits), 0);
+  const clampedMax = Math.max(1, maxValue);
+  let chartCeiling = 6;
+  if (clampedMax > 6 && clampedMax <= 10) chartCeiling = 10;
+  else if (clampedMax > 10 && clampedMax <= 15) chartCeiling = 15;
+  else if (clampedMax > 15 && clampedMax <= 25) chartCeiling = 25;
+  else if (clampedMax > 25 && clampedMax <= 40) chartCeiling = 40;
+  else if (clampedMax > 40 && clampedMax <= 60) chartCeiling = 60;
+  else if (clampedMax > 60 && clampedMax <= 80) chartCeiling = 80;
+  else if (clampedMax > 80) chartCeiling = Math.ceil(clampedMax / 20) * 20;
+
+  const step = chartCeiling / 5;
+  const yAxisTicks = Array.from({ length: 6 }, (_, index) => Math.round(step * index));
+  return { yAxisMax: chartCeiling, yAxisTicks };
 }
 
 function computeBacklogYAxis(maxValue: number): { yAxisMax: number; yAxisTicks: number[] } {
@@ -2190,9 +2213,11 @@ function UpcomingWorkloadPanel({
       if (!anchorDate) continue;
 
       const anchorWeekStart = startOfWeekDate(anchorDate);
-      if (anchorWeekStart.getTime() < firstWeekStart.getTime()) continue;
       if (anchorWeekStart.getTime() >= windowEnd.getTime()) continue;
-      const weekIndex = weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
+      const weekIndex =
+        anchorWeekStart.getTime() < firstWeekStart.getTime()
+          ? 0
+          : weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
       const bucket = buckets[clampWeekIndex(weekIndex)];
       if (!bucket) continue;
       bucket.tasks += 1;
@@ -2209,9 +2234,11 @@ function UpcomingWorkloadPanel({
       if (!anchorDate) continue;
 
       const anchorWeekStart = startOfWeekDate(anchorDate);
-      if (anchorWeekStart.getTime() < firstWeekStart.getTime()) continue;
       if (anchorWeekStart.getTime() >= windowEnd.getTime()) continue;
-      const weekIndex = weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
+      const weekIndex =
+        anchorWeekStart.getTime() < firstWeekStart.getTime()
+          ? 0
+          : weeksBetweenWeekStarts(firstWeekStart, anchorWeekStart);
 
       const bucket = buckets[clampWeekIndex(weekIndex)];
       if (!bucket) continue;
@@ -2442,7 +2469,7 @@ function NetBacklogWorkloadPanel({
   const horizontalGridGradientId = `net-backlog-grid-h-${gradientSeed}`;
   const chartViewportRef = useRef<HTMLDivElement | null>(null);
   const [selectedTrialId, setSelectedTrialId] = useState("all");
-  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12>(12);
+  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12 | 24>(24);
   const [chartAnimationNonce, setChartAnimationNonce] = useState(0);
 
   useEffect(() => {
@@ -2653,12 +2680,13 @@ function NetBacklogWorkloadPanel({
 
           <select
             value={String(windowWeeks)}
-            onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12)}
+            onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12 | 24)}
             className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-[#75778B]"
           >
             <option value="4">Last 4 weeks</option>
             <option value="8">Last 8 weeks</option>
             <option value="12">Last 12 weeks</option>
+            <option value="24">Last 24 weeks</option>
           </select>
         </div>
       </div>
@@ -2835,8 +2863,7 @@ function BlockedReasonsByTrialPanel({
     const rowsByTrial = new Map<string, BlockedReasonTrialPoint>();
 
     for (const row of taskRows) {
-      const statusToken = normalizeStatus(row.task.status);
-      if (statusToken !== "blocked" && statusToken !== "waiting") continue;
+      if (!isBlockedLikeTask(row.task)) continue;
 
       const trialId = normalizeTrialId(row.trialId);
       if (!trialId) continue;
@@ -3048,7 +3075,7 @@ function DarkRevenuePerformancePanel({
 }) {
   const gradientId = useId().replace(/:/g, "");
   const [selectedTrialId, setSelectedTrialId] = useState("all");
-  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12>(12);
+  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12 | 24>(24);
 
   useEffect(() => {
     if (selectedTrialId === "all") return;
@@ -3355,13 +3382,12 @@ function DarkRevenuePerformancePanel({
         const bucket = buckets[bucketIndex];
         bucket.signals += 1;
         const done = isDoneStatus(row.task.status);
-        const status = normalizeStatus(row.task.status);
         if (done) {
           bucket.completedSignals += 1;
           continue;
         }
         bucket.pendingSignals += 1;
-        if (status === "blocked" || status === "waiting") bucket.blockedSignals += 1;
+        if (isBlockedLikeTask(row.task)) bucket.blockedSignals += 1;
         if (dueDate.getTime() < now.getTime()) bucket.overdueSignals += 1;
       }
 
@@ -3392,10 +3418,7 @@ function DarkRevenuePerformancePanel({
     let previous = previousFromTasks;
     if (!hasTaskSignal) {
       const openLoad = filteredTaskRows.filter((row) => !isDoneStatus(row.task.status)).length;
-      const blockedLoad = filteredTaskRows.filter((row) => {
-        const status = normalizeStatus(row.task.status);
-        return status === "blocked" || status === "waiting";
-      }).length;
+      const blockedLoad = filteredTaskRows.filter((row) => isBlockedLikeTask(row.task)).length;
       const baseLoad = Math.max(1, Math.min(6, Math.round(openLoad / 14) || 1));
       const blockerShare = Math.min(0.4, blockedLoad / Math.max(1, openLoad));
       const profile = [2, 3, 4, 4, 5, 4, 3];
@@ -3581,12 +3604,13 @@ function DarkRevenuePerformancePanel({
               </select>
               <select
                 value={String(windowWeeks)}
-                onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12)}
+                onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12 | 24)}
                 className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-[#75778B]"
               >
                 <option value="4">Last 4 weeks</option>
                 <option value="8">Last 8 weeks</option>
                 <option value="12">Last 12 weeks</option>
+                <option value="24">Last 24 weeks</option>
               </select>
             </div>
           </div>
@@ -3961,8 +3985,7 @@ function BlockedReasonsSplitWorkloadPanel({
     const rowsByTrial = new Map<string, BlockedReasonTrialPoint>();
 
     for (const row of taskRows) {
-      const statusToken = normalizeStatus(row.task.status);
-      if (statusToken !== "blocked" && statusToken !== "waiting") continue;
+      if (!isBlockedLikeTask(row.task)) continue;
 
       const trialId = normalizeTrialId(row.trialId);
       if (!trialId) continue;
@@ -4027,8 +4050,7 @@ function BlockedReasonsSplitWorkloadPanel({
     let total = 0;
 
     for (const row of taskRows) {
-      const statusToken = normalizeStatus(row.task.status);
-      if (statusToken !== "blocked" && statusToken !== "waiting") continue;
+      if (!isBlockedLikeTask(row.task)) continue;
 
       const trialId = normalizeTrialId(row.trialId);
       if (!trialId) continue;
@@ -4322,7 +4344,7 @@ function TaskStatusDonutPanel({ tasks }: { tasks: WorkspaceTask[] }) {
       let key = "other";
       if (status === "todo" || status === "suggested" || status === "confirmed") key = "todo";
       else if (status === "in_progress") key = "in_progress";
-      else if (status === "blocked" || status === "waiting") key = "blocked";
+      else if (isBlockedLikeTask(task)) key = "blocked";
       else if (status === "done") key = "done";
       else if (status === "skipped" || status === "cancelled") key = "closed";
 
@@ -4452,7 +4474,7 @@ function MonthlyChannelAreaPanel({
   taskRows: TaskTimelineRow[];
 }) {
   const [selectedTrialId, setSelectedTrialId] = useState("all");
-  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12>(12);
+  const [windowWeeks, setWindowWeeks] = useState<4 | 8 | 12 | 24>(24);
 
   useEffect(() => {
     if (selectedTrialId === "all") return;
@@ -4612,12 +4634,13 @@ function MonthlyChannelAreaPanel({
 
           <select
             value={String(windowWeeks)}
-            onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12)}
+            onChange={(event) => setWindowWeeks(Number(event.target.value) as 4 | 8 | 12 | 24)}
             className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[12px] font-medium text-[#75778B]"
           >
             <option value="4">Last 4 weeks</option>
             <option value="8">Last 8 weeks</option>
             <option value="12">Last 12 weeks</option>
+            <option value="24">Last 24 weeks</option>
           </select>
         </div>
       </div>
@@ -4809,10 +4832,7 @@ export default function Analytics2({ embedded = false }: { embedded?: boolean } 
 
     const total = tasks.length;
     const done = tasks.filter((task) => isDoneStatus(task.status)).length;
-    const blocked = tasks.filter((task) => {
-      const token = normalizeStatus(task.status);
-      return token === "blocked" || token === "waiting";
-    }).length;
+    const blocked = tasks.filter((task) => isBlockedLikeTask(task)).length;
     const inFlight = tasks.filter((task) => {
       const token = normalizeStatus(task.status);
       return token === "in_progress";
@@ -4825,8 +4845,7 @@ export default function Analytics2({ embedded = false }: { embedded?: boolean } 
       return due.getTime() >= now.getTime() && due.getTime() <= nextSevenDays.getTime();
     }).length;
     const blockedOver48h = tasks.filter((task) => {
-      const token = normalizeStatus(task.status);
-      if (token !== "blocked" && token !== "waiting") return false;
+      if (!isBlockedLikeTask(task)) return false;
       const blockedSince = parseDateValue(task.blockedSince) ?? parseDateValue(task.updatedAt);
       if (!blockedSince) return false;
       return now.getTime() - blockedSince.getTime() >= 48 * 60 * 60 * 1000;
@@ -4877,8 +4896,7 @@ export default function Analytics2({ embedded = false }: { embedded?: boolean } 
 
     // Lower-bound prior blocked load: tasks still blocked that were already blocked before last week.
     const blockedCarryover = workspaceTasks.filter((task) => {
-      const token = normalizeStatus(task.status);
-      if (token !== "blocked" && token !== "waiting") return false;
+      if (!isBlockedLikeTask(task)) return false;
       const blockedSince = parseDateValue(task.blockedSince) ?? parseDateValue(task.updatedAt);
       if (!blockedSince) return true;
       return blockedSince.getTime() <= weekAgo.getTime();
