@@ -23,6 +23,7 @@ import {
   PanelLeft,
   ArrowLeft,
   Upload,
+  Download,
   Plus,
   Calendar,
   MessageSquare,
@@ -60,6 +61,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 import { logEvent } from "@/lib/telemetry";
+import { HANDOFF_FILENAME, downloadBrowserStateHandoffSnapshot } from "@/lib/browserStateHandoff";
 import { useSidebarNav } from "@/contexts/SidebarNavContext";
 import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import { useOrganizationWorkspaces } from "@/hooks/useOrganizationWorkspaces";
@@ -238,6 +240,22 @@ export function Sidebar() {
     }
 
     toast.success(`Deleted "${title}"`);
+  };
+
+  const handleExportEngineerHandoff = () => {
+    const result = downloadBrowserStateHandoffSnapshot();
+    if (!result.ok) {
+      toast.error("Could not export browser handoff data.");
+      return;
+    }
+
+    toast.success(`Downloaded ${HANDOFF_FILENAME}. Copy it to client/public/${HANDOFF_FILENAME} before zipping.`);
+    logEvent({
+      eventType: "feature_used",
+      action: "export_browser_handoff",
+      entityType: "handoff",
+      payload: { filename: HANDOFF_FILENAME, mode: currentDataMode },
+    });
   };
 
 
@@ -1161,6 +1179,12 @@ export function Sidebar() {
                 <div className="flex items-center gap-2">
                   <Plus className="h-4 w-4" />
                   <span>Create copy of current</span>
+                </div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportEngineerHandoff}>
+                <div className="flex items-center gap-2">
+                  <Download className="h-4 w-4" />
+                  <span>Export engineer handoff</span>
                 </div>
               </DropdownMenuItem>
             </DropdownMenuContent>
