@@ -60,8 +60,8 @@ export const ENV = {
     openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
     forceOpenAIDirect: /^(1|true|yes)$/i.test(process.env.FORCE_OPENAI_DIRECT ?? ""),
     ragProvider,
-    //   externalRagApiUrl: process.env.EXTERNAL_RAG_API_URL ?? "",
-    externalRagApiUrl: process.env.EXTERNAL_RAG_API_CLOUD_URL ?? "",
+    externalRagApiUrl: process.env.EXTERNAL_RAG_API_URL ?? "",
+    // externalRagApiUrl: process.env.EXTERNAL_RAG_API_CLOUD_URL ?? "",
     externalRagApiKey: process.env.EXTERNAL_RAG_API_KEY ?? "",
     externalRagTimeoutMs,
 };
