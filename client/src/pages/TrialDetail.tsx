@@ -345,8 +345,8 @@ function PatientDetailView({ patient, onBack }: { patient: DemoPatient; onBack: 
                     {tabs.map(tab => (
                         <button key={tab} onClick={() => setActiveTabLocal(tab)}
                             className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors ${activeTab === tab
-                                    ? "bg-blue-600 border-blue-600 text-white"
-                                    : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                                ? "bg-blue-600 border-blue-600 text-white"
+                                : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
                                 }`}>
                             {tab}
                         </button>
@@ -468,7 +468,99 @@ function PatientDetailView({ patient, onBack }: { patient: DemoPatient; onBack: 
                 </div>
             )}
 
-            {activeTab !== "Overview" && (
+            {/* {activeTab !== "Overview" && (
+                <div className="p-10 text-center text-sm text-gray-400">{activeTab} content coming soon.</div>
+            )} */}
+            {activeTab === "Visits" && (
+                <div className="p-5">
+                    {/* Visit Progress Header */}
+                    <div className="flex items-center justify-between mb-6">
+                        <div>
+                            <p className="text-sm font-semibold text-gray-900">Visit Progress</p>
+                            <p className="text-sm text-gray-500 mt-0.5">
+                                {patient.studyProgress.completed} out of {patient.studyProgress.visitsDone + patient.studyProgress.remaining} treatment visits completed
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-6 text-sm text-gray-500">
+                            <span>Current visit: Visit {patient.studyProgress.visitsDone} (week {patient.studyProgress.currentWeek})</span>
+                            <span>Next: Visit {patient.studyProgress.visitsDone + 1} (week {patient.studyProgress.currentWeek + 4})</span>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3 mb-6">
+                        <div className="flex-1 h-2.5 bg-gray-100 rounded-full">
+                            <div className="h-full bg-green-500 rounded-full"
+                                style={{ width: `${Math.round((patient.studyProgress.completed / (patient.studyProgress.completed + patient.studyProgress.remaining)) * 100)}%` }} />
+                        </div>
+                        <span className="text-sm font-semibold text-green-600">
+                            {Math.round((patient.studyProgress.completed / (patient.studyProgress.completed + patient.studyProgress.remaining)) * 100)}%
+                        </span>
+                    </div>
+
+                    {/* Visit List */}
+                    <div className="divide-y divide-gray-100">
+                        {[
+                            { num: 1, type: "Screening", week: -4, date: "06.08.2025", status: "completed", activities: "Informed Consent, Medical History, Demographics, Height, Vitals ECG, Chemistry, Hematology, Lipase" },
+                            { num: 2, type: "Lead-In", week: -2, date: "20.08.2025", status: "completed", activities: "HbA1c, AE Review, Hypoglycemia Review, Concomitant Medications, Review Screening Lab results" },
+                            { num: 3, type: "Randomisation", week: 0, date: "07.10.2025", status: "completed", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
+                            { num: 4, type: "Treatment", week: 4, date: "04.11.2025", status: "completed", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
+                            { num: 5, type: "Treatment", week: 8, date: "25.11.2025", status: "completed", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, Hematology, Lipase, Pregnancy (Urine)" },
+                            { num: 6, type: "Treatment", week: 12, date: "18.12.2025", status: "current", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
+                            { num: 7, type: "Treatment", week: 16, date: "16.01.2026", status: "scheduled", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
+                            { num: 8, type: "Treatment", week: 20, date: "20.01.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
+                            { num: 9, type: "Treatment", week: 24, date: "17.02.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
+                            { num: 10, type: "Treatment", week: 28, date: "17.03.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
+                            { num: 11, type: "Treatment", week: 32, date: "14.04.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase" },
+                            { num: 12, type: "Treatment", week: 36, date: "12.05.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
+                            { num: 13, type: "End of Study", week: 40, date: "09.06.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Final Assessment" },
+                        ].map(visit => (
+                            <div key={visit.num}
+                                className={`flex items-center gap-4 py-4 px-3 rounded-lg ${visit.status === "current" ? "border border-green-400 bg-green-50/30" : ""}`}>
+                                {/* Visit name */}
+                                <div className="w-32 shrink-0">
+                                    <p className="text-sm font-semibold text-gray-900">Visit {visit.num}</p>
+                                    <p className="text-xs text-gray-500">{visit.type}</p>
+                                </div>
+                                {/* Week + date */}
+                                <div className="w-28 shrink-0 flex items-center gap-2 text-sm text-gray-500">
+                                    <span className="w-6 text-right text-xs">{visit.week}</span>
+                                    <span>{visit.date}</span>
+                                </div>
+                                {/* Status badge */}
+                                <div className="w-28 shrink-0">
+                                    {visit.status === "completed" && (
+                                        <span className="inline-flex items-center gap-1.5 bg-green-500 text-white text-xs font-semibold px-3 py-1 rounded-md">
+                                            ✓ Completed
+                                        </span>
+                                    )}
+                                    {visit.status === "current" && (
+                                        <span className="inline-flex items-center gap-1.5 bg-green-500 text-white text-xs font-semibold px-3 py-1 rounded-md">
+                                            ✓ Completed
+                                        </span>
+                                    )}
+                                    {visit.status === "scheduled" && (
+                                        <span className="inline-flex items-center gap-1.5 border border-yellow-300 bg-yellow-50 text-yellow-700 text-xs font-semibold px-3 py-1 rounded-md">
+                                            ◷ Scheduled
+                                        </span>
+                                    )}
+                                    {visit.status === "upcoming" && (
+                                        <span className="inline-flex items-center gap-1.5 border border-gray-200 bg-gray-50 text-gray-500 text-xs font-medium px-3 py-1 rounded-md">
+                                            Upcoming
+                                        </span>
+                                    )}
+                                </div>
+                                {/* Activities */}
+                                <p className="flex-1 text-sm text-gray-600">{visit.activities}</p>
+                                {/* View details */}
+                                <button className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700">
+                                    View Details
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {activeTab !== "Overview" && activeTab !== "Visits" && (
                 <div className="p-10 text-center text-sm text-gray-400">{activeTab} content coming soon.</div>
             )}
         </div>
