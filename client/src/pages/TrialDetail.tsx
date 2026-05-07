@@ -514,7 +514,9 @@ function PatientDetailView({ patient, onBack }: { patient: DemoPatient; onBack: 
                             { num: 13, type: "End of Study", week: 40, date: "09.06.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Final Assessment" },
                         ].map(visit => (
                             <div key={visit.num}
-                                className={`flex items-center gap-4 py-4 px-3 rounded-lg ${visit.status === "current" ? "border border-green-400 bg-green-50/30" : ""}`}>
+                                className={`flex items-center gap-4 py-4 px-3 rounded-lg ${visit.status === "completed" ? "bg-green-50" :
+                                        visit.status === "current" ? "border border-green-400 bg-green-50" : ""
+                                    }`}>
                                 {/* Visit name */}
                                 <div className="w-32 shrink-0">
                                     <p className="text-sm font-semibold text-gray-900">Visit {visit.num}</p>
