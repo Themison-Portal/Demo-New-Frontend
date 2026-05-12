@@ -14,6 +14,7 @@ import {
 } from "./_core/protocolContext";
 import { runUnifiedQuery } from "./_core/unifiedQuery";
 import { ENV } from "./_core/env";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
@@ -511,6 +512,80 @@ ${conversationHistory}`;
       const selectedProtocols = documentIds.length
         ? await db.select().from(protocols).where(inArray(protocols.id, documentIds))
         : [];
+
+      // Phase 4: when the selected docs are mapped to core-backend's
+      // `trial_documents`, route the query through core-backend's
+      // /query endpoint instead of the local pipeline. Each call uses
+      // the X-API-Key auth mode and returns a cited answer. We fire
+      // queries in parallel and pick the first that yields an answer
+      // (multi-doc fan-in across answers is a future improvement).
+      const coreBackendDocs = selectedProtocols.filter(
+        (p): p is typeof p & { coreBackendDocumentId: string } =>
+          !!p.coreBackendDocumentId
+      );
+      if (coreBackendDocs.length > 0 && ENV.coreBackendApiUrl) {
+        try {
+          const client = getCoreBackendClient();
+          const results = await Promise.allSettled(
+            coreBackendDocs.map((doc) =>
+              client.query({
+                query: latestUserMessage.content,
+                document_id: doc.coreBackendDocumentId,
+                document_name: doc.filename,
+              }).then((res) => ({ doc, res }))
+            )
+          );
+          const successes = results.flatMap((r) =>
+            r.status === "fulfilled" ? [r.value] : []
+          );
+          if (successes.length > 0) {
+            const primary = successes[0];
+            const sources: DocumentAISource[] = successes.flatMap(({ doc, res }) =>
+              (res.sources ?? []).map((src) => ({
+                fileId: doc.coreBackendDocumentId,
+                filename: doc.filename,
+                fileUrl: doc.fileUrl,
+                protocolId: doc.id,
+                category: doc.category ?? null,
+                excerpt: src.exact_text,
+                section: src.section,
+                page: typeof src.page === "number" ? src.page : null,
+              }))
+            );
+
+            await logTelemetryEvent({
+              eventType: "ai_response_generated",
+              action: "generated",
+              sessionId: input.sessionId,
+              entityType: "response",
+              payload: {
+                route: "core_backend_query",
+                docCount: coreBackendDocs.length,
+                successCount: successes.length,
+                citationCount: sources.length,
+                questionType,
+              },
+              aiInvolved: true,
+              aiOutput: primary.res.answer,
+              aiSources: sources,
+            });
+
+            return {
+              message: primary.res.answer,
+              thinking: `Queried core-backend RAG across ${successes.length} of ${coreBackendDocs.length} selected document(s).`,
+              sources,
+            };
+          }
+          console.warn(
+            "[Document AI] core-backend /query returned no successful results; falling back to local pipeline."
+          );
+        } catch (error) {
+          console.warn(
+            "[Document AI] core-backend /query path failed; falling back to local pipeline.",
+            error
+          );
+        }
+      }
 
       if (selectedProtocols.length === 0) {
         return {

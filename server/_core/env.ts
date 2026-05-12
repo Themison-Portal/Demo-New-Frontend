@@ -64,4 +64,18 @@ export const ENV = {
     // externalRagApiUrl: process.env.EXTERNAL_RAG_API_CLOUD_URL ?? "",
     externalRagApiKey: process.env.EXTERNAL_RAG_API_KEY ?? "",
     externalRagTimeoutMs,
+    // --- Auth0 (Phase 1 of core-backend integration) ---
+    // Server-side reads — VITE_* vars are also exposed to the Vite client
+    // bundle via import.meta.env. The same Auth0 tenant is shared with the
+    // production frontend and core-backend, so JWTs minted here validate
+    // against core-backend's existing AUTH0_DOMAIN/AUTH0_AUDIENCE config.
+    auth0Domain: process.env.VITE_AUTH0_DOMAIN ?? "",
+    auth0ClientId: process.env.VITE_AUTH0_CLIENT_ID ?? "",
+    auth0Audience: process.env.VITE_AUTH0_AUDIENCE ?? "",
+    auth0RedirectUri:
+        process.env.VITE_AUTH0_REDIRECT_URI ?? "http://localhost:3000/auth/callback",
+    // --- Core backend (Phase 2 of integration) ---
+    coreBackendApiUrl: process.env.CORE_BACKEND_API_URL ?? "http://localhost:8080",
+    coreBackendApiKey:
+        process.env.CORE_BACKEND_API_KEY ?? process.env.EXTERNAL_RAG_API_KEY ?? "",
 };

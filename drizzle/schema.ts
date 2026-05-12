@@ -70,6 +70,12 @@ export const trials = mysqlTable("trials", {
   targetPatients: int("targetPatients"),
   completionPercentage: int("completionPercentage").default(0),
   createdBy: int("createdBy").notNull(), // User ID
+  // UUID of the matching row in core-backend's `trials` table. Required
+  // for core-backend's JWT-protected upload endpoint, which needs a
+  // valid `trial_id` from its own DB. Nullable while the mapping is
+  // being populated; uploads fall back to the local pipeline when this
+  // is unset.
+  coreBackendTrialId: varchar("coreBackendTrialId", { length: 36 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -96,6 +102,16 @@ export const protocols = mysqlTable("protocols", {
   sourceType: varchar("sourceType", { length: 32 }).default("manual").notNull(), // manual | integration | system
   sourceReference: varchar("sourceReference", { length: 255 }),
   uploadedBy: int("uploadedBy").notNull(), // User ID
+  // Linkage to core-backend's `trial_documents` row. Populated when an
+  // upload is proxied through core-backend (Phase 3 of the integration).
+  // Null on legacy rows / when the local-only pipeline is still in use.
+  coreBackendDocumentId: varchar("coreBackendDocumentId", { length: 36 }),
+  // Linkage to core-backend's `upload_jobs` row. Drives polling-based
+  // status updates (Phase 5).
+  coreBackendJobId: varchar("coreBackendJobId", { length: 36 }),
+  // Last-known core-backend ingestion state: queued | processing | ready | failed.
+  // Surfaced as the doc's status badge in the FE.
+  coreBackendIngestStatus: varchar("coreBackendIngestStatus", { length: 32 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

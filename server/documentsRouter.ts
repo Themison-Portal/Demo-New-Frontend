@@ -19,6 +19,8 @@ import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
 import { ENV } from "./_core/env";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
+import { CoreBackendError } from "@shared/coreBackendTypes";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
@@ -157,6 +159,35 @@ export const documentsRouter = router({
 
       const docsWithStatus = await Promise.all(
         docs.map(async (doc) => {
+          // Phase 5: when a doc was uploaded through core-backend
+          // (Phase 3 stamped `coreBackendDocumentId` + `coreBackendJobId`
+          // on the row), refresh the ingestion state from
+          // /upload/status/{job_id} and let it drive the badge. Avoids
+          // race conditions between local telemetry events and what
+          // core-backend's RAG pipeline has actually completed.
+          let coreStatus: string | null = doc.coreBackendIngestStatus ?? null;
+          if (doc.coreBackendJobId && ENV.coreBackendApiUrl) {
+            try {
+              const live = await getCoreBackendClient().getUploadStatus(
+                doc.coreBackendJobId
+              );
+              if (live.status && live.status !== coreStatus) {
+                coreStatus = live.status;
+                await db
+                  .update(protocols)
+                  .set({ coreBackendIngestStatus: live.status })
+                  .where(eq(protocols.id, doc.id));
+              }
+            } catch (error) {
+              // Non-fatal: status will retry on next list. Keep the
+              // last-known value rather than failing the whole list.
+              console.warn(
+                `[documents/list] core-backend status check failed for doc ${doc.id}:`,
+                error instanceof Error ? error.message : error
+              );
+            }
+          }
+
           const fileSearchDoc = await db
             .select()
             .from(fileSearchDocuments)
@@ -166,12 +197,25 @@ export const documentsRouter = router({
           const latestVectorEvent = latestVectorIndexEventByProtocol.get(String(doc.id));
           const hasContextIndex = (chunkCountByProtocol[doc.id] ?? 0) > 0;
           const hasFileSearchIndex = fileSearchDoc.length > 0;
-          const hasEffectiveIndex = USES_EXTERNAL_RAG ? hasContextIndex : hasFileSearchIndex;
+          // When core-backend owns this doc, its status drives the
+          // badge — local-pipeline indexing isn't relevant.
+          const usesCoreBackend = !!doc.coreBackendDocumentId;
+          const hasEffectiveIndex = usesCoreBackend
+            ? coreStatus === "complete" || coreStatus === "ready"
+            : USES_EXTERNAL_RAG
+              ? hasContextIndex
+              : hasFileSearchIndex;
           let indexStatus: "indexed" | "processing" | "failed" = hasEffectiveIndex
             ? "indexed"
             : "processing";
           let indexFailureReason: string | null = null;
-          if (
+          if (usesCoreBackend) {
+            if (coreStatus === "error" || coreStatus === "failed") {
+              indexStatus = "failed";
+              indexFailureReason =
+                "core-backend ingestion failed. Retry processing.";
+            }
+          } else if (
             !USES_EXTERNAL_RAG &&
             !hasFileSearchIndex &&
             latestVectorEvent?.eventType === "document_vector_index_failed"
@@ -263,6 +307,7 @@ export const documentsRouter = router({
           currentVersion: trials.currentVersion,
           amendmentVersion: trials.amendmentVersion,
           releaseDate: trials.releaseDate,
+          coreBackendTrialId: trials.coreBackendTrialId,
         })
         .from(trials)
         .where(eq(trials.id, resolvedTrialId))
@@ -381,8 +426,106 @@ export const documentsRouter = router({
         });
       }
 
+      // Phase 3 of the core-backend integration. When the user is
+      // signed in via Auth0 AND the local trial is mapped to a
+      // core-backend trial, route ingestion through core-backend's
+      // two-step flow (multipart create → upload-pdf trigger). Falls
+      // back to the legacy in-FE pipeline below when preconditions
+      // aren't met, so existing trials keep working unchanged.
+      const coreBackendTrialId = trialMeta?.coreBackendTrialId ?? null;
+      const useCoreBackend =
+        !!protocolId &&
+        !!ctx.authToken &&
+        !!coreBackendTrialId &&
+        !!ENV.coreBackendApiUrl;
+
+      if (useCoreBackend && protocolId) {
+        const documentName = input.filename;
+        const authToken = ctx.authToken!;
+        const docCategory = input.category.toLowerCase().includes("protocol")
+          ? "protocol"
+          : input.category.toLowerCase();
+
+        (async () => {
+          const client = getCoreBackendClient();
+          try {
+            const created = await client.uploadTrialDocumentMultipart(
+              {
+                file: buffer,
+                filename: input.filename,
+                trial_id: coreBackendTrialId!,
+                document_name: documentName,
+                document_type: docCategory,
+              },
+              authToken
+            );
+
+            const job = await client.uploadPdf({
+              document_url: created.document_url,
+              document_id: created.id,
+              chunk_size: 750,
+            });
+
+            await db
+              .update(protocols)
+              .set({
+                coreBackendDocumentId: created.id,
+                coreBackendJobId: job.job_id,
+                coreBackendIngestStatus: job.status ?? "queued",
+              })
+              .where(eq(protocols.id, protocolId));
+
+            await logTelemetryEvent({
+              eventType: "document_context_index_started",
+              action: "started",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                coreBackendDocumentId: created.id,
+                coreBackendJobId: job.job_id,
+                source: "core-backend",
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+          } catch (error) {
+            const reason =
+              error instanceof CoreBackendError
+                ? `${error.path} ${error.status}: ${error.message}`
+                : error instanceof Error
+                  ? error.message
+                  : String(error);
+            console.error(
+              `❌ core-backend upload failed for ${input.filename}: ${reason}`
+            );
+            await db
+              .update(protocols)
+              .set({ coreBackendIngestStatus: "failed" })
+              .where(eq(protocols.id, protocolId));
+            await logTelemetryEvent({
+              eventType: "document_context_index_failed",
+              action: "failed",
+              userId: String(ctx.user.id),
+              entityType: "protocol",
+              entityId: String(protocolId),
+              payload: {
+                trialId: resolvedTrialId,
+                filename: input.filename,
+                reason,
+                source: "core-backend",
+                demoMode: mode,
+              },
+              aiInvolved: true,
+            });
+          }
+        })();
+      }
+
       // Automatically upload to Google File Search Store (async, don't block response)
-      if (protocolId) {
+      if (protocolId && !useCoreBackend) {
         // Run in background
         (async () => {
           try {

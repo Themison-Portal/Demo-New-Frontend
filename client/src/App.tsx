@@ -2,8 +2,10 @@ import { useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
+import AuthCallback from "@/pages/AuthCallback";
 import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { AuthBanner } from "./auth/AuthBanner";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { SidebarProvider } from "./contexts/SidebarContext";
 import { DemoStateProvider } from "./contexts/DemoStateContext";
@@ -158,7 +160,14 @@ function Router() {
   if (isEmbeddedTaskModal) {
     return <Tasks />;
   }
-  
+
+  // Auth0 redirect callback — render outside the dashboard chrome so the
+  // spinner is full-screen and the URL `?code=&state=` is processed cleanly
+  // by Auth0Provider's useEffect before we navigate elsewhere.
+  if (locationPath === "/auth/callback") {
+    return <AuthCallback />;
+  }
+
   // Handle dynamic breadcrumbs for trial detail pages
   let breadcrumbs = breadcrumbsMap[locationPath] || [];
   let breadcrumbIcon = iconMap[locationPath];
@@ -240,6 +249,13 @@ function App() {
             <DemoStateProvider>
               <TooltipProvider>
                 <Toaster />
+                {/*
+                 * Minimum viable Auth0 login surface — fixed-position
+                 * banner showing Sign in / Sign out + user email. Move
+                 * into the Sidebar/Topbar in a follow-up when those
+                 * components get touched.
+                 */}
+                <AuthBanner />
                 <Router />
               </TooltipProvider>
             </DemoStateProvider>
