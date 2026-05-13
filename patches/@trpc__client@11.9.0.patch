@@ -1,0 +1,20 @@
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -137,6 +137,7 @@
+ 		const pathCopy = [...path];
+ 		const procedureType = clientCallTypeToProcedureType(pathCopy.pop());
+ 		const fullPath = pathCopy.join(".");
++		if (typeof client[procedureType] !== "function") return undefined;
+ 		return client[procedureType](fullPath, ...args);
+ 	});
+ 	return (0, __trpc_server_unstable_core_do_not_import.createFlatProxy)((key) => {
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -136,6 +136,7 @@
+ 		const pathCopy = [...path];
+ 		const procedureType = clientCallTypeToProcedureType(pathCopy.pop());
+ 		const fullPath = pathCopy.join(".");
++		if (typeof client[procedureType] !== "function") return undefined;
+ 		return client[procedureType](fullPath, ...args);
+ 	});
+ 	return createFlatProxy((key) => {

@@ -8,6 +8,9 @@ overrides:
   tailwindcss>nanoid: 3.3.7
 
 patchedDependencies:
+  '@trpc/client@11.9.0':
+    hash: bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd
+    path: patches/@trpc__client@11.9.0.patch
   wouter@3.7.1:
     hash: 4e16e6ff3fde7d6c1024d3e0c8605dc9eb6afb690d0d49958c2f449091813072
     path: patches/wouter@3.7.1.patch
@@ -126,10 +129,10 @@ importers:
         version: 5.90.20(react@19.2.1)
       '@trpc/client':
         specifier: ^11.6.0
-        version: 11.9.0(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)
+        version: 11.9.0(patch_hash=bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd)(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)
       '@trpc/react-query':
         specifier: ^11.6.0
-        version: 11.9.0(@tanstack/react-query@5.90.20(react@19.2.1))(@trpc/client@11.9.0(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.9.0(typescript@5.9.3))(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3)
+        version: 11.9.0(@tanstack/react-query@5.90.20(react@19.2.1))(@trpc/client@11.9.0(patch_hash=bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd)(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.9.0(typescript@5.9.3))(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3)
       '@trpc/server':
         specifier: ^11.6.0
         version: 11.9.0(typescript@5.9.3)
@@ -7064,15 +7067,15 @@ snapshots:
       '@tanstack/query-core': 5.90.20
       react: 19.2.1
 
-  '@trpc/client@11.9.0(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)':
+  '@trpc/client@11.9.0(patch_hash=bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd)(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)':
     dependencies:
       '@trpc/server': 11.9.0(typescript@5.9.3)
       typescript: 5.9.3
 
-  '@trpc/react-query@11.9.0(@tanstack/react-query@5.90.20(react@19.2.1))(@trpc/client@11.9.0(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.9.0(typescript@5.9.3))(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3)':
+  '@trpc/react-query@11.9.0(@tanstack/react-query@5.90.20(react@19.2.1))(@trpc/client@11.9.0(patch_hash=bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd)(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3))(@trpc/server@11.9.0(typescript@5.9.3))(react-dom@19.2.1(react@19.2.1))(react@19.2.1)(typescript@5.9.3)':
     dependencies:
       '@tanstack/react-query': 5.90.20(react@19.2.1)
-      '@trpc/client': 11.9.0(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)
+      '@trpc/client': 11.9.0(patch_hash=bf31ba343a3f22daf9305087cad2b821caaf0840b9175b35a4b6e78ee7a218bd)(@trpc/server@11.9.0(typescript@5.9.3))(typescript@5.9.3)
       '@trpc/server': 11.9.0(typescript@5.9.3)
       react: 19.2.1
       react-dom: 19.2.1(react@19.2.1)
