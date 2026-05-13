@@ -6,6 +6,11 @@ import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import {
+  getLocalStorageRoot,
+  getLocalStorageRoute,
+  isUsingLocalStorage,
+} from "../storage";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -34,6 +39,16 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   // OAuth callback under /api/oauth/callback
   registerOAuthRoutes(app);
+  // Local-filesystem storage fallback (active when BUILT_IN_FORGE_*
+  // env vars aren't set). Serves files written by `storagePut` from
+  // `LOCAL_STORAGE_ROOT` so `extractPdfText(url)` and similar consumers
+  // can fetch them via HTTP. No-op when the Manus Forge proxy is in use.
+  if (isUsingLocalStorage()) {
+    app.use(getLocalStorageRoute(), express.static(getLocalStorageRoot()));
+    console.log(
+      `[Storage] Local-filesystem fallback active — serving ${getLocalStorageRoot()} at ${getLocalStorageRoute()}`
+    );
+  }
   // tRPC API
   app.use(
     "/api/trpc",

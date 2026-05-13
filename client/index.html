@@ -15,10 +15,11 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script
-      defer
-      src="%VITE_ANALYTICS_ENDPOINT%/umami"
-      data-website-id="%VITE_ANALYTICS_WEBSITE_ID%"></script>
+    <!-- Umami analytics script removed for local dev. -->
+    <!-- It used VITE_ANALYTICS_ENDPOINT / VITE_ANALYTICS_WEBSITE_ID (wrapped -->
+    <!-- in percent-signs in the original HTML template), which only get -->
+    <!-- substituted on the Manus platform. If you redeploy there, restore -->
+    <!-- the script tag and unset DISABLE_MANUS_RUNTIME. -->
   </body>
 
 </html>

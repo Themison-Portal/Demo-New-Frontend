@@ -2,11 +2,14 @@ import { trpc } from "@/lib/trpc";
 import { UNAUTHED_ERR_MSG } from '@shared/const';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, TRPCClientError } from "@trpc/client";
-import { useMemo, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
-import { Auth0Provider, triggerAuth0Login, useAuth0 } from "./auth/auth0Provider";
+import {
+  Auth0Provider,
+  getAuth0Client,
+  triggerAuth0Login,
+} from "./auth/auth0Provider";
 import { applyBundledBrowserStateHandoffSnapshot } from "./lib/browserStateHandoff";
 import "./index.css";
 
@@ -54,67 +57,57 @@ queryClient.getMutationCache().subscribe(event => {
 });
 
 /**
- * Trpc client must be constructed inside the React tree so it can call
- * useAuth0() and inject a fresh Auth0 Bearer token on every outbound
- * request. The token is read at fetch-time (not at client-creation
- * time) so silent token refresh from @auth0/auth0-spa-js stays
- * effective without recreating the client.
+ * Trpc client is constructed **once** at module scope. The Auth0 token
+ * is fetched per-request via the module-level singleton (`getAuth0Client`)
+ * — this avoids recreating the client on every Auth0 state change, which
+ * would invalidate every active useQuery and cause a refetch loop.
  *
  * `credentials: "include"` is preserved so the existing OAuth-portal
  * cookie flow keeps working for non-RAG procedures during the
  * transition. Requests carry both Cookie + Authorization headers; the
  * server picks whichever the procedure needs.
  */
-function TrpcWithAuthProvider({ children }: { children: ReactNode }) {
-  const { getAccessToken, isAuthenticated } = useAuth0();
-  const trpcClient = useMemo(
-    () =>
-      trpc.createClient({
-        links: [
-          httpBatchLink({
-            url: "/api/trpc",
-            transformer: superjson,
-            async fetch(input, init) {
-              const headers = new Headers(init?.headers ?? {});
-              if (isAuthenticated) {
-                try {
-                  const token = await getAccessToken();
-                  if (token) headers.set("Authorization", `Bearer ${token}`);
-                } catch {
-                  // Silent failure — the request still goes out and
-                  // the server returns 401 if the procedure requires
-                  // auth. Better than failing the fetch outright.
-                }
-              }
-              return globalThis.fetch(input, {
-                ...(init ?? {}),
-                headers,
-                credentials: "include",
-              });
-            },
-          }),
-        ],
-      }),
-    [getAccessToken, isAuthenticated],
-  );
-
-  return (
-    <trpc.Provider client={trpcClient} queryClient={queryClient}>
-      {children}
-    </trpc.Provider>
-  );
-}
+const trpcClient = trpc.createClient({
+  links: [
+    httpBatchLink({
+      url: "/api/trpc",
+      transformer: superjson,
+      async fetch(input, init) {
+        const headers = new Headers(init?.headers ?? {});
+        const auth0 = getAuth0Client();
+        if (auth0) {
+          try {
+            const authed = await auth0.isAuthenticated();
+            if (authed) {
+              const token = await auth0.getTokenSilently();
+              if (token) headers.set("Authorization", `Bearer ${token}`);
+            }
+          } catch (err) {
+            // Silent token-fetch failure — the request still goes out
+            // without auth and the server returns 401 if needed.
+            console.warn("[Auth0] getTokenSilently failed; sending request unauthenticated", err);
+          }
+        }
+        return globalThis.fetch(input, {
+          ...(init ?? {}),
+          headers,
+          credentials: "include",
+        });
+      },
+    }),
+  ],
+});
 
 async function bootstrapApp() {
   await applyBundledBrowserStateHandoffSnapshot();
 
   createRoot(document.getElementById("root")!).render(
     <Auth0Provider>
-      <TrpcWithAuthProvider>
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
         <QueryClientProvider client={queryClient}>
           <App />
         </QueryClientProvider>
-      </TrpcWithAuthProvider>
+      </trpc.Provider>
     </Auth0Provider>,
   );
 }

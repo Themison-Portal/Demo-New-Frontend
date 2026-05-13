@@ -1,0 +1,28 @@
+# Dev container for the new FE — runs `pnpm dev` (Vite + Express) inside
+# Docker with the source bind-mounted so HMR and live edits still work.
+#
+# This image is NOT meant for production. It runs Vite in dev mode and
+# pulls in dev dependencies. For prod, build a separate image using
+# `pnpm build` then `node dist/index.js`.
+
+FROM node:22-alpine
+
+# corepack ships with Node 22 but is disabled by default. Activate it
+# and pin pnpm to the same version the repo committed (so the lockfile
+# is honoured).
+RUN corepack enable && corepack prepare pnpm@10.4.1 --activate
+
+WORKDIR /app
+
+# Install deps first (cached layer). The package.json + lockfile are
+# copied in via the bind mount at runtime, but we pre-populate
+# node_modules here so cold-start `pnpm dev` doesn't have to do a full
+# install on every `docker compose up`.
+COPY package.json pnpm-lock.yaml ./
+COPY patches ./patches
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 3000
+
+# Container default command — overridden by compose if needed.
+CMD ["pnpm", "dev"]

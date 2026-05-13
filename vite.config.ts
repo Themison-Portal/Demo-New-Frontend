@@ -150,7 +150,17 @@ function vitePluginManusDebugCollector(): Plugin {
   };
 }
 
-const plugins = [react(), tailwindcss(), jsxLocPlugin(), vitePluginManusRuntime(), vitePluginManusDebugCollector()];
+// Manus-platform plugins (runtime + debug collector) intercept all user
+// events via capture-phase listeners for session replay. When the Manus
+// telemetry endpoint is unreachable (e.g., running locally in docker)
+// the handlers eat clicks/keystrokes, leaving the UI feeling frozen.
+// Set DISABLE_MANUS_RUNTIME=true in the env to skip them. Leave unset
+// when running on the Manus platform.
+const disableManus = /^(1|true|yes)$/i.test(process.env.DISABLE_MANUS_RUNTIME ?? "");
+const plugins: Plugin[] = [react(), tailwindcss(), jsxLocPlugin()];
+if (!disableManus) {
+  plugins.push(vitePluginManusRuntime(), vitePluginManusDebugCollector());
+}
 
 export default defineConfig({
   plugins,

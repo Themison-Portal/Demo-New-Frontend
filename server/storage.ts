@@ -1,20 +1,61 @@
-// Preconfigured storage helpers for Manus WebDev templates
-// Uses the Biz-provided storage proxy (Authorization: Bearer <token>)
+// Preconfigured storage helpers for Manus WebDev templates.
+//
+// When `BUILT_IN_FORGE_API_URL` + `BUILT_IN_FORGE_API_KEY` are set, uses
+// the Biz-provided storage proxy (Authorization: Bearer <token>).
+// Otherwise falls back to a local filesystem store under
+// `LOCAL_STORAGE_ROOT` (default `/tmp/themison-storage`), served by
+// Express on `/local-storage/*`. The fallback lets the FE run outside
+// the Manus platform (e.g., local docker compose) without needing
+// access to the Forge storage proxy.
 
-import { ENV } from './_core/env';
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { ENV } from "./_core/env";
 
 type StorageConfig = { baseUrl: string; apiKey: string };
+
+/**
+ * Root for the local-filesystem fallback. `/tmp/...` keeps the data
+ * outside the bind-mounted source tree (so it doesn't pollute the repo)
+ * and outside the node_modules anonymous volume.
+ */
+const LOCAL_STORAGE_ROOT =
+  process.env.LOCAL_STORAGE_ROOT ?? "/tmp/themison-storage";
+
+/**
+ * URL prefix the FE serves the local store under. `server/_core/index.ts`
+ * registers a static-file middleware at this path when the fallback is
+ * active. Browsers + the PDF parser inside the container both reach it
+ * via `http://localhost:3000`.
+ */
+const LOCAL_STORAGE_ROUTE = "/local-storage";
+
+function getPublicBaseUrl(): string {
+  return process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
+}
+
+export function isUsingLocalStorage(): boolean {
+  return !ENV.forgeApiUrl || !ENV.forgeApiKey;
+}
+
+export function getLocalStorageRoot(): string {
+  return LOCAL_STORAGE_ROOT;
+}
+
+export function getLocalStorageRoute(): string {
+  return LOCAL_STORAGE_ROUTE;
+}
 
 function getStorageConfig(): StorageConfig {
   const baseUrl = ENV.forgeApiUrl;
   const apiKey = ENV.forgeApiKey;
-
   if (!baseUrl || !apiKey) {
+    // Unreachable: callers should have checked isUsingLocalStorage()
+    // before reaching here. Guarded anyway for clarity.
     throw new Error(
       "Storage proxy credentials missing: set BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY"
     );
   }
-
   return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey };
 }
 
@@ -67,11 +108,45 @@ function buildAuthHeaders(apiKey: string): HeadersInit {
   return { Authorization: `Bearer ${apiKey}` };
 }
 
+// ---------------------------------------------------------------------
+// Local-filesystem fallback
+// ---------------------------------------------------------------------
+
+async function localStoragePut(
+  relKey: string,
+  data: Buffer | Uint8Array | string
+): Promise<{ key: string; url: string }> {
+  const key = normalizeKey(relKey);
+  const filePath = path.join(LOCAL_STORAGE_ROOT, key);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const payload =
+    typeof data === "string" ? Buffer.from(data, "utf-8") : Buffer.from(data);
+  await fs.writeFile(filePath, payload);
+  const url = `${getPublicBaseUrl()}${LOCAL_STORAGE_ROUTE}/${encodeURIComponent(key)
+    .replace(/%2F/g, "/")}`;
+  return { key, url };
+}
+
+function localStorageGet(relKey: string): { key: string; url: string } {
+  const key = normalizeKey(relKey);
+  const url = `${getPublicBaseUrl()}${LOCAL_STORAGE_ROUTE}/${encodeURIComponent(key)
+    .replace(/%2F/g, "/")}`;
+  return { key, url };
+}
+
+// ---------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------
+
 export async function storagePut(
   relKey: string,
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream"
 ): Promise<{ key: string; url: string }> {
+  if (isUsingLocalStorage()) {
+    return localStoragePut(relKey, data);
+  }
+
   const { baseUrl, apiKey } = getStorageConfig();
   const key = normalizeKey(relKey);
   const uploadUrl = buildUploadUrl(baseUrl, key);
@@ -92,7 +167,10 @@ export async function storagePut(
   return { key, url };
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string; }> {
+export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {
+  if (isUsingLocalStorage()) {
+    return localStorageGet(relKey);
+  }
   const { baseUrl, apiKey } = getStorageConfig();
   const key = normalizeKey(relKey);
   return {
