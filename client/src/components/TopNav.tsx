@@ -222,15 +222,16 @@ export function TopNav() {
     return () => {
       cancelled = true;
     };
-  }, [
-    currentDataMode,
-    trials.length,
-    trialsLoading,
-    loadBuildingMutation,
-    loadFullMutation,
-    loadSampleMutation,
-    restoreModeFromDefaultLocal,
-  ]);
+    // The mutation objects (loadBuildingMutation/loadFullMutation/loadSampleMutation)
+    // are intentionally excluded from deps. tRPC's `useMutation` returns a new
+    // wrapper object on every render, which would re-fire this effect, cancel
+    // the in-flight bootstrap before markModeSessionBootstrap(...) runs, and
+    // produce an infinite loop (the no-op `loadBuildingMode` path keeps
+    // trials.length at 0, so the guard above never short-circuits). Reading
+    // `.mutateAsync` through closure is safe because the underlying mutate
+    // function reference is stable across re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentDataMode, trials.length, trialsLoading, restoreModeFromDefaultLocal]);
 
   const handleConfirmAction = async () => {
     const needsLoading = confirmDialog.type !== 'building';

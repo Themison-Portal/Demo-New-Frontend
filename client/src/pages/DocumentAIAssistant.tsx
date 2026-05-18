@@ -1445,9 +1445,26 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   // Query documents for all selected trials using a single query
   const { data: sourceDocumentsByTrial = {} } = trpc.documents.listMultipleTrials.useQuery(
     { trialIds: trialId ? [trialId] : selectedTrials, demoMode: currentDataMode },
-    { 
+    {
       enabled: trialId ? true : selectedTrials.length > 0,
-      refetchInterval: 2000, // Refetch every 2 seconds to keep status fresh
+      // Adaptive polling: keep refreshing every 2 s while any document
+      // is still ingesting (status in flight or unknown), but stop once
+      // every doc has reached a terminal state. Avoids hammering the
+      // server (and core-backend) for docs that are already complete.
+      refetchInterval: (query) => {
+        const data = query.state.data as
+          | Record<string, Array<{ coreBackendIngestStatus?: string | null; isIndexed?: boolean }>>
+          | undefined;
+        if (!data) return 2000;
+        const TERMINAL_STATES = new Set(["complete", "ready", "error", "failed"]);
+        const allTerminal = Object.values(data).flat().every((d) => {
+          const status = d?.coreBackendIngestStatus;
+          if (status && TERMINAL_STATES.has(status)) return true;
+          // Legacy docs without core-backend linkage rely on isIndexed.
+          return !!d?.isIndexed;
+        });
+        return allTerminal ? false : 2000;
+      },
       refetchOnMount: 'always' // Always refetch when modal opens
     }
   );

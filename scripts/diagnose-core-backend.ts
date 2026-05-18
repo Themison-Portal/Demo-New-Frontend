@@ -87,7 +87,7 @@ async function main() {
             document_id: documentId,
             document_name: "diagnose-core-backend",
           });
-          return `answer length=${resp.answer.length} sources=${resp.sources.length}`;
+          return `answer length=${resp.response.length} sources=${resp.sources.length}`;
         })
       : skip("query", "no --document-id provided")
   );

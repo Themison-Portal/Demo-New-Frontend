@@ -73,7 +73,7 @@ const buildClientOptions = (): Auth0ClientOptions => {
   const audience = import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined;
   const redirectUri =
     (import.meta.env.VITE_AUTH0_REDIRECT_URI as string | undefined) ??
-    `${window.location.origin}/auth/callback`;
+    `${window.location.origin}/callback`;
 
   if (!domain || !clientId) {
     // Soft-fail: log loudly but don't crash the app. Pages that don't
@@ -93,7 +93,12 @@ const buildClientOptions = (): Auth0ClientOptions => {
       redirect_uri: redirectUri,
       ...(audience ? { audience } : {}),
     },
-    cacheLocation: "memory",
+    // localstorage cache so the session survives full page reloads.
+    // `memory` would drop the access token on every refresh, silently
+    // logging the user out and breaking any Bearer-token-dependent flow
+    // (notably the FE→core-backend upload proxy). Refresh tokens are
+    // still used for silent renewal; localstorage just persists them.
+    cacheLocation: "localstorage",
     useRefreshTokens: true,
   };
 };

@@ -163,8 +163,9 @@ function Router() {
 
   // Auth0 redirect callback — render outside the dashboard chrome so the
   // spinner is full-screen and the URL `?code=&state=` is processed cleanly
-  // by Auth0Provider's useEffect before we navigate elsewhere.
-  if (locationPath === "/auth/callback") {
+  // by Auth0Provider's useEffect before we navigate elsewhere. Path must
+  // match what's registered in the Auth0 dashboard's Allowed Callback URLs.
+  if (locationPath === "/callback") {
     return <AuthCallback />;
   }
 

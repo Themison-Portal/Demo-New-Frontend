@@ -3182,8 +3182,14 @@ async function seedBaseModeData(
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
 
+  // documentCategories is a global (non-trial-scoped) lookup table the
+  // Documents UI dropdown reads from. Seed it for every mode — the
+  // building-mode UI still needs categories to render category picks
+  // even though the rest of building-mode is intentionally empty.
+  // seedCategories uses ON DUPLICATE KEY UPDATE so it's idempotent.
+  await seedCategories(db);
+
   if (mode === "sample") {
-    await seedCategories(db);
     await seedTrials(SAMPLE_TRIALS, createdBy, "sample", db);
     try {
       await seedModeOperationalData(SAMPLE_TRIALS, createdBy, "sample", db);
@@ -3193,7 +3199,6 @@ async function seedBaseModeData(
     return;
   }
   if (mode === "full") {
-    await seedCategories(db);
     await seedTrials(FULL_TRIALS, createdBy, "full", db);
     try {
       await seedModeOperationalData(FULL_TRIALS, createdBy, "full", db);
@@ -3202,7 +3207,8 @@ async function seedBaseModeData(
     }
     return;
   }
-  // Building mode baseline is intentionally empty.
+  // Building mode baseline is otherwise intentionally empty (no trials,
+  // no operational data) — categories were seeded above.
 }
 
 async function ensureModeOperationalSeed(
@@ -3255,9 +3261,9 @@ async function resetModeToDefault(
   if (savedSnapshot) {
     try {
       await restoreModeSnapshot(savedSnapshot, db);
-      if (mode !== "building") {
-        await seedCategories(db);
-      }
+      // Seed categories for every mode — they're a global lookup table
+      // the Documents UI needs. Idempotent via ON DUPLICATE KEY UPDATE.
+      await seedCategories(db);
       return { restoredFromSavedDefault: true };
     } catch (error) {
       console.error(`[demo] Failed restoring saved default for mode '${mode}', falling back to base seed.`, error);

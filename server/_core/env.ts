@@ -73,7 +73,7 @@ export const ENV = {
     auth0ClientId: process.env.VITE_AUTH0_CLIENT_ID ?? "",
     auth0Audience: process.env.VITE_AUTH0_AUDIENCE ?? "",
     auth0RedirectUri:
-        process.env.VITE_AUTH0_REDIRECT_URI ?? "http://localhost:3000/auth/callback",
+        process.env.VITE_AUTH0_REDIRECT_URI ?? "http://localhost:3000/callback",
     // --- Core backend (Phase 2 of integration) ---
     coreBackendApiUrl: process.env.CORE_BACKEND_API_URL ?? "http://localhost:8080",
     coreBackendApiKey:

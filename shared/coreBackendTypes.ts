@@ -56,14 +56,25 @@ export interface CoreBackendQuerySource {
   name: string;
   page: number;
   section?: string;
-  exact_text?: string;
+  /**
+   * Verbatim quote from the chunk. Core-backend returns it as camelCase
+   * `exactText` (the LLM is instructed to emit JSON with that exact
+   * field name; see core-backend `rag_generation_service.py` SYSTEM_PROMPT).
+   */
+  exactText?: string;
   bboxes?: number[][];
   relevance?: "high" | "medium" | "low" | string;
   [key: string]: unknown;
 }
 
 export interface CoreBackendQueryResponse {
-  answer: string;
+  /**
+   * The generated answer text. Core-backend returns this as `response`
+   * (NOT `answer`) — the field name comes from the JSON schema the
+   * Claude SYSTEM_PROMPT pins in `rag_generation_service.py` and the
+   * `DoclingRagStructuredResponse` Pydantic model.
+   */
+  response: string;
   sources: CoreBackendQuerySource[];
   // Other fields the response may include (timing, metadata) — leave open.
   [key: string]: unknown;

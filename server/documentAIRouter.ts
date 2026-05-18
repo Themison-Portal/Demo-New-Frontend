@@ -547,7 +547,7 @@ ${conversationHistory}`;
                 fileUrl: doc.fileUrl,
                 protocolId: doc.id,
                 category: doc.category ?? null,
-                excerpt: src.exact_text,
+                excerpt: src.exactText,
                 section: src.section,
                 page: typeof src.page === "number" ? src.page : null,
               }))
@@ -566,12 +566,12 @@ ${conversationHistory}`;
                 questionType,
               },
               aiInvolved: true,
-              aiOutput: primary.res.answer,
+              aiOutput: primary.res.response,
               aiSources: sources,
             });
 
             return {
-              message: primary.res.answer,
+              message: primary.res.response,
               thinking: `Queried core-backend RAG across ${successes.length} of ${coreBackendDocs.length} selected document(s).`,
               sources,
             };

@@ -166,7 +166,14 @@ export const documentsRouter = router({
           // race conditions between local telemetry events and what
           // core-backend's RAG pipeline has actually completed.
           let coreStatus: string | null = doc.coreBackendIngestStatus ?? null;
-          if (doc.coreBackendJobId && ENV.coreBackendApiUrl) {
+          // Terminal states never regress, so once we've recorded one
+          // there's no point pinging core-backend on every list refresh.
+          // Skips the per-row /upload/status round-trip for docs that
+          // are done, freeing up roughly N × 500ms per 2-second poll on
+          // a trial with N completed protocols.
+          const TERMINAL_STATES = new Set(["complete", "ready", "error", "failed"]);
+          const isTerminal = coreStatus !== null && TERMINAL_STATES.has(coreStatus);
+          if (doc.coreBackendJobId && ENV.coreBackendApiUrl && !isTerminal) {
             try {
               const live = await getCoreBackendClient().getUploadStatus(
                 doc.coreBackendJobId
