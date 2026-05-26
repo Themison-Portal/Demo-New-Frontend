@@ -247,7 +247,7 @@ export function TrialWorkspace() {
       const derivedLocation = trial.location
         ? trial.location
         : baseSites[
-            trial.id.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % baseSites.length
+            trial.id.split("").reduce((acc: number, ch: string) => acc + ch.charCodeAt(0), 0) % baseSites.length
           ];
       const normalizedTrialId = trial.id.toLowerCase();
       const assignedMemberIds = assignedMemberIdsByTrial.get(normalizedTrialId) || [];
@@ -1475,7 +1475,7 @@ export function TrialWorkspace() {
                         taskCompleted: (trial as any).__taskCompleted,
                         taskTotal: (trial as any).__taskTotal,
                         taskCompletionPercentage: (trial as any).__taskCompletionPercent,
-                      }}
+                      } as any}
                     />
                   ))}
                 </div>
@@ -1509,7 +1509,7 @@ export function TrialWorkspace() {
                         taskCompleted: (trial as any).__taskCompleted,
                         taskTotal: (trial as any).__taskTotal,
                         taskCompletionPercentage: (trial as any).__taskCompletionPercent,
-                      }}
+                      } as any}
                     />
                   ))}
                 </div>
@@ -1543,7 +1543,7 @@ export function TrialWorkspace() {
                         taskCompleted: (trial as any).__taskCompleted,
                         taskTotal: (trial as any).__taskTotal,
                         taskCompletionPercentage: (trial as any).__taskCompletionPercent,
-                      }}
+                      } as any}
                     />
                   ))}
                 </div>

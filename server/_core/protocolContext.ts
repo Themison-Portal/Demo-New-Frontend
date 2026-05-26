@@ -2930,6 +2930,8 @@ export async function ingestProtocolContextChunks(options: {
         wordCount: null,
         hasStructuredSchedule: null,
         hasStructuredCriteria: null,
+        langExtractFactCount: null,
+        langExtractModel: null,
         embeddingCount: null,
       };
     }
@@ -3134,6 +3136,8 @@ export async function ingestProtocolContextChunks(options: {
     wordCount: totalWords,
     hasStructuredSchedule: Boolean(structuredSchedule),
     hasStructuredCriteria: Boolean(structuredCriteria),
+    langExtractFactCount: null,
+    langExtractModel: null,
     embeddingCount: chunkEmbeddings.filter((vector) => Array.isArray(vector) && vector.length > 0).length,
   };
 }

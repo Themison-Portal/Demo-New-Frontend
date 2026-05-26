@@ -47,7 +47,10 @@ if (process.env.NODE_ENV === "development") {
 }
 
 export const ENV = {
-    appId: process.env.VITE_APP_ID ?? "",
+    appId: process.env.AUTH0_CLIENT_ID ?? process.env.VITE_APP_ID ?? "",
+    auth0Domain: process.env.AUTH0_DOMAIN ?? "",
+    auth0Audience: process.env.AUTH0_AUDIENCE ?? "",
+    auth0Secret: process.env.AUTH0_SECRET ?? "",
     cookieSecret: process.env.JWT_SECRET ?? "",
     databaseUrl: process.env.DATABASE_URL ?? "",
     oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
@@ -56,6 +59,7 @@ export const ENV = {
     forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
     forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+    fastapiBackendUrl: process.env.FASTAPI_BACKEND_URL ?? "http://localhost:8080",
     openaiApiKey,
     openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
     forceOpenAIDirect: /^(1|true|yes)$/i.test(process.env.FORCE_OPENAI_DIRECT ?? ""),

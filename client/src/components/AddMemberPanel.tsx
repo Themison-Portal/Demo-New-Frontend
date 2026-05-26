@@ -7,6 +7,7 @@ import { useDemoState } from "@/contexts/DemoStateContext";
 type MemberFormValues = {
   name: string;
   email: string;
+  avatar?: string | null;
   clinicalRole: string;
   appRole: string;
   team: string;

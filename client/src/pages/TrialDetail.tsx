@@ -5,31 +5,31 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-    ArrowLeft,
-    LayoutGrid,
-    Calendar,
-    Users as UsersIcon,
-    UserCheck,
-    Sparkles,
-    ChevronDown,
-    FolderOpen,
-    Wand2,
-    Bookmark,
-    Bell,
-    Settings,
-    AlertTriangle,
-    Trash2,
-    Search,
-    Filter,
-    Plus,
-    Pencil,
-    Share2,
-    ArrowRight,
-    Check,
-    Brain,
-    Maximize2,
-    X,
-    User,
+  ArrowLeft,
+  LayoutGrid,
+  Calendar,
+  Users as UsersIcon,
+  UserCheck,
+  Sparkles,
+  ChevronDown,
+  FolderOpen,
+  Wand2,
+  Bookmark,
+  Bell,
+  Settings,
+  AlertTriangle,
+  Trash2,
+  Search,
+  Filter,
+  Plus,
+  Pencil,
+  Share2,
+  ArrowRight,
+  Check,
+  Brain,
+  Maximize2,
+  X,
+  User,
 } from "lucide-react";
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import { useRoute, useLocation } from "wouter";
@@ -52,3558 +52,3630 @@ import type { TaskCategory, TaskPriority, TaskStatus } from "@/types/map";
 import studySetupBackground from "@/assets/study-setup-background.svg";
 
 const TRIAL_DETAIL_TAB_IDS = new Set([
-    "overview",
-    "document-hub",
-    "study-setup-wizard",
-    "visit-template",
-    "bookmarks",
-    "team",
-    "patients",
-    "notifications",
-    "settings",
+  "overview",
+  "document-hub",
+  "study-setup-wizard",
+  "visit-template",
+  "bookmarks",
+  "team",
+  "patients",
+  "notifications",
+  "settings",
 ]);
 
 function getInitialTrialDetailTab() {
-    if (typeof window === "undefined") return "overview";
-    const params = new URLSearchParams(window.location.search);
-    const fromQuery = (params.get("tab") || "").trim();
-    if (TRIAL_DETAIL_TAB_IDS.has(fromQuery)) return fromQuery;
-    return "overview";
+  if (typeof window === "undefined") return "overview";
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = (params.get("tab") || "").trim();
+  if (TRIAL_DETAIL_TAB_IDS.has(fromQuery)) return fromQuery;
+  return "overview";
 }
 
 const SETUP_TASK_STATUS_OPTIONS: TaskStatus[] = [
-    "suggested",
-    "confirmed",
-    "todo",
-    "in_progress",
-    "blocked",
-    "waiting",
-    "done",
-    "skipped",
-    "cancelled",
+  "suggested",
+  "confirmed",
+  "todo",
+  "in_progress",
+  "blocked",
+  "waiting",
+  "done",
+  "skipped",
+  "cancelled",
 ];
 
 const SETUP_TASK_PRIORITY_OPTIONS: TaskPriority[] = ["critical", "high", "medium", "low"];
 
 const SETUP_TASK_CATEGORY_OPTIONS: TaskCategory[] = [
-    "consent",
-    "eligibility",
-    "lab_sample",
-    "vital_signs",
-    "imaging",
-    "drug_administration",
-    "assessment",
-    "questionnaire",
-    "data_entry",
-    "coordination",
-    "documentation",
-    "follow_up",
-    "safety_reporting",
-    "regulatory",
-    "custom",
+  "consent",
+  "eligibility",
+  "lab_sample",
+  "vital_signs",
+  "imaging",
+  "drug_administration",
+  "assessment",
+  "questionnaire",
+  "data_entry",
+  "coordination",
+  "documentation",
+  "follow_up",
+  "safety_reporting",
+  "regulatory",
+  "custom",
 ];
 
 const SETUP_ASSIGNED_ROLE_OPTIONS = [
-    "pi",
-    "sub_i",
-    "crc",
-    "nurse",
-    "pharmacist",
-    "lab_tech",
-    "data_manager",
-    "regulatory_coordinator",
-    "study_coordinator",
-    "custom",
+  "pi",
+  "sub_i",
+  "crc",
+  "nurse",
+  "pharmacist",
+  "lab_tech",
+  "data_manager",
+  "regulatory_coordinator",
+  "study_coordinator",
+  "custom",
 ] as const;
 
 type SetupTaskModalMode = "create" | "edit";
 
 type SetupTaskFormState = {
-    title: string;
-    description: string;
-    phaseId: string;
-    category: TaskCategory;
-    status: TaskStatus;
-    priority: TaskPriority;
-    assignedRole: string;
-    assigneeMemberId: string;
-    dueDate: string;
-    sourceSection: string;
-    sourcePage: string;
-    sourceText: string;
+  title: string;
+  description: string;
+  phaseId: string;
+  category: TaskCategory;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignedRole: string;
+  assigneeMemberId: string;
+  dueDate: string;
+  sourceSection: string;
+  sourcePage: string;
+  sourceText: string;
 };
 
 function titleCase(value: string): string {
-    if (!value) return value;
-    return value
-        .split("_")
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(" ");
+  if (!value) return value;
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function toDateInputValue(value?: string | Date | null): string {
-    if (!value) return "";
-    const parsed = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(parsed.getTime())) return "";
-    const year = parsed.getFullYear();
-    const month = String(parsed.getMonth() + 1).padStart(2, "0");
-    const day = String(parsed.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+  if (!value) return "";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function toIsoDateTime(value: string): string | null {
-    if (!value) return null;
-    const date = new Date(`${value}T12:00:00`);
-    if (Number.isNaN(date.getTime())) return null;
-    return date.toISOString();
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 function normalizeRoleToken(value?: string | null): string {
-    const token = String(value || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, "");
-    if (!token) return "";
-    if (token === "pi" || token.includes("principalinvestigator")) return "pi";
-    if (token === "subi" || token === "subinvestigator" || token.includes("subinvestigator")) return "sub_i";
-    if (token === "crc" || token.includes("clinicalresearchcoordinator")) return "crc";
-    if (token.includes("nurse")) return "nurse";
-    if (token.includes("pharmac")) return "pharmacist";
-    if (token.includes("lab")) return "lab_tech";
-    if (token.includes("datamanager")) return "data_manager";
-    if (token.includes("regulatory")) return "regulatory_coordinator";
-    if (token.includes("studycoordinator")) return "study_coordinator";
-    return token;
+  const token = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (!token) return "";
+  if (token === "pi" || token.includes("principalinvestigator")) return "pi";
+  if (token === "subi" || token === "subinvestigator" || token.includes("subinvestigator")) return "sub_i";
+  if (token === "crc" || token.includes("clinicalresearchcoordinator")) return "crc";
+  if (token.includes("nurse")) return "nurse";
+  if (token.includes("pharmac")) return "pharmacist";
+  if (token.includes("lab")) return "lab_tech";
+  if (token.includes("datamanager")) return "data_manager";
+  if (token.includes("regulatory")) return "regulatory_coordinator";
+  if (token.includes("studycoordinator")) return "study_coordinator";
+  return token;
 }
 
 function formatRoleLabel(role?: string | null): string {
-    const raw = String(role || "").trim().toLowerCase();
-    if (!raw) return "Unassigned";
-    const alias: Record<string, string> = {
-        pi: "PI",
-        sub_i: "Sub-I",
-        crc: "CRC",
-        nurse: "Nurse",
-        pharmacist: "Pharmacist",
-        lab_tech: "Lab Tech",
-        data_manager: "Data Manager",
-        regulatory_coordinator: "Regulatory Coordinator",
-        study_coordinator: "Study Coordinator",
-    };
-    return alias[raw] || titleCase(raw);
+  const raw = String(role || "").trim().toLowerCase();
+  if (!raw) return "Unassigned";
+  const alias: Record<string, string> = {
+    pi: "PI",
+    sub_i: "Sub-I",
+    crc: "CRC",
+    nurse: "Nurse",
+    pharmacist: "Pharmacist",
+    lab_tech: "Lab Tech",
+    data_manager: "Data Manager",
+    regulatory_coordinator: "Regulatory Coordinator",
+    study_coordinator: "Study Coordinator",
+  };
+  return alias[raw] || titleCase(raw);
 }
 
 function toAssignmentMemberShape(member: { id: string; name?: string; role?: string; clinicalRole?: string }) {
-    return {
-        id: String(member.id),
-        name: member.name || "",
-        role: member.role || "",
-        clinicalRole: member.clinicalRole || "",
-    };
+  return {
+    id: String(member.id),
+    name: member.name || "",
+    role: member.role || "",
+    clinicalRole: member.clinicalRole || "",
+  };
 }
 
 function parseMemberNumericId(value: string | number | null | undefined): number | null {
-    if (typeof value === "number" && Number.isFinite(value)) {
-        const rounded = Math.round(value);
-        return rounded > 0 ? rounded : null;
-    }
-    const raw = String(value ?? "").trim();
-    if (!raw) return null;
-    const asNumber = Number(raw);
-    if (Number.isFinite(asNumber)) {
-        const rounded = Math.round(asNumber);
-        return rounded > 0 ? rounded : null;
-    }
-    const trailingDigits = raw.match(/(\d+)(?!.*\d)/);
-    if (!trailingDigits) return null;
-    const parsed = Number.parseInt(trailingDigits[1], 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-// ─── Patients Tab Demo Component ─────────────────────────────────────────────
-
-const DEMO_PATIENTS_DATA = [
-    {
-        id: "1103", initials: "JS", name: "Jane Smith", status: "Enrolled",
-        age: 43, sex: "Female", condition: "Type 2 Diabetes",
-        enrolledDate: "03.09.2025", currentWeek: 12, totalWeeks: 52,
-        drug: "Tirzepatide 10mg",
-        currentVisit: {
-            label: "Visit 6 – Week 12", date: "Today. 17.12.2025", completed: true,
-            tasks: [
-                { code: "LB", label: "Laboratory", color: "#C4B5FD", done: 10, total: 10 },
-                { code: "VS", label: "Vital Signs", color: "#FDE68A", done: 4, total: 4 },
-                { code: "PE", label: "Physical Exam", color: "#A7F3D0", done: 1, total: 1 },
-                { code: "SA", label: "Safety Assessment", color: "#FBCFE8", done: 3, total: 3 },
-            ],
-        },
-        studyProgress: { phase: "Treatment Phase", visitsDone: 6, visitsTotal: 13, currentWeek: 12, totalStudyWeeks: 53, completed: 6, scheduled: 1, remaining: 7 },
-        nextVisit: { label: "Visit 7 – Week 16", date: "19.01.2025 at 9:00", site: "Main Clinical Site", activities: 9 },
-        safety: { flagged: 1, issues: [{ severity: "Grade 1", name: "Mild Nausea", onset: "Week 4", status: "Monitoring" }], seriousAEs: "None", protocolDeviations: "None" },
-    },
-    {
-        id: "1104", initials: "MC", name: "Michael Chen", status: "Screening",
-        age: 57, sex: "Male", condition: "Hypertension",
-        enrolledDate: "14.10.2025", currentWeek: 4, totalWeeks: 48,
-        drug: "Losartan 50mg",
-        currentVisit: {
-            label: "Visit 2 – Week 4", date: "Today. 17.12.2025", completed: false,
-            tasks: [
-                { code: "LB", label: "Laboratory", color: "#C4B5FD", done: 6, total: 10 },
-                { code: "VS", label: "Vital Signs", color: "#FDE68A", done: 4, total: 4 },
-                { code: "PE", label: "Physical Exam", color: "#A7F3D0", done: 0, total: 1 },
-                { code: "SA", label: "Safety Assessment", color: "#FBCFE8", done: 1, total: 3 },
-            ],
-        },
-        studyProgress: { phase: "Screening Phase", visitsDone: 2, visitsTotal: 10, currentWeek: 4, totalStudyWeeks: 48, completed: 2, scheduled: 1, remaining: 7 },
-        nextVisit: { label: "Visit 3 – Week 8", date: "14.01.2026 at 10:00", site: "Main Clinical Site", activities: 6 },
-        safety: { flagged: 0, issues: [], seriousAEs: "None", protocolDeviations: "None" },
-    },
-    {
-        id: "1105", initials: "SR", name: "Sarah Rodriguez", status: "Enrolled",
-        age: 35, sex: "Female", condition: "Rheumatoid Arthritis",
-        enrolledDate: "22.08.2025", currentWeek: 16, totalWeeks: 52,
-        drug: "Methotrexate 15mg",
-        currentVisit: {
-            label: "Visit 8 – Week 16", date: "Today. 17.12.2025", completed: true,
-            tasks: [
-                { code: "LB", label: "Laboratory", color: "#C4B5FD", done: 8, total: 8 },
-                { code: "VS", label: "Vital Signs", color: "#FDE68A", done: 4, total: 4 },
-                { code: "PE", label: "Physical Exam", color: "#A7F3D0", done: 1, total: 1 },
-                { code: "SA", label: "Safety Assessment", color: "#FBCFE8", done: 2, total: 2 },
-            ],
-        },
-        studyProgress: { phase: "Treatment Phase", visitsDone: 8, visitsTotal: 14, currentWeek: 16, totalStudyWeeks: 52, completed: 8, scheduled: 1, remaining: 5 },
-        nextVisit: { label: "Visit 9 – Week 20", date: "16.02.2026 at 11:00", site: "Satellite Site B", activities: 7 },
-        safety: { flagged: 2, issues: [{ severity: "Grade 1", name: "Mild Fatigue", onset: "Week 8", status: "Resolved" }, { severity: "Grade 2", name: "Elevated ALT", onset: "Week 14", status: "Monitoring" }], seriousAEs: "None", protocolDeviations: "1 minor" },
-    },
-];
-
-type DemoPatient = typeof DEMO_PATIENTS_DATA[number];
-
-function PatientStatusBadge({ status }: { status: string }) {
-    const styles: Record<string, { bg: string; color: string; dot: string }> = {
-        Enrolled: { bg: "#DCFCE7", color: "#166534", dot: "#16a34a" },
-        Screening: { bg: "#FEF9C3", color: "#854D0E", dot: "#ca8a04" },
-        Completed: { bg: "#EDE9FE", color: "#5B21B6", dot: "#7c3aed" },
-        Withdrawn: { bg: "#FEE2E2", color: "#991B1B", dot: "#dc2626" },
-    };
-    const s = styles[status] || styles.Enrolled;
-    return (
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold"
-            style={{ backgroundColor: s.bg, color: s.color }}>
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.dot }} />
-            {status}
-        </span>
-    );
-}
-
-function PatientVisitProgressBar({ done, total }: { done: number; total: number }) {
-    const pct = total > 0 ? (done / total) * 100 : 0;
-    return (
-        <div className="flex-1 h-2 rounded-full bg-gray-100">
-            <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
-        </div>
-    );
-}
-
-function PatientDetailView({ patient, onBack }: { patient: DemoPatient; onBack: () => void }) {
-    const [activeTab, setActiveTabLocal] = useState("Overview");
-    const tabs = ["Overview", "Visits", "Costs", "Medical", "Documents"];
-    const sp = patient.studyProgress;
-    const progressPct = (sp.visitsDone / sp.visitsTotal) * 100;
-
-    return (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-gray-100">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-4">
-                        <div className="h-14 w-14 rounded-full bg-purple-100 flex items-center justify-center text-base font-bold text-purple-700 shrink-0">
-                            {patient.initials}
-                        </div>
-                        <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-xl font-bold text-gray-900">{patient.name}</span>
-                                <PatientStatusBadge status={patient.status} />
-                                <span className="text-sm text-gray-400">Patient #{patient.id}</span>
-                            </div>
-                            <p className="text-sm text-gray-500 mt-0.5">Age: {patient.age} · {patient.sex} · {patient.condition}</p>
-                            <p className="text-sm text-gray-500">Enrolled: {patient.enrolledDate} · week {patient.currentWeek} out of {patient.totalWeeks}</p>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-3 py-1.5 rounded-full">{patient.drug}</span>
-                        <button className="flex items-center gap-1.5 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">
-                            💬 Contact
-                        </button>
-                        <button className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg px-4 py-1.5">
-                            View Details
-                        </button>
-                    </div>
-                </div>
-                {/* Tabs */}
-                <div className="flex gap-2 mt-4 flex-wrap">
-                    {tabs.map(tab => (
-                        <button key={tab} onClick={() => setActiveTabLocal(tab)}
-                            className={`px-4 py-1.5 rounded-lg border text-sm font-medium transition-colors ${activeTab === tab
-                                ? "bg-blue-600 border-blue-600 text-white"
-                                : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
-                                }`}>
-                            {tab}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {/* Overview Content */}
-            {activeTab === "Overview" && (
-                <div className="p-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {/* Current Visit */}
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <div className="mb-3">
-                            <p className="text-sm font-bold text-green-600">{patient.currentVisit.label}</p>
-                            <p className="text-xs text-gray-400 mt-0.5">{patient.currentVisit.date}</p>
-                        </div>
-                        {patient.currentVisit.tasks.map(task => (
-                            <div key={task.code} className="flex items-center gap-2 mb-2.5">
-                                <span className="h-7 w-7 rounded-lg flex items-center justify-center text-[10px] font-bold text-gray-700 shrink-0"
-                                    style={{ backgroundColor: task.color }}>
-                                    {task.code}
-                                </span>
-                                <span className="flex-1 text-sm text-gray-600">{task.label}</span>
-                                <PatientVisitProgressBar done={task.done} total={task.total} />
-                                <span className={`text-xs font-semibold min-w-[32px] text-right ${task.done === task.total ? "text-green-600" : "text-gray-600"}`}>
-                                    {task.done}/{task.total}
-                                </span>
-                            </div>
-                        ))}
-                        {patient.currentVisit.completed && (
-                            <div className="mt-2 inline-flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-semibold rounded-full px-3 py-1">
-                                ✓ Visit {patient.currentVisit.label.match(/\d+/)?.[0]} Completed
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Study Progress */}
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <p className="text-sm font-bold text-gray-900 mb-3">Study Progress</p>
-                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                            <span>{sp.phase}</span>
-                            <span>{sp.visitsDone}/{sp.visitsTotal} visits</span>
-                        </div>
-                        <div className="h-2 bg-gray-100 rounded-full mb-1">
-                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${progressPct}%` }} />
-                        </div>
-                        <p className="text-xs font-semibold text-green-600 mb-4">Week {sp.currentWeek}/{sp.totalStudyWeeks}</p>
-                        <div className="grid grid-cols-3 gap-2">
-                            {[
-                                { label: "Completed", value: sp.completed, bg: "bg-green-50 border-green-100" },
-                                { label: "Scheduled", value: sp.scheduled, bg: "bg-yellow-50 border-yellow-100" },
-                                { label: "Remaining", value: sp.remaining, bg: "bg-gray-50 border-gray-100" },
-                            ].map(s => (
-                                <div key={s.label} className={`${s.bg} border rounded-lg p-2 text-center`}>
-                                    <p className="text-xs text-gray-500">{s.label}</p>
-                                    <p className="text-2xl font-bold text-gray-900 mt-1">{s.value}</p>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Next Visit */}
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <p className="text-sm font-bold text-gray-900 mb-3">Next Visit:</p>
-                        <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-3 mb-3">
-                            <p className="text-sm font-semibold text-gray-800">{patient.nextVisit.label}</p>
-                            <p className="text-sm text-gray-600 mt-1">{patient.nextVisit.date}</p>
-                            <p className="text-xs text-gray-400 mt-1">{patient.nextVisit.site} · {patient.nextVisit.activities} Activities</p>
-                        </div>
-                        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg py-2">
-                            Send Reminder
-                        </button>
-                    </div>
-
-                    {/* Safety Status */}
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <p className="text-sm font-bold text-gray-900 mb-2">Safety Status</p>
-                        <p className="text-sm text-gray-500 mb-2">
-                            Flagged:{" "}
-                            <span className={`font-semibold px-2 py-0.5 rounded-full text-xs ${patient.safety.flagged > 0 ? "bg-yellow-100 text-yellow-700" : "bg-gray-100 text-gray-500"}`}>
-                                {patient.safety.flagged}
-                            </span>
-                        </p>
-                        {patient.safety.issues.map((issue, i) => (
-                            <div key={i} className="border border-yellow-200 bg-yellow-50 rounded-lg p-2.5 mb-2">
-                                <p className="text-xs font-semibold text-yellow-700">{issue.name} ({issue.severity})</p>
-                                <p className="text-xs text-gray-500 mt-0.5">Onset: {issue.onset}</p>
-                                <p className="text-xs text-gray-500">{issue.status}</p>
-                            </div>
-                        ))}
-                        {patient.safety.issues.length === 0 && (
-                            <p className="text-sm text-green-600">No active safety flags</p>
-                        )}
-                        <p className="text-sm text-gray-500 mt-2">
-                            Serious AEs: <span className="text-green-600 font-semibold">{patient.safety.seriousAEs}</span>
-                        </p>
-                        <p className="text-sm text-gray-500 mt-1">
-                            Protocol Deviations:{" "}
-                            <span className={`font-semibold ${patient.safety.protocolDeviations === "None" ? "text-green-600" : "text-amber-600"}`}>
-                                {patient.safety.protocolDeviations}
-                            </span>
-                        </p>
-                    </div>
-
-                    {/* Quick Actions */}
-                    <div className="border border-gray-200 rounded-xl p-4">
-                        <p className="text-sm font-bold text-gray-900 mb-3">Quick Actions</p>
-                        <div className="grid grid-cols-2 gap-2 mb-3">
-                            {[{ icon: "🚩", label: "Flag Issue" }, { icon: "💬", label: "Contact" }, { icon: "📅", label: "Schedule Visit" }, { icon: "🧪", label: "Lab Results" }].map(a => (
-                                <button key={a.label} className="flex items-center gap-2 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-600 hover:bg-gray-50">
-                                    <span>{a.icon}</span>{a.label}
-                                </button>
-                            ))}
-                        </div>
-                        <button className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg py-2">
-                            Generate Visit Report
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* {activeTab !== "Overview" && (
-                <div className="p-10 text-center text-sm text-gray-400">{activeTab} content coming soon.</div>
-            )} */}
-            {activeTab === "Visits" && (
-                <div className="p-5">
-                    {/* Visit Progress Header */}
-                    <div className="flex items-center justify-between mb-6">
-                        <div>
-                            <p className="text-sm font-semibold text-gray-900">Visit Progress</p>
-                            <p className="text-sm text-gray-500 mt-0.5">
-                                {patient.studyProgress.completed} out of {patient.studyProgress.visitsDone + patient.studyProgress.remaining} treatment visits completed
-                            </p>
-                        </div>
-                        <div className="flex items-center gap-6 text-sm text-gray-500">
-                            <span>Current visit: Visit {patient.studyProgress.visitsDone} (week {patient.studyProgress.currentWeek})</span>
-                            <span>Next: Visit {patient.studyProgress.visitsDone + 1} (week {patient.studyProgress.currentWeek + 4})</span>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-3 mb-6">
-                        <div className="flex-1 h-2.5 bg-gray-100 rounded-full">
-                            <div className="h-full bg-green-500 rounded-full"
-                                style={{ width: `${Math.round((patient.studyProgress.completed / (patient.studyProgress.completed + patient.studyProgress.remaining)) * 100)}%` }} />
-                        </div>
-                        <span className="text-sm font-semibold text-green-600">
-                            {Math.round((patient.studyProgress.completed / (patient.studyProgress.completed + patient.studyProgress.remaining)) * 100)}%
-                        </span>
-                    </div>
-
-                    {/* Visit List */}
-                    <div className="divide-y divide-gray-100">
-                        {[
-                            { num: 1, type: "Screening", week: -4, date: "06.08.2025", status: "completed", activities: "Informed Consent, Medical History, Demographics, Height, Vitals ECG, Chemistry, Hematology, Lipase" },
-                            { num: 2, type: "Lead-In", week: -2, date: "20.08.2025", status: "completed", activities: "HbA1c, AE Review, Hypoglycemia Review, Concomitant Medications, Review Screening Lab results" },
-                            { num: 3, type: "Randomisation", week: 0, date: "07.10.2025", status: "completed", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
-                            { num: 4, type: "Treatment", week: 4, date: "04.11.2025", status: "completed", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
-                            { num: 5, type: "Treatment", week: 8, date: "25.11.2025", status: "completed", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, Hematology, Lipase, Pregnancy (Urine)" },
-                            { num: 6, type: "Treatment", week: 12, date: "18.12.2025", status: "current", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
-                            { num: 7, type: "Treatment", week: 16, date: "16.01.2026", status: "scheduled", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
-                            { num: 8, type: "Treatment", week: 20, date: "20.01.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
-                            { num: 9, type: "Treatment", week: 24, date: "17.02.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Pregnancy (Urine)" },
-                            { num: 10, type: "Treatment", week: 28, date: "17.03.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
-                            { num: 11, type: "Treatment", week: 32, date: "14.04.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase" },
-                            { num: 12, type: "Treatment", week: 36, date: "12.05.2026", status: "upcoming", activities: "PE, Weight, Waist, Vitals, HbA1c, FSG, Insulin, AE Review, Concomitant Medications" },
-                            { num: 13, type: "End of Study", week: 40, date: "09.06.2026", status: "upcoming", activities: "Weight, Waist, Vitals, HbA1c, FSG, Insulin, Chemistry, Hematology, Lipase, Final Assessment" },
-                        ].map(visit => (
-                            <div key={visit.num}
-                                className={`flex items-center gap-4 py-4 px-3 rounded-lg ${visit.status === "completed" ? "bg-green-50" :
-                                        visit.status === "current" ? "border border-green-400 bg-green-50" : ""
-                                    }`}>
-                                {/* Visit name */}
-                                <div className="w-32 shrink-0">
-                                    <p className="text-sm font-semibold text-gray-900">Visit {visit.num}</p>
-                                    <p className="text-xs text-gray-500">{visit.type}</p>
-                                </div>
-                                {/* Week + date */}
-                                <div className="w-28 shrink-0 flex items-center gap-2 text-sm text-gray-500">
-                                    <span className="w-6 text-right text-xs">{visit.week}</span>
-                                    <span>{visit.date}</span>
-                                </div>
-                                {/* Status badge */}
-                                <div className="w-28 shrink-0">
-                                    {visit.status === "completed" && (
-                                        <span className="inline-flex items-center gap-1.5 bg-green-500 text-white text-xs font-semibold px-3 py-1 rounded-md">
-                                            ✓ Completed
-                                        </span>
-                                    )}
-                                    {visit.status === "current" && (
-                                        <span className="inline-flex items-center gap-1.5 bg-green-500 text-white text-xs font-semibold px-3 py-1 rounded-md">
-                                            ✓ Completed
-                                        </span>
-                                    )}
-                                    {visit.status === "scheduled" && (
-                                        <span className="inline-flex items-center gap-1.5 border border-yellow-300 bg-yellow-50 text-yellow-700 text-xs font-semibold px-3 py-1 rounded-md">
-                                            ◷ Scheduled
-                                        </span>
-                                    )}
-                                    {visit.status === "upcoming" && (
-                                        <span className="inline-flex items-center gap-1.5 border border-gray-200 bg-gray-50 text-gray-500 text-xs font-medium px-3 py-1 rounded-md">
-                                            Upcoming
-                                        </span>
-                                    )}
-                                </div>
-                                {/* Activities */}
-                                <p className="flex-1 text-sm text-gray-600">{visit.activities}</p>
-                                {/* View details */}
-                                <button className="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700">
-                                    View Details
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {activeTab !== "Overview" && activeTab !== "Visits" && (
-                <div className="p-10 text-center text-sm text-gray-400">{activeTab} content coming soon.</div>
-            )}
-        </div>
-    );
-}
-
-function PatientsTabDemo({ enrolledPatients, targetPatients }: { enrolledPatients: number; targetPatients: number }) {
-    const [search, setSearch] = useState("");
-    const [statusFilter, setStatusFilter] = useState("All statuses");
-    const [selectedPatient, setSelectedPatient] = useState<DemoPatient | null>(null);
-
-    const statuses = ["All statuses", "Enrolled", "Screening", "Completed", "Withdrawn"];
-    const filtered = DEMO_PATIENTS_DATA.filter(p => {
-        const matchSearch = search === "" || p.name.toLowerCase().includes(search.toLowerCase()) || p.id.includes(search);
-        const matchStatus = statusFilter === "All statuses" || p.status === statusFilter;
-        return matchSearch && matchStatus;
-    });
-    const activeEnrolled = DEMO_PATIENTS_DATA.filter(p => p.status === "Enrolled").length;
-    const inScreening = DEMO_PATIENTS_DATA.filter(p => p.status === "Screening").length;
-
-    return (
-        <div className="space-y-4">
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Enrolled Patients</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-1">{enrolledPatients}</p>
-                    <div className="mt-2 h-1.5 bg-gray-100 rounded-full">
-                        <div className="h-full bg-blue-500 rounded-full" style={{ width: targetPatients > 0 ? `${Math.min(100, (enrolledPatients / targetPatients) * 100)}%` : "0%" }} />
-                    </div>
-                    <p className="text-xs text-gray-400 mt-1">{enrolledPatients} / {targetPatients} target</p>
-                </div>
-                <div className="bg-white border border-gray-200 rounded-xl p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Target Patients</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-1">{targetPatients}</p>
-                    <p className="text-xs text-gray-400 mt-3">{Math.max(0, targetPatients - enrolledPatients)} remaining</p>
-                </div>
-                <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-green-600">Active Enrolled</p>
-                    <p className="text-3xl font-bold text-green-700 mt-1">{activeEnrolled}</p>
-                    <p className="text-xs text-green-600 mt-3">currently in treatment</p>
-                </div>
-                <div className="bg-yellow-50 border border-yellow-100 rounded-xl p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-yellow-600">In Screening</p>
-                    <p className="text-3xl font-bold text-yellow-700 mt-1">{inScreening}</p>
-                    <p className="text-xs text-yellow-600 mt-3">pending enrollment</p>
-                </div>
-            </div>
-
-            {/* Search + filter + assign */}
-            {!selectedPatient && (
-                <div className="flex flex-wrap gap-2">
-                    <div className="relative flex-1 min-w-[200px]">
-                        <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input value={search} onChange={e => setSearch(e.target.value)}
-                            placeholder="Search patients by code or name..."
-                            className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm outline-none" />
-                    </div>
-                    <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
-                        className="border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-600 bg-white">
-                        {statuses.map(s => <option key={s}>{s}</option>)}
-                    </select>
-                    <button className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-lg px-4 py-2 flex items-center gap-1.5">
-                        <Plus className="h-4 w-4" /> Assign Patient
-                    </button>
-                </div>
-            )}
-
-            {/* Patient list or detail */}
-            {selectedPatient ? (
-                <div>
-                    <button onClick={() => setSelectedPatient(null)}
-                        className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-blue-600 hover:text-blue-700">
-                        <ArrowLeft className="h-4 w-4" /> Back to patients
-                    </button>
-                    <PatientDetailView patient={selectedPatient} onBack={() => setSelectedPatient(null)} />
-                </div>
-            ) : (
-                <div className="space-y-3">
-                    {filtered.length === 0 && <p className="text-sm text-gray-400 text-center py-8">No patients found.</p>}
-                    {filtered.map(patient => {
-                        const sp = patient.studyProgress;
-                        return (
-                            <div key={patient.id} onClick={() => setSelectedPatient(patient)}
-                                className="bg-white border border-gray-200 hover:border-blue-200 hover:shadow-md rounded-xl p-4 cursor-pointer transition-all">
-                                <div className="flex flex-wrap items-center justify-between gap-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="h-12 w-12 rounded-full bg-purple-100 flex items-center justify-center text-sm font-bold text-purple-700 shrink-0">
-                                            {patient.initials}
-                                        </div>
-                                        <div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <span className="text-sm font-bold text-gray-900">{patient.name}</span>
-                                                <PatientStatusBadge status={patient.status} />
-                                                <span className="text-xs text-gray-400">#{patient.id}</span>
-                                            </div>
-                                            <p className="text-xs text-gray-500 mt-0.5">Age: {patient.age} · {patient.sex} · {patient.condition}</p>
-                                            <p className="text-xs text-gray-500">Enrolled: {patient.enrolledDate} · Week {patient.currentWeek}/{patient.totalWeeks}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex-1 min-w-[180px] max-w-[240px]">
-                                        <div className="flex justify-between text-xs text-gray-400 mb-1">
-                                            <span>{sp.phase}</span>
-                                            <span className="text-green-600 font-semibold">Wk {sp.currentWeek}/{sp.totalStudyWeeks}</span>
-                                        </div>
-                                        <div className="h-1.5 bg-gray-100 rounded-full">
-                                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${(sp.visitsDone / sp.visitsTotal) * 100}%` }} />
-                                        </div>
-                                        <div className="flex gap-2 mt-1 text-xs">
-                                            <span className="text-green-600">✓ {sp.completed}</span>
-                                            <span className="text-amber-500">◷ {sp.scheduled}</span>
-                                            <span className="text-gray-400">· {sp.remaining} left</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                        <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2.5 py-1 rounded-full">{patient.drug}</span>
-                                        {patient.safety.flagged > 0 && (
-                                            <span className="bg-yellow-100 text-yellow-700 text-xs font-semibold px-2.5 py-1 rounded-full">⚠ {patient.safety.flagged} flag{patient.safety.flagged > 1 ? "s" : ""}</span>
-                                        )}
-                                        <button onClick={e => { e.stopPropagation(); setSelectedPatient(patient); }}
-                                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg px-3 py-1.5">
-                                            View Details →
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
-    );
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const rounded = Math.round(value);
+    return rounded > 0 ? rounded : null;
+  }
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber)) {
+    const rounded = Math.round(asNumber);
+    return rounded > 0 ? rounded : null;
+  }
+  const trailingDigits = raw.match(/(\d+)(?!.*\d)/);
+  if (!trailingDigits) return null;
+  const parsed = Number.parseInt(trailingDigits[1], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 export default function TrialDetail() {
-    const [, navigate] = useLocation();
-    const [, params] = useRoute("/trial/:id");
-    const [activeTab, setActiveTab] = useState(getInitialTrialDetailTab);
-    const [isGeneratingScaffold, setIsGeneratingScaffold] = useState(false);
-    const [manageTeamOpen, setManageTeamOpen] = useState(false);
-    const [addMemberOpen, setAddMemberOpen] = useState(false);
-    const [assignedMemberIds, setAssignedMemberIds] = useState<string[]>([]);
-    const [sponsorLogoFailed, setSponsorLogoFailed] = useState(false);
-    const [deleteConfirmText, setDeleteConfirmText] = useState("");
-    const [isSetupFullscreenOpen, setIsSetupFullscreenOpen] = useState(false);
-    const [isSetupFullscreenVisible, setIsSetupFullscreenVisible] = useState(false);
-    const [generatedSetupMapId, setGeneratedSetupMapId] = useState<string | null>(null);
-    const [setupScaffoldView, setSetupScaffoldView] = useState<"list" | "timeline" | "canvas">("list");
-    const [setupTaskModalOpen, setSetupTaskModalOpen] = useState(false);
-    const [setupTaskModalMode, setSetupTaskModalMode] = useState<SetupTaskModalMode>("create");
-    const [setupEditingTaskId, setSetupEditingTaskId] = useState<string | null>(null);
-    const [pendingOpenSetupTaskId, setPendingOpenSetupTaskId] = useState<string | null>(null);
-    const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
-    const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
-    const [setupTaskForm, setSetupTaskForm] = useState<SetupTaskFormState>({
-        title: "",
-        description: "",
-        phaseId: "",
-        category: "custom",
-        status: "todo",
-        priority: "medium",
-        assignedRole: "",
-        assigneeMemberId: "",
-        dueDate: "",
-        sourceSection: "",
-        sourcePage: "",
-        sourceText: "",
-    });
+  const [, navigate] = useLocation();
+  const [, params] = useRoute("/trial/:id");
+  const [activeTab, setActiveTab] = useState(getInitialTrialDetailTab);
+  const [isGeneratingScaffold, setIsGeneratingScaffold] = useState(false);
+  const [manageTeamOpen, setManageTeamOpen] = useState(false);
+  const [addMemberOpen, setAddMemberOpen] = useState(false);
+  const [assignedMemberIds, setAssignedMemberIds] = useState<string[]>([]);
+  const [sponsorLogoFailed, setSponsorLogoFailed] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [isSetupFullscreenOpen, setIsSetupFullscreenOpen] = useState(false);
+  const [isSetupFullscreenVisible, setIsSetupFullscreenVisible] = useState(false);
+  const [generatedSetupMapId, setGeneratedSetupMapId] = useState<string | null>(null);
+  const [setupScaffoldView, setSetupScaffoldView] = useState<"list" | "timeline" | "canvas">("list");
+  const [setupTaskModalOpen, setSetupTaskModalOpen] = useState(false);
+  const [setupTaskModalMode, setSetupTaskModalMode] = useState<SetupTaskModalMode>("create");
+  const [setupEditingTaskId, setSetupEditingTaskId] = useState<string | null>(null);
+  const [pendingOpenSetupTaskId, setPendingOpenSetupTaskId] = useState<string | null>(null);
+  const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
+  const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
 
-    const { getCurrentDataMode, state } = useDemoState();
-    const currentDataMode = getCurrentDataMode();
+  // Patient and Visit Management States
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
+  const [isEnrollDialogOpen, setIsEnrollDialogOpen] = useState(false);
+  const [enrollForm, setEnrollForm] = useState({
+    firstName: "",
+    lastName: "",
+    patientCode: "",
+    gender: "male" as "male" | "female" | "other" | "prefer_not_to_say",
+    dateOfBirth: "",
+    email: "",
+    phone: "",
+    consentSigned: true,
+    consentDate: new Date().toISOString().split("T")[0],
+    screeningNotes: "",
+    notes: "",
+  });
+  const [isScheduleVisitDialogOpen, setIsScheduleVisitDialogOpen] = useState(false);
+  const [visitForm, setVisitForm] = useState({
+    visitDate: new Date().toISOString().split("T")[0],
+    visitTime: "09:00",
+    visitType: "follow_up",
+    notes: "",
+    location: "Main Clinic",
+  });
 
-    const trialId = (params?.id || "").toLowerCase();
-    const isValidTrialId = trialId.length > 0;
-    const trialTabStorageKey = trialId ? `trial-active-tab:${currentDataMode}:${trialId}` : null;
+  const [setupTaskForm, setSetupTaskForm] = useState<SetupTaskFormState>({
+    title: "",
+    description: "",
+    phaseId: "",
+    category: "custom",
+    status: "todo",
+    priority: "medium",
+    assignedRole: "",
+    assigneeMemberId: "",
+    dueDate: "",
+    sourceSection: "",
+    sourcePage: "",
+    sourceText: "",
+  });
 
-    useEffect(() => {
-        if (typeof window === "undefined" || !trialTabStorageKey) return;
-        const params = new URLSearchParams(window.location.search);
-        const fromQuery = (params.get("tab") || "").trim();
-        const fromStorage = (window.localStorage.getItem(trialTabStorageKey) || "").trim();
-        const nextTab = TRIAL_DETAIL_TAB_IDS.has(fromQuery)
-            ? fromQuery
-            : TRIAL_DETAIL_TAB_IDS.has(fromStorage)
-                ? fromStorage
-                : "overview";
-        setActiveTab(nextTab);
-    }, [trialTabStorageKey]);
+  const { getCurrentDataMode, state } = useDemoState();
+  const currentDataMode = getCurrentDataMode();
 
-    useEffect(() => {
-        if (typeof window === "undefined" || !trialTabStorageKey) return;
-        const normalizedTab = TRIAL_DETAIL_TAB_IDS.has(activeTab) ? activeTab : "overview";
-        window.localStorage.setItem(trialTabStorageKey, normalizedTab);
+  const trialId = (params?.id || "").toLowerCase();
+  const isValidTrialId = trialId.length > 0;
+  const trialTabStorageKey = trialId ? `trial-active-tab:${currentDataMode}:${trialId}` : null;
 
-        const params = new URLSearchParams(window.location.search);
-        if (normalizedTab === "overview") {
-            params.delete("tab");
-        } else {
-            params.set("tab", normalizedTab);
-        }
-        const nextQuery = params.toString();
-        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
-        window.history.replaceState(window.history.state, "", nextUrl);
-    }, [activeTab, trialTabStorageKey]);
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialTabStorageKey) return;
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = (params.get("tab") || "").trim();
+    const fromStorage = (window.localStorage.getItem(trialTabStorageKey) || "").trim();
+    const nextTab = TRIAL_DETAIL_TAB_IDS.has(fromQuery)
+      ? fromQuery
+      : TRIAL_DETAIL_TAB_IDS.has(fromStorage)
+      ? fromStorage
+      : "overview";
+    setActiveTab(nextTab);
+  }, [trialTabStorageKey]);
 
-    useEffect(() => {
-        if (typeof window === "undefined") return;
-        const params = new URLSearchParams(window.location.search);
-        const openTask = (params.get("openTask") || "").trim();
-        if (!openTask) return;
-        setPendingOpenSetupTaskId(openTask);
-        setActiveTab("study-setup-wizard");
-    }, [trialId]);
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialTabStorageKey) return;
+    const normalizedTab = TRIAL_DETAIL_TAB_IDS.has(activeTab) ? activeTab : "overview";
+    window.localStorage.setItem(trialTabStorageKey, normalizedTab);
 
-    const { data: protocols = [] } = trpc.documents.list.useQuery(
-        { trialId, demoMode: currentDataMode },
-        {
-            enabled: isValidTrialId,
-            staleTime: 0,
-            refetchOnMount: "always",
-            refetchOnWindowFocus: true,
-            refetchOnReconnect: true,
-            refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
-            refetchIntervalInBackground: true,
-        }
-    );
+    const params = new URLSearchParams(window.location.search);
+    if (normalizedTab === "overview") {
+      params.delete("tab");
+    } else {
+      params.set("tab", normalizedTab);
+    }
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [activeTab, trialTabStorageKey]);
 
-    const protocolId = protocols?.[0]?.id;
-    const { data: existingScaffold } = trpc.studySetupWizard.getScaffold.useQuery(
-        { protocolId: protocolId || 0, demoMode: currentDataMode },
-        { enabled: !!protocolId && protocolId > 0 }
-    );
-    const {
-        data: executionMapSummary,
-        refetch: refetchExecutionMapSummary,
-    } = trpc.map.getByTrial.useQuery(
-        { trialId, includeArchived: false, demoMode: currentDataMode },
-        { enabled: isValidTrialId }
-    );
-    const confirmSuggestedMutation = trpc.map.confirmSuggested.useMutation();
-    const launchMapMutation = trpc.map.launch.useMutation();
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const openTask = (params.get("openTask") || "").trim();
+    if (!openTask) return;
+    setPendingOpenSetupTaskId(openTask);
+    setActiveTab("study-setup-wizard");
+  }, [trialId]);
 
-    const map = useMapStore((store) => store.map);
-    const mapPhases = useMapStore((store) => store.phases);
-    const mapTasks = useMapStore((store) => store.tasks);
-    const mapDependencies = useMapStore((store) => store.dependencies);
-    const mapSections = useMapStore((store) => store.protocolMapSections);
-    const loadExecutionMap = useMapStore((store) => store.loadMap);
-    const addExecutionTask = useMapStore((store) => store.addTask);
-    const updateExecutionTask = useMapStore((store) => store.updateTask);
-    const removeExecutionTask = useMapStore((store) => store.removeTask);
-    const reorderExecutionTasks = useMapStore((store) => store.reorderTasks);
-    const moveExecutionTask = useMapStore((store) => store.moveTask);
-    const addExecutionDependency = useMapStore((store) => store.addDependency);
-    const removeExecutionDependency = useMapStore((store) => store.removeDependency);
+  const { data: protocols = [] } = trpc.documents.list.useQuery(
+    { trialId, demoMode: currentDataMode },
+    {
+      enabled: isValidTrialId,
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
+      refetchIntervalInBackground: true,
+    }
+  );
 
-    const bootstrapGuardRef = useRef<string | null>(null);
-    const generationRunRef = useRef<number>(0);
-    const cancelledGenerationRunsRef = useRef<Set<number>>(new Set());
-    const normalizedMapTrialId = String(map?.trialId || "").toLowerCase();
-    const isCurrentTrialExecutionMap =
-        Boolean(map?.id) &&
-        Boolean(executionMapSummary?.id) &&
-        map?.id === executionMapSummary?.id &&
-        normalizedMapTrialId === trialId;
+  const protocolId = protocols?.[0]?.id;
+  const { data: existingScaffold } = trpc.studySetupWizard.getScaffold.useQuery(
+    { protocolId: protocolId || 0, demoMode: currentDataMode },
+    { enabled: !!protocolId && protocolId > 0 }
+  );
+  const {
+    data: executionMapSummary,
+    refetch: refetchExecutionMapSummary,
+  } = trpc.map.getByTrial.useQuery(
+    { trialId, includeArchived: false, demoMode: currentDataMode },
+    { enabled: isValidTrialId }
+  );
+  const confirmSuggestedMutation = trpc.map.confirmSuggested.useMutation();
+  const launchMapMutation = trpc.map.launch.useMutation();
 
-    const scopedMapPhases = isCurrentTrialExecutionMap ? mapPhases : [];
-    const scopedMapTasks = isCurrentTrialExecutionMap ? mapTasks : [];
-    const scopedMapDependencies = isCurrentTrialExecutionMap ? mapDependencies : [];
-    const scopedMapSections = isCurrentTrialExecutionMap ? mapSections : [];
-    const setupMapStatus = isCurrentTrialExecutionMap ? map?.status : executionMapSummary?.status;
-    const isSetupPlanLaunched = setupMapStatus === "active";
+  // Patient and Visit queries/mutations
+  const patientsQuery = trpc.patients.listByTrial.useQuery(
+    { trialId: trialId || "" },
+    { enabled: activeTab === "patients" && Boolean(trialId) }
+  );
 
-    const { data: trial } = trpc.trials.getById.useQuery(
-        { id: trialId, demoMode: currentDataMode },
-        { enabled: isValidTrialId }
-    );
-    const { data: trialContext } = trpc.trials.getContext.useQuery(
-        {
-            id: trialId,
-            demoMode: currentDataMode,
-            include: ["documents", "telemetry", "execution", "suggestions", "insights"],
-            pageContext: activeTab,
-            emitTelemetry: false,
-        },
-        {
-            enabled: isValidTrialId && (activeTab === "overview" || activeTab === "document-hub"),
-            staleTime: 0,
-            refetchOnMount: "always",
-            refetchOnWindowFocus: true,
-            refetchOnReconnect: true,
-            refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
-            refetchIntervalInBackground: true,
-        }
-    );
+  const generateCodeQuery = trpc.patients.generateCode.useQuery(undefined, {
+    enabled: isEnrollDialogOpen,
+    refetchOnWindowFocus: false,
+  });
 
-    useEffect(() => {
-        if (!isValidTrialId) {
-            toast.error("Invalid trial ID");
-            navigate("/trial-workspace");
-        }
-    }, [isValidTrialId, navigate]);
+  // Auto-fill patient code when dialog opens and code is generated
+  useEffect(() => {
+    if (isEnrollDialogOpen && generateCodeQuery.data?.patient_code) {
+      setEnrollForm(prev => ({
+        ...prev,
+        patientCode: generateCodeQuery.data.patient_code,
+      }));
+    }
+  }, [isEnrollDialogOpen, generateCodeQuery.data]);
 
-    useEffect(() => {
-        if (activeTab !== "study-setup-wizard") {
-            setIsSetupFullscreenVisible(false);
-            setIsSetupFullscreenOpen(false);
-        }
-    }, [activeTab]);
+  const enrollPatientMutation = trpc.patients.enrollPatient.useMutation({
+    onSuccess: () => {
+      toast.success("Patient successfully enrolled!");
+      setIsEnrollDialogOpen(false);
+      // Reset form
+      setEnrollForm({
+        firstName: "",
+        lastName: "",
+        patientCode: "",
+        gender: "male",
+        dateOfBirth: "",
+        email: "",
+        phone: "",
+        consentSigned: true,
+        consentDate: new Date().toISOString().split("T")[0],
+        screeningNotes: "",
+        notes: "",
+      });
+      void patientsQuery.refetch();
+      void utils.trials.getById.invalidate({ id: trialId });
+      void utils.trials.list.invalidate();
+    },
+    onError: (err) => {
+      toast.error(`Enrollment failed: ${err.message}`);
+    },
+  });
 
-    useEffect(() => {
-        if (!isSetupFullscreenOpen || typeof window === "undefined") return;
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = "hidden";
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                setIsSetupFullscreenVisible(false);
-            }
-        };
-        window.addEventListener("keydown", onKeyDown);
-        return () => {
-            window.removeEventListener("keydown", onKeyDown);
-            document.body.style.overflow = previousOverflow;
-        };
-    }, [isSetupFullscreenOpen]);
+  const selectedPatient = useMemo(() => {
+    if (!selectedPatientId || !patientsQuery.data) return null;
+    return patientsQuery.data.find(p => p.patient_id === selectedPatientId) || null;
+  }, [selectedPatientId, patientsQuery.data]);
 
-    useEffect(() => {
-        if (!isSetupFullscreenOpen || isSetupFullscreenVisible || typeof window === "undefined") return;
-        const timeout = window.setTimeout(() => {
-            setIsSetupFullscreenOpen(false);
-        }, 1400);
-        return () => window.clearTimeout(timeout);
-    }, [isSetupFullscreenOpen, isSetupFullscreenVisible]);
+  const visitsQuery = trpc.patients.listVisits.useQuery(
+    { patientId: selectedPatientId || "", trialId: trialId || "" },
+    { enabled: Boolean(selectedPatientId && trialId) }
+  );
 
-    const openSetupFullscreen = () => {
-        if (isSetupFullscreenOpen) return;
-        setIsSetupFullscreenOpen(true);
-        if (typeof window === "undefined") {
-            setIsSetupFullscreenVisible(true);
-            return;
-        }
-        window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(() => {
-                setIsSetupFullscreenVisible(true);
-            });
-        });
-    };
+  const createVisitMutation = trpc.patients.createVisit.useMutation({
+    onSuccess: () => {
+      toast.success("Visit successfully scheduled!");
+      setIsScheduleVisitDialogOpen(false);
+      setVisitForm({
+        visitDate: new Date().toISOString().split("T")[0],
+        visitTime: "09:00",
+        visitType: "follow_up",
+        notes: "",
+        location: "Main Clinic",
+      });
+      void visitsQuery.refetch();
+    },
+    onError: (err) => {
+      toast.error(`Scheduling failed: ${err.message}`);
+    },
+  });
 
-    useEffect(() => {
-        if (activeTab !== "study-setup-wizard") return;
-        if (!isSetupPlanLaunched) return;
-        if (!isSetupFullscreenOpen && !isSetupFullscreenVisible) return;
+  const map = useMapStore((store) => store.map);
+  const mapPhases = useMapStore((store) => store.phases);
+  const mapTasks = useMapStore((store) => store.tasks);
+  const mapDependencies = useMapStore((store) => store.dependencies);
+  const mapSections = useMapStore((store) => store.protocolMapSections);
+  const loadExecutionMap = useMapStore((store) => store.loadMap);
+  const addExecutionTask = useMapStore((store) => store.addTask);
+  const updateExecutionTask = useMapStore((store) => store.updateTask);
+  const removeExecutionTask = useMapStore((store) => store.removeTask);
+  const reorderExecutionTasks = useMapStore((store) => store.reorderTasks);
+  const moveExecutionTask = useMapStore((store) => store.moveTask);
+  const addExecutionDependency = useMapStore((store) => store.addDependency);
+  const removeExecutionDependency = useMapStore((store) => store.removeDependency);
+
+  const bootstrapGuardRef = useRef<string | null>(null);
+  const generationRunRef = useRef<number>(0);
+  const cancelledGenerationRunsRef = useRef<Set<number>>(new Set());
+  const normalizedMapTrialId = String(map?.trialId || "").toLowerCase();
+  const isCurrentTrialExecutionMap =
+    Boolean(map?.id) &&
+    Boolean(executionMapSummary?.id) &&
+    map?.id === executionMapSummary?.id &&
+    normalizedMapTrialId === trialId;
+
+  const scopedMapPhases = isCurrentTrialExecutionMap ? mapPhases : [];
+  const scopedMapTasks = isCurrentTrialExecutionMap ? mapTasks : [];
+  const scopedMapDependencies = isCurrentTrialExecutionMap ? mapDependencies : [];
+  const scopedMapSections = isCurrentTrialExecutionMap ? mapSections : [];
+  const setupMapStatus = isCurrentTrialExecutionMap ? map?.status : executionMapSummary?.status;
+  const isSetupPlanLaunched = setupMapStatus === "active";
+
+  const { data: trial } = trpc.trials.getById.useQuery(
+    { id: trialId, demoMode: currentDataMode },
+    { enabled: isValidTrialId }
+  );
+  const { data: trialContext } = trpc.trials.getContext.useQuery(
+    {
+      id: trialId,
+      demoMode: currentDataMode,
+      include: ["documents", "telemetry", "execution", "suggestions", "insights"],
+      pageContext: activeTab,
+      emitTelemetry: false,
+    },
+    {
+      enabled: isValidTrialId && (activeTab === "overview" || activeTab === "document-hub"),
+      staleTime: 0,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchInterval: activeTab === "overview" || activeTab === "document-hub" ? 5000 : false,
+      refetchIntervalInBackground: true,
+    }
+  );
+
+  useEffect(() => {
+    if (!isValidTrialId) {
+      toast.error("Invalid trial ID");
+      navigate("/trial-workspace");
+    }
+  }, [isValidTrialId, navigate]);
+
+  useEffect(() => {
+    if (activeTab !== "study-setup-wizard") {
+      setIsSetupFullscreenVisible(false);
+      setIsSetupFullscreenOpen(false);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isSetupFullscreenOpen || typeof window === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
         setIsSetupFullscreenVisible(false);
-        setIsSetupFullscreenOpen(false);
-    }, [activeTab, isSetupPlanLaunched, isSetupFullscreenOpen, isSetupFullscreenVisible]);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isSetupFullscreenOpen]);
 
-    useEffect(() => {
-        if (typeof window === "undefined" || !trialId) return;
+  useEffect(() => {
+    if (!isSetupFullscreenOpen || isSetupFullscreenVisible || typeof window === "undefined") return;
+    const timeout = window.setTimeout(() => {
+      setIsSetupFullscreenOpen(false);
+    }, 1400);
+    return () => window.clearTimeout(timeout);
+  }, [isSetupFullscreenOpen, isSetupFullscreenVisible]);
 
-        const readAssignedMembers = () => {
-            const exactKey = `trial-team:${currentDataMode}:${trialId}`;
-            let stored = window.localStorage.getItem(exactKey);
-
-            if (!stored) {
-                const prefix = `trial-team:${currentDataMode}:`;
-                const trialIdLower = trialId.toLowerCase();
-                for (let i = 0; i < window.localStorage.length; i += 1) {
-                    const key = window.localStorage.key(i);
-                    if (!key || !key.startsWith(prefix)) continue;
-                    const candidateId = key.slice(prefix.length).toLowerCase();
-                    if (candidateId !== trialIdLower) continue;
-                    stored = window.localStorage.getItem(key);
-                    if (stored) break;
-                }
-            }
-
-            if (!stored) {
-                setAssignedMemberIds([]);
-                return;
-            }
-            try {
-                const parsed = JSON.parse(stored);
-                setAssignedMemberIds(Array.isArray(parsed) ? parsed : []);
-            } catch {
-                setAssignedMemberIds([]);
-            }
-        };
-
-        readAssignedMembers();
-
-        const onStorage = (event: StorageEvent) => {
-            if (!event.key || !event.key.startsWith(`trial-team:${currentDataMode}:`)) return;
-            readAssignedMembers();
-        };
-        const onTeamUpdated = (event: Event) => {
-            const customEvent = event as CustomEvent<{ trialId?: string; mode?: string }>;
-            const eventTrialId = String(customEvent.detail?.trialId || "").toLowerCase();
-            const eventMode = String(customEvent.detail?.mode || "");
-            if (eventMode && eventMode !== currentDataMode) return;
-            if (eventTrialId && eventTrialId !== trialId) return;
-            readAssignedMembers();
-        };
-        const onWindowFocus = () => readAssignedMembers();
-
-        window.addEventListener("storage", onStorage);
-        window.addEventListener("trial-team-updated", onTeamUpdated as EventListener);
-        window.addEventListener("focus", onWindowFocus);
-        return () => {
-            window.removeEventListener("storage", onStorage);
-            window.removeEventListener("trial-team-updated", onTeamUpdated as EventListener);
-            window.removeEventListener("focus", onWindowFocus);
-        };
-    }, [trialId, currentDataMode]);
-
-    useEffect(() => {
-        const mapId = executionMapSummary?.id;
-        if (!mapId) return;
-        if (generatedSetupMapId && generatedSetupMapId === mapId) return;
-        void loadExecutionMap(mapId).catch((error) => {
-            console.error("Failed to load execution map:", error);
-            toast.error("Failed to load execution map");
-        });
-    }, [executionMapSummary?.id, loadExecutionMap, generatedSetupMapId]);
-
-    const utils = trpc.useUtils();
-    const updateTrial = trpc.trials.update.useMutation({
-        onSuccess: async () => {
-            await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
-            await utils.trials.list.invalidate({ demoMode: currentDataMode });
-            await utils.trials.getContext.invalidate({ id: trialId, demoMode: currentDataMode });
-            await utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode });
-            if (executionMapSummary?.id) {
-                await loadExecutionMap(executionMapSummary.id).catch(() => undefined);
-            }
-            toast.success("Trial updated");
-        },
-        onError: (error) => {
-            toast.error(`Failed to update trial: ${error.message}`);
-        },
+  const openSetupFullscreen = () => {
+    if (isSetupFullscreenOpen) return;
+    setIsSetupFullscreenOpen(true);
+    if (typeof window === "undefined") {
+      setIsSetupFullscreenVisible(true);
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setIsSetupFullscreenVisible(true);
+      });
     });
-    const deleteTrialMutation = trpc.trials.delete.useMutation({
-        onSuccess: async () => {
-            await utils.trials.list.invalidate({ demoMode: currentDataMode });
-            await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
-            await utils.documents.list.invalidate({ trialId, demoMode: currentDataMode });
-            if (typeof window !== "undefined") {
-                window.localStorage.removeItem(`trial-team:${currentDataMode}:${trialId}`);
-            }
-            toast.success("Trial deleted");
-            navigate("/trial-workspace");
-        },
-        onError: (error) => {
-            toast.error(`Failed to delete trial: ${error.message}`);
-        },
-    });
+  };
 
-    const trialTeamMembers = useMemo(
-        () =>
-            (state.teamMembers || [])
-                .filter((member) => assignedMemberIds.includes(member.id))
-                .map((member) => ({
-                    id: member.id,
-                    name: member.name,
-                    role: member.clinicalRole || member.role,
-                    initials: member.initials,
-                    avatar: member.avatar || null,
-                })),
-        [state.teamMembers, assignedMemberIds]
-    );
-    const scaffoldAssignmentMembers = useMemo(
-        () =>
-            (state.teamMembers || [])
-                .filter((member) => assignedMemberIds.includes(member.id))
-                .map(toAssignmentMemberShape),
-        [state.teamMembers, assignedMemberIds]
-    );
-    const fallbackScaffoldAssignmentMembers = useMemo(
-        () => (state.teamMembers || []).map(toAssignmentMemberShape),
-        [state.teamMembers]
-    );
-    const effectiveScaffoldAssignmentMembers = useMemo(() => {
-        const selected = scaffoldAssignmentMembers;
-        const universe = fallbackScaffoldAssignmentMembers;
-        const seeded = selected.length > 0 ? selected : universe;
-        const membersById = new Map<string, (typeof seeded)[number]>();
+  useEffect(() => {
+    if (activeTab !== "study-setup-wizard") return;
+    if (!isSetupPlanLaunched) return;
+    if (!isSetupFullscreenOpen && !isSetupFullscreenVisible) return;
+    setIsSetupFullscreenVisible(false);
+    setIsSetupFullscreenOpen(false);
+  }, [activeTab, isSetupPlanLaunched, isSetupFullscreenOpen, isSetupFullscreenVisible]);
 
-        for (const member of seeded) {
-            membersById.set(String(member.id), member);
+  useEffect(() => {
+    if (typeof window === "undefined" || !trialId) return;
+
+    const readAssignedMembers = () => {
+      const exactKey = `trial-team:${currentDataMode}:${trialId}`;
+      let stored = window.localStorage.getItem(exactKey);
+
+      if (!stored) {
+        const prefix = `trial-team:${currentDataMode}:`;
+        const trialIdLower = trialId.toLowerCase();
+        for (let i = 0; i < window.localStorage.length; i += 1) {
+          const key = window.localStorage.key(i);
+          if (!key || !key.startsWith(prefix)) continue;
+          const candidateId = key.slice(prefix.length).toLowerCase();
+          if (candidateId !== trialIdLower) continue;
+          stored = window.localStorage.getItem(key);
+          if (stored) break;
         }
+      }
 
-        if (selected.length > 0) {
-            const roleToken = (member: { role?: string; clinicalRole?: string }) =>
-                normalizeRoleToken(`${member.clinicalRole || ""} ${member.role || ""}`);
-            const hasRole = (tokens: string[]) =>
-                Array.from(membersById.values()).some((member) => tokens.includes(roleToken(member)));
-            const addRoleCoverage = (tokens: string[]) => {
-                if (hasRole(tokens)) return;
-                const match = universe.find((member) => tokens.includes(roleToken(member)));
-                if (match) membersById.set(String(match.id), match);
-            };
-
-            addRoleCoverage(["pi", "sub_i"]);
-            addRoleCoverage(["crc", "study_coordinator"]);
-            addRoleCoverage(["nurse"]);
-            addRoleCoverage(["pharmacist", "lab_tech", "data_manager", "regulatory_coordinator"]);
-        }
-
-        return Array.from(membersById.values());
-    }, [scaffoldAssignmentMembers, fallbackScaffoldAssignmentMembers]);
-
-    const persistAssignedMembers = (nextIds: string[]) => {
-        setAssignedMemberIds(nextIds);
-        if (typeof window !== "undefined") {
-            const storageKey = `trial-team:${currentDataMode}:${trialId}`;
-            const payload = JSON.stringify(nextIds);
-            window.localStorage.setItem(storageKey, payload);
-            window.dispatchEvent(
-                new CustomEvent("trial-team-updated", {
-                    detail: { trialId, mode: currentDataMode },
-                })
-            );
-        }
+      if (!stored) {
+        setAssignedMemberIds([]);
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stored);
+        setAssignedMemberIds(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setAssignedMemberIds([]);
+      }
     };
 
-    const toggleAssignedMember = (memberId: string) => {
-        const nextIds = assignedMemberIds.includes(memberId)
-            ? assignedMemberIds.filter((id) => id !== memberId)
-            : [...assignedMemberIds, memberId];
-        persistAssignedMembers(nextIds);
-    };
+    readAssignedMembers();
 
-    const tabs = [
-        { id: "overview", label: "Overview", icon: LayoutGrid },
-        { id: "document-hub", label: "Document Hub", icon: FolderOpen },
-        { id: "study-setup-wizard", label: "Study Setup Agent", icon: Wand2 },
-        { id: "visit-template", label: "Visit Template", icon: Calendar },
-        { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
-        { id: "team", label: "Team", icon: UsersIcon },
-        { id: "patients", label: "Patients", icon: UserCheck },
-        { id: "notifications", label: "Notifications", icon: Bell },
-        { id: "settings", label: "Settings", icon: Settings },
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || !event.key.startsWith(`trial-team:${currentDataMode}:`)) return;
+      readAssignedMembers();
+    };
+    const onTeamUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ trialId?: string; mode?: string }>;
+      const eventTrialId = String(customEvent.detail?.trialId || "").toLowerCase();
+      const eventMode = String(customEvent.detail?.mode || "");
+      if (eventMode && eventMode !== currentDataMode) return;
+      if (eventTrialId && eventTrialId !== trialId) return;
+      readAssignedMembers();
+    };
+    const onWindowFocus = () => readAssignedMembers();
+
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("trial-team-updated", onTeamUpdated as EventListener);
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("trial-team-updated", onTeamUpdated as EventListener);
+      window.removeEventListener("focus", onWindowFocus);
+    };
+  }, [trialId, currentDataMode]);
+
+  useEffect(() => {
+    const mapId = executionMapSummary?.id;
+    if (!mapId) return;
+    if (generatedSetupMapId && generatedSetupMapId === mapId) return;
+    void loadExecutionMap(mapId).catch((error) => {
+      console.error("Failed to load execution map:", error);
+      toast.error("Failed to load execution map");
+    });
+  }, [executionMapSummary?.id, loadExecutionMap, generatedSetupMapId]);
+
+  const utils = trpc.useUtils();
+  const updateTrial = trpc.trials.update.useMutation({
+    onSuccess: async () => {
+      await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.trials.getContext.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode });
+      if (executionMapSummary?.id) {
+        await loadExecutionMap(executionMapSummary.id).catch(() => undefined);
+      }
+      toast.success("Trial updated");
+    },
+    onError: (error) => {
+      toast.error(`Failed to update trial: ${error.message}`);
+    },
+  });
+  const deleteTrialMutation = trpc.trials.delete.useMutation({
+    onSuccess: async () => {
+      await utils.trials.list.invalidate({ demoMode: currentDataMode });
+      await utils.trials.getById.invalidate({ id: trialId, demoMode: currentDataMode });
+      await utils.documents.list.invalidate({ trialId, demoMode: currentDataMode });
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(`trial-team:${currentDataMode}:${trialId}`);
+      }
+      toast.success("Trial deleted");
+      navigate("/trial-workspace");
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete trial: ${error.message}`);
+    },
+  });
+
+  const trialTeamMembers = useMemo(
+    () =>
+      (state.teamMembers || [])
+        .filter((member) => assignedMemberIds.includes(member.id))
+        .map((member) => ({
+          id: member.id,
+          name: member.name,
+          role: member.clinicalRole || member.role,
+          initials: member.initials,
+          avatar: member.avatar || null,
+        })),
+    [state.teamMembers, assignedMemberIds]
+  );
+  const scaffoldAssignmentMembers = useMemo(
+    () =>
+      (state.teamMembers || [])
+        .filter((member) => assignedMemberIds.includes(member.id))
+        .map(toAssignmentMemberShape),
+    [state.teamMembers, assignedMemberIds]
+  );
+  const fallbackScaffoldAssignmentMembers = useMemo(
+    () => (state.teamMembers || []).map(toAssignmentMemberShape),
+    [state.teamMembers]
+  );
+  const effectiveScaffoldAssignmentMembers = useMemo(() => {
+    const selected = scaffoldAssignmentMembers;
+    const universe = fallbackScaffoldAssignmentMembers;
+    const seeded = selected.length > 0 ? selected : universe;
+    const membersById = new Map<string, (typeof seeded)[number]>();
+
+    for (const member of seeded) {
+      membersById.set(String(member.id), member);
+    }
+
+    if (selected.length > 0) {
+      const roleToken = (member: { role?: string; clinicalRole?: string }) =>
+        normalizeRoleToken(`${member.clinicalRole || ""} ${member.role || ""}`);
+      const hasRole = (tokens: string[]) =>
+        Array.from(membersById.values()).some((member) => tokens.includes(roleToken(member)));
+      const addRoleCoverage = (tokens: string[]) => {
+        if (hasRole(tokens)) return;
+        const match = universe.find((member) => tokens.includes(roleToken(member)));
+        if (match) membersById.set(String(match.id), match);
+      };
+
+      addRoleCoverage(["pi", "sub_i"]);
+      addRoleCoverage(["crc", "study_coordinator"]);
+      addRoleCoverage(["nurse"]);
+      addRoleCoverage(["pharmacist", "lab_tech", "data_manager", "regulatory_coordinator"]);
+    }
+
+    return Array.from(membersById.values());
+  }, [scaffoldAssignmentMembers, fallbackScaffoldAssignmentMembers]);
+
+  const persistAssignedMembers = (nextIds: string[]) => {
+    setAssignedMemberIds(nextIds);
+    if (typeof window !== "undefined") {
+      const storageKey = `trial-team:${currentDataMode}:${trialId}`;
+      const payload = JSON.stringify(nextIds);
+      window.localStorage.setItem(storageKey, payload);
+      window.dispatchEvent(
+        new CustomEvent("trial-team-updated", {
+          detail: { trialId, mode: currentDataMode },
+        })
+      );
+    }
+  };
+
+  const toggleAssignedMember = (memberId: string) => {
+    const nextIds = assignedMemberIds.includes(memberId)
+      ? assignedMemberIds.filter((id) => id !== memberId)
+      : [...assignedMemberIds, memberId];
+    persistAssignedMembers(nextIds);
+  };
+
+  const tabs = [
+    { id: "overview", label: "Overview", icon: LayoutGrid },
+    { id: "document-hub", label: "Document Hub", icon: FolderOpen },
+    { id: "study-setup-wizard", label: "Study Setup Agent", icon: Wand2 },
+    { id: "visit-template", label: "Visit Template", icon: Calendar },
+    { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
+    { id: "team", label: "Team", icon: UsersIcon },
+    { id: "patients", label: "Patients", icon: UserCheck },
+    { id: "notifications", label: "Notifications", icon: Bell },
+    { id: "settings", label: "Settings", icon: Settings },
+  ];
+
+  const mockBookmarks = [
+    {
+      id: "edc",
+      type: "EDC",
+      name: "Medidata Rave",
+      url: "https://rave.medidata.com",
+      notes: "Primary data capture system for this trial.",
+    },
+    {
+      id: "ctms",
+      type: "CTMS",
+      name: "SiteVault CTMS",
+      url: "https://sitevault.com",
+      notes: "Subject tracking + visit milestones.",
+    },
+    {
+      id: "etmf",
+      type: "eTMF",
+      name: "Veeva Vault",
+      url: "https://veeva.com/vault",
+      notes: "Essential documents + regulatory binder.",
+    },
+    {
+      id: "irt",
+      type: "IWRS / IRT",
+      name: "4G Clinical",
+      url: "https://4gclinical.com",
+      notes: "Randomization + drug supply.",
+    },
+  ];
+
+  const getFaviconUrl = (url: string) => {
+    try {
+      const hostname = new URL(url).hostname.replace(/^www\./, "");
+      return `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`;
+    } catch {
+      return "https://www.google.com/s2/favicons?domain=example.com&sz=64";
+    }
+  };
+
+  const getSponsorLogoDomain = (sponsor?: string | null) => {
+    if (!sponsor) return null;
+    const normalized = sponsor.toLowerCase();
+    const knownDomains: Array<{ match: string; domain: string }> = [
+      { match: "novartis", domain: "novartis.com" },
+      { match: "roche", domain: "roche.com" },
+      { match: "pfizer", domain: "pfizer.com" },
+      { match: "astrazeneca", domain: "astrazeneca.com" },
+      { match: "johnson", domain: "jnj.com" },
+      { match: "takeda", domain: "takeda.com" },
+      { match: "biogen", domain: "biogen.com" },
+      { match: "sanofi", domain: "sanofi.com" },
+      { match: "merck", domain: "merck.com" },
+      { match: "eli lilly", domain: "lilly.com" },
+      { match: "bayer", domain: "bayer.com" },
+      { match: "amgen", domain: "amgen.com" },
+      { match: "bristol", domain: "bms.com" },
+      { match: "gsk", domain: "gsk.com" },
+      { match: "moderna", domain: "modernatx.com" },
+      { match: "beigene", domain: "beigene.com" },
     ];
 
-    const mockBookmarks = [
-        {
-            id: "edc",
-            type: "EDC",
-            name: "Medidata Rave",
-            url: "https://rave.medidata.com",
-            notes: "Primary data capture system for this trial.",
-        },
-        {
-            id: "ctms",
-            type: "CTMS",
-            name: "SiteVault CTMS",
-            url: "https://sitevault.com",
-            notes: "Subject tracking + visit milestones.",
-        },
-        {
-            id: "etmf",
-            type: "eTMF",
-            name: "Veeva Vault",
-            url: "https://veeva.com/vault",
-            notes: "Essential documents + regulatory binder.",
-        },
-        {
-            id: "irt",
-            type: "IWRS / IRT",
-            name: "4G Clinical",
-            url: "https://4gclinical.com",
-            notes: "Randomization + drug supply.",
-        },
-    ];
+    const exact = knownDomains.find((entry) => normalized.includes(entry.match));
+    if (exact) return exact.domain;
 
-    const getFaviconUrl = (url: string) => {
-        try {
-            const hostname = new URL(url).hostname.replace(/^www\./, "");
-            return `https://www.google.com/s2/favicons?domain=${hostname}&sz=64`;
-        } catch {
-            return "https://www.google.com/s2/favicons?domain=example.com&sz=64";
-        }
-    };
+    const token = normalized
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .split(/\s+/)
+      .find((part) => part.length > 2);
+    if (!token) return null;
+    return `${token}.com`;
+  };
 
-    const getSponsorLogoDomain = (sponsor?: string | null) => {
-        if (!sponsor) return null;
-        const normalized = sponsor.toLowerCase();
-        const knownDomains: Array<{ match: string; domain: string }> = [
-            { match: "novartis", domain: "novartis.com" },
-            { match: "roche", domain: "roche.com" },
-            { match: "pfizer", domain: "pfizer.com" },
-            { match: "astrazeneca", domain: "astrazeneca.com" },
-            { match: "johnson", domain: "jnj.com" },
-            { match: "takeda", domain: "takeda.com" },
-            { match: "biogen", domain: "biogen.com" },
-            { match: "sanofi", domain: "sanofi.com" },
-            { match: "merck", domain: "merck.com" },
-            { match: "eli lilly", domain: "lilly.com" },
-            { match: "bayer", domain: "bayer.com" },
-            { match: "amgen", domain: "amgen.com" },
-            { match: "bristol", domain: "bms.com" },
-            { match: "gsk", domain: "gsk.com" },
-            { match: "moderna", domain: "modernatx.com" },
-            { match: "beigene", domain: "beigene.com" },
-        ];
+  const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation();
+  const importLegacyScaffold = trpc.map.importLegacyScaffold.useMutation();
 
-        const exact = knownDomains.find((entry) => normalized.includes(entry.match));
-        if (exact) return exact.domain;
+  const autoActivateGeneratedMap = async (mapId: string) => {
+    const trialStatus = String(trial?.status || "").toLowerCase();
+    const shouldAutoActivate =
+      (currentDataMode === "sample" || currentDataMode === "full") &&
+      (trialStatus === "active" || trialStatus === "recruiting");
 
-        const token = normalized
-            .replace(/[^a-z0-9 ]+/g, " ")
-            .split(/\s+/)
-            .find((part) => part.length > 2);
-        if (!token) return null;
-        return `${token}.com`;
-    };
+    if (!shouldAutoActivate) {
+      return { launched: false, autoConfirmed: 0 };
+    }
 
-    const generateScaffold = trpc.studySetupWizard.generateScaffold.useMutation();
-    const importLegacyScaffold = trpc.map.importLegacyScaffold.useMutation();
+    try {
+      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
+      await launchMapMutation.mutateAsync({ mapId });
+      await refetchExecutionMapSummary();
+      return { launched: true, autoConfirmed: confirmation.updated };
+    } catch (error) {
+      console.warn("Failed to auto-activate generated execution map:", error);
+      return { launched: false, autoConfirmed: 0 };
+    }
+  };
 
-    const autoActivateGeneratedMap = async (mapId: string) => {
-        const trialStatus = String(trial?.status || "").toLowerCase();
-        const shouldAutoActivate =
-            (currentDataMode === "sample" || currentDataMode === "full") &&
-            (trialStatus === "active" || trialStatus === "recruiting");
+  const handleGenerateScaffold = async () => {
+    if (!protocols || protocols.length === 0) {
+      toast.error("No protocol found", {
+        description: "Please upload a protocol in the Document Hub first.",
+      });
+      return;
+    }
 
-        if (!shouldAutoActivate) {
-            return { launched: false, autoConfirmed: 0 };
-        }
+    if (!trial) return;
 
-        try {
-            const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
-            await launchMapMutation.mutateAsync({ mapId });
-            await refetchExecutionMapSummary();
-            return { launched: true, autoConfirmed: confirmation.updated };
-        } catch (error) {
-            console.warn("Failed to auto-activate generated execution map:", error);
-            return { launched: false, autoConfirmed: 0 };
-        }
-    };
+    const runId = Date.now();
+    generationRunRef.current = runId;
+    cancelledGenerationRunsRef.current.delete(runId);
+    setGeneratedSetupMapId(null);
+    setIsGeneratingScaffold(true);
+    logEvent({
+      eventType: "trial_setup_started",
+      action: "start_generate",
+      entityType: "trial",
+      entityId: trialId,
+      payload: { demoMode: currentDataMode },
+      aiInvolved: true,
+    });
 
-    const handleGenerateScaffold = async () => {
-        if (!protocols || protocols.length === 0) {
-            toast.error("No protocol found", {
-                description: "Please upload a protocol in the Document Hub first.",
-            });
-            return;
-        }
+    try {
+      await generateScaffold.mutateAsync({
+        protocolId: protocols[0].id,
+        trialId: trial.id,
+        demoMode: currentDataMode,
+      });
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      const imported = await importLegacyScaffold.mutateAsync({
+        trialId: trial.id,
+        protocolId: protocols[0].id,
+        clearExisting: true,
+        demoMode: currentDataMode,
+        trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
+        trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
+        assignmentMembers: effectiveScaffoldAssignmentMembers,
+      });
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      const refreshedSummary = await refetchExecutionMapSummary();
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      const resolvedMapId =
+        imported?.mapId || refreshedSummary.data?.id || executionMapSummary?.id || null;
+      if (resolvedMapId) {
+        setGeneratedSetupMapId(resolvedMapId);
+      } else {
+        toast.error("Plan was generated, but map sync is still in progress.");
+      }
+      const activation = resolvedMapId
+        ? await autoActivateGeneratedMap(resolvedMapId)
+        : { launched: false, autoConfirmed: 0 };
+      if (activation.launched && resolvedMapId) {
+        await loadExecutionMap(resolvedMapId).catch(() => undefined);
+      }
+      logEvent({
+        eventType: "trial_setup_step_completed",
+        action: "generated",
+        entityType: "task_scaffold",
+        payload: { trialId, demoMode: currentDataMode, mapId: resolvedMapId },
+        aiInvolved: true,
+      });
+      if (activation.launched) {
+        const suffix =
+          activation.autoConfirmed > 0
+            ? ` (${activation.autoConfirmed} suggested task${
+                activation.autoConfirmed === 1 ? "" : "s"
+              } auto-confirmed)`
+            : "";
+        toast.success(`Execution map launched${suffix}`);
+      } else {
+        toast.success("Execution map generated");
+      }
+    } catch (error: any) {
+      if (cancelledGenerationRunsRef.current.has(runId)) {
+        return;
+      }
+      console.error("Failed to generate scaffold:", error);
+      toast.error("Failed to generate execution plan", {
+        description: error?.message || "Please upload a protocol in Document Hub and try again.",
+      });
+    } finally {
+      cancelledGenerationRunsRef.current.delete(runId);
+      setIsGeneratingScaffold(false);
+    }
+  };
 
-        if (!trial) return;
+  const handleCancelGenerateScaffold = () => {
+    if (!isGeneratingScaffold) return;
+    const currentRunId = generationRunRef.current;
+    if (currentRunId) {
+      cancelledGenerationRunsRef.current.add(currentRunId);
+    }
+    setIsGeneratingScaffold(false);
+    toast.message("Plan generation stopped");
+  };
 
-        const runId = Date.now();
-        generationRunRef.current = runId;
-        cancelledGenerationRunsRef.current.delete(runId);
-        setGeneratedSetupMapId(null);
-        setIsGeneratingScaffold(true);
-        logEvent({
-            eventType: "trial_setup_started",
-            action: "start_generate",
-            entityType: "trial",
-            entityId: trialId,
-            payload: { demoMode: currentDataMode },
-            aiInvolved: true,
-        });
+  const handleOpenGeneratedScaffold = async () => {
+    const mapId = generatedSetupMapId || executionMapSummary?.id;
+    if (!mapId) {
+      toast.error("Generated plan is not ready yet.");
+      return;
+    }
+    try {
+      await loadExecutionMap(mapId);
+      setGeneratedSetupMapId(null);
+    } catch (error: any) {
+      toast.error(`Failed to open generated plan: ${error?.message || "Unknown error"}`);
+    }
+  };
 
-        try {
-            await generateScaffold.mutateAsync({
-                protocolId: protocols[0].id,
-                trialId: trial.id,
-                demoMode: currentDataMode,
-            });
-            if (cancelledGenerationRunsRef.current.has(runId)) {
-                return;
-            }
-            const imported = await importLegacyScaffold.mutateAsync({
-                trialId: trial.id,
-                protocolId: protocols[0].id,
-                clearExisting: true,
-                demoMode: currentDataMode,
-                trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
-                trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
-                assignmentMembers: effectiveScaffoldAssignmentMembers,
-            });
-            if (cancelledGenerationRunsRef.current.has(runId)) {
-                return;
-            }
-            const refreshedSummary = await refetchExecutionMapSummary();
-            if (cancelledGenerationRunsRef.current.has(runId)) {
-                return;
-            }
-            const resolvedMapId =
-                imported?.mapId || refreshedSummary.data?.id || executionMapSummary?.id || null;
-            if (resolvedMapId) {
-                setGeneratedSetupMapId(resolvedMapId);
-            } else {
-                toast.error("Plan was generated, but map sync is still in progress.");
-            }
-            const activation = resolvedMapId
-                ? await autoActivateGeneratedMap(resolvedMapId)
-                : { launched: false, autoConfirmed: 0 };
-            if (activation.launched && resolvedMapId) {
-                await loadExecutionMap(resolvedMapId).catch(() => undefined);
-            }
-            logEvent({
-                eventType: "trial_setup_step_completed",
-                action: "generated",
-                entityType: "task_scaffold",
-                payload: { trialId, demoMode: currentDataMode, mapId: resolvedMapId },
-                aiInvolved: true,
-            });
-            if (activation.launched) {
-                const suffix =
-                    activation.autoConfirmed > 0
-                        ? ` (${activation.autoConfirmed} suggested task${activation.autoConfirmed === 1 ? "" : "s"
-                        } auto-confirmed)`
-                        : "";
-                toast.success(`Execution map launched${suffix}`);
-            } else {
-                toast.success("Execution map generated");
-            }
-        } catch (error: any) {
-            if (cancelledGenerationRunsRef.current.has(runId)) {
-                return;
-            }
-            console.error("Failed to generate scaffold:", error);
-            toast.error("Failed to generate execution plan", {
-                description: error?.message || "Please upload a protocol in Document Hub and try again.",
-            });
-        } finally {
-            cancelledGenerationRunsRef.current.delete(runId);
-            setIsGeneratingScaffold(false);
-        }
-    };
+  useEffect(() => {
+    if (activeTab !== "study-setup-wizard") return;
+    if (executionMapSummary?.id) return;
+    if (!trialId || !protocolId || !existingScaffold?.scaffold?.id) return;
 
-    const handleCancelGenerateScaffold = () => {
-        if (!isGeneratingScaffold) return;
-        const currentRunId = generationRunRef.current;
-        if (currentRunId) {
-            cancelledGenerationRunsRef.current.add(currentRunId);
-        }
-        setIsGeneratingScaffold(false);
-        toast.message("Plan generation stopped");
-    };
+    const guardKey = `${trialId}:${protocolId}:${existingScaffold.scaffold.id}`;
+    if (bootstrapGuardRef.current === guardKey || importLegacyScaffold.isPending) return;
+    bootstrapGuardRef.current = guardKey;
 
-    const handleOpenGeneratedScaffold = async () => {
-        const mapId = generatedSetupMapId || executionMapSummary?.id;
-        if (!mapId) {
-            toast.error("Generated plan is not ready yet.");
-            return;
-        }
-        try {
-            await loadExecutionMap(mapId);
-            setGeneratedSetupMapId(null);
-        } catch (error: any) {
-            toast.error(`Failed to open generated plan: ${error?.message || "Unknown error"}`);
-        }
-    };
-
-    useEffect(() => {
-        if (activeTab !== "study-setup-wizard") return;
-        if (executionMapSummary?.id) return;
-        if (!trialId || !protocolId || !existingScaffold?.scaffold?.id) return;
-
-        const guardKey = `${trialId}:${protocolId}:${existingScaffold.scaffold.id}`;
-        if (bootstrapGuardRef.current === guardKey || importLegacyScaffold.isPending) return;
-        bootstrapGuardRef.current = guardKey;
-
-        void importLegacyScaffold
-            .mutateAsync({
-                trialId,
-                protocolId,
-                clearExisting: true,
-                demoMode: currentDataMode,
-                trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
-                trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
-                assignmentMembers: effectiveScaffoldAssignmentMembers,
-            })
-            .then(async (result) => {
-                await refetchExecutionMapSummary();
-                if (result?.mapId) {
-                    await loadExecutionMap(result.mapId);
-                }
-            })
-            .catch((error) => {
-                console.error("Failed to bootstrap execution map:", error);
-            });
-    }, [
-        activeTab,
+    void importLegacyScaffold
+      .mutateAsync({
         trialId,
         protocolId,
-        existingScaffold?.scaffold?.id,
-        executionMapSummary?.id,
-        importLegacyScaffold.isPending,
-        refetchExecutionMapSummary,
-        loadExecutionMap,
-        trial?.startDate,
-        trial?.endDate,
-        effectiveScaffoldAssignmentMembers,
-    ]);
-
-    const parseSampleSizeToNumber = (value?: string | null) => {
-        const normalized = String(value ?? "")
-            .replace(/\u00a0/g, " ")
-            .trim();
-        if (!normalized) return 0;
-        const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
-        if (!match) return 0;
-        const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
-        return Number.isFinite(parsed) ? parsed : 0;
-    };
-    const normalizeTargetPatients = (rawTarget: number | null | undefined, sampleSize?: string | null) => {
-        const explicit = Number(rawTarget || 0);
-        const fallback = parseSampleSizeToNumber(sampleSize);
-        if (explicit <= 0) return fallback;
-
-        // Compatibility fix: older parsing concatenated all digits in sample-size strings
-        // (e.g., "117 / 5760" -> 1175760). If that exact pattern is detected, prefer first token.
-        const allDigits = Number.parseInt(String(sampleSize ?? "").replace(/[^0-9]/g, ""), 10);
-        if (
-            fallback > 0 &&
-            Number.isFinite(allDigits) &&
-            allDigits === explicit &&
-            fallback !== explicit
-        ) {
-            return fallback;
+        clearExisting: true,
+        demoMode: currentDataMode,
+        trialStartDate: trial?.startDate ? new Date(trial.startDate).toISOString() : undefined,
+        trialEndDate: trial?.endDate ? new Date(trial.endDate).toISOString() : undefined,
+        assignmentMembers: effectiveScaffoldAssignmentMembers,
+      })
+      .then(async (result: any) => {
+        await refetchExecutionMapSummary();
+        if (result?.mapId) {
+          await loadExecutionMap(result.mapId);
         }
+      })
+      .catch((error: any) => {
+        console.error("Failed to bootstrap execution map:", error);
+      });
+  }, [
+    activeTab,
+    trialId,
+    protocolId,
+    existingScaffold?.scaffold?.id,
+    executionMapSummary?.id,
+    importLegacyScaffold.isPending,
+    refetchExecutionMapSummary,
+    loadExecutionMap,
+    trial?.startDate,
+    trial?.endDate,
+    effectiveScaffoldAssignmentMembers,
+  ]);
 
-        // Defensive fallback for historical malformed targets (e.g. 1175760 from concatenated values).
-        if (explicit >= 500000) {
-            const leading = Number.parseInt(String(explicit).slice(0, 3), 10);
-            if (Number.isFinite(leading) && leading > 0 && leading <= 5000) {
-                return leading;
-            }
-        }
-        return explicit;
-    };
-    const enrolledPatients = trial?.enrolledPatients || 0;
-    const targetPatients = normalizeTargetPatients(trial?.targetPatients, trial?.sampleSize);
-    const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
-    const scaffoldTasks =
-        scopedMapTasks.length > 0
-            ? scopedMapTasks
-            : (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
-    const pendingTasks = scaffoldTasks.filter((task: any) => {
-        const status = String(task?.status || "");
-        return !["completed", "done", "cancelled", "skipped"].includes(status);
-    }).length;
-    const completedTasks = scaffoldTasks.filter((task: any) => {
-        const status = String(task?.status || "");
-        return status === "completed" || status === "done";
-    }).length;
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const dueTodayTasks = scaffoldTasks.filter((task: any) => {
-        const status = String(task?.status || "");
-        if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
-        const candidateDate = task?.dueDate || task?.suggestedDate;
-        if (!candidateDate) return false;
-        return new Date(candidateDate).toISOString().slice(0, 10) === todayIso;
-    }).length;
-    const overdueTasks = scaffoldTasks.filter((task: any) => {
-        const status = String(task?.status || "");
-        if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
-        const candidateDate = task?.dueDate || task?.suggestedDate;
-        if (!candidateDate) return false;
-        return new Date(candidateDate) < new Date();
-    }).length;
-    const totalTasks = pendingTasks + completedTasks;
-    const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-    const scheduledVisits = (scopedMapPhases.length > 0 ? scopedMapPhases : existingScaffold?.phases || []).filter((phase: any) =>
-        String(phase?.name || "").toLowerCase().includes("visit")
-    ).length;
+  const parseSampleSizeToNumber = (value?: string | null) => {
+    const normalized = String(value ?? "")
+      .replace(/\u00a0/g, " ")
+      .trim();
+    if (!normalized) return 0;
+    const match = normalized.match(/\d{1,3}(?:,\d{3})+|\d+/);
+    if (!match) return 0;
+    const parsed = Number.parseInt(match[0].replace(/,/g, ""), 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const normalizeTargetPatients = (rawTarget: number | null | undefined, sampleSize?: string | null) => {
+    const explicit = Number(rawTarget || 0);
+    const fallback = parseSampleSizeToNumber(sampleSize);
+    if (explicit <= 0) return fallback;
 
-    const sponsorDomain = getSponsorLogoDomain(trial?.sponsor);
-    const sponsorLogoUrl = sponsorDomain ? `https://logo.clearbit.com/${sponsorDomain}` : null;
-    const sponsorInitials = (trial?.sponsor || "SP")
-        .split(/[\s,&.-]+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0]?.toUpperCase() || "")
-        .join("") || "SP";
-    const rawContextSuggestions = (trialContext?.suggestions || []) as Array<{
-        id: string;
-        title: string;
-        description: string;
-        actionLabel: string;
-        actionTarget: "overview" | "document-hub" | "study-setup-wizard" | "assistant";
-        category: string;
-        priority: "high" | "medium" | "low";
-        confidence: number;
-    }>;
+    // Compatibility fix: older parsing concatenated all digits in sample-size strings
+    // (e.g., "117 / 5760" -> 1175760). If that exact pattern is detected, prefer first token.
+    const allDigits = Number.parseInt(String(sampleSize ?? "").replace(/[^0-9]/g, ""), 10);
+    if (
+      fallback > 0 &&
+      Number.isFinite(allDigits) &&
+      allDigits === explicit &&
+      fallback !== explicit
+    ) {
+      return fallback;
+    }
 
-    useEffect(() => {
-        setSponsorLogoFailed(false);
-    }, [sponsorLogoUrl]);
+    // Defensive fallback for historical malformed targets (e.g. 1175760 from concatenated values).
+    if (explicit >= 500000) {
+      const leading = Number.parseInt(String(explicit).slice(0, 3), 10);
+      if (Number.isFinite(leading) && leading > 0 && leading <= 5000) {
+        return leading;
+      }
+    }
+    return explicit;
+  };
+  const enrolledPatients = trial?.enrolledPatients || 0;
+  const targetPatients = normalizeTargetPatients(trial?.targetPatients, trial?.sampleSize);
+  const enrollmentPercent = targetPatients > 0 ? Math.round((enrolledPatients / targetPatients) * 100) : 0;
+  const scaffoldTasks =
+    scopedMapTasks.length > 0
+      ? scopedMapTasks
+      : (existingScaffold?.phases || []).flatMap((phase: any) => phase?.tasks || []) || [];
+  const pendingTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    return !["completed", "done", "cancelled", "skipped"].includes(status);
+  }).length;
+  const completedTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    return status === "completed" || status === "done";
+  }).length;
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const dueTodayTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
+    const candidateDate = task?.dueDate || task?.suggestedDate;
+    if (!candidateDate) return false;
+    return new Date(candidateDate).toISOString().slice(0, 10) === todayIso;
+  }).length;
+  const overdueTasks = scaffoldTasks.filter((task: any) => {
+    const status = String(task?.status || "");
+    if (["completed", "done", "cancelled", "skipped"].includes(status)) return false;
+    const candidateDate = task?.dueDate || task?.suggestedDate;
+    if (!candidateDate) return false;
+    return new Date(candidateDate) < new Date();
+  }).length;
+  const totalTasks = pendingTasks + completedTasks;
+  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+  const scheduledVisits = (scopedMapPhases.length > 0 ? scopedMapPhases : existingScaffold?.phases || []).filter((phase: any) =>
+    String(phase?.name || "").toLowerCase().includes("visit")
+  ).length;
 
-    useEffect(() => {
-        if (activeTab !== "settings") {
-            setDeleteConfirmText("");
-        }
-    }, [activeTab]);
+  const sponsorDomain = getSponsorLogoDomain(trial?.sponsor);
+  const sponsorLogoUrl = sponsorDomain ? `https://logo.clearbit.com/${sponsorDomain}` : null;
+  const sponsorInitials = (trial?.sponsor || "SP")
+    .split(/[\s,&.-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part: string) => part[0]?.toUpperCase() || "")
+    .join("") || "SP";
+  const rawContextSuggestions = (trialContext?.suggestions || []) as Array<{
+    id: string;
+    title: string;
+    description: string;
+    actionLabel: string;
+    actionTarget: "overview" | "document-hub" | "study-setup-wizard" | "assistant";
+    category: string;
+    priority: "high" | "medium" | "low";
+    confidence: number;
+  }>;
 
-    const hasProtocolInHubFromList = protocols.some((doc: any) => {
-        const category = String(doc?.category || "").toLowerCase();
-        const filename = String(doc?.filename || "").toLowerCase();
-        const isArchived = Boolean(doc?.archivedAt);
-        if (isArchived) return false;
-        return category.includes("protocol") || filename.includes("protocol");
+  useEffect(() => {
+    setSponsorLogoFailed(false);
+  }, [sponsorLogoUrl]);
+
+  useEffect(() => {
+    if (activeTab !== "settings") {
+      setDeleteConfirmText("");
+    }
+  }, [activeTab]);
+
+  const hasProtocolInHubFromList = protocols.some((doc: any) => {
+    const category = String(doc?.category || "").toLowerCase();
+    const filename = String(doc?.filename || "").toLowerCase();
+    const isArchived = Boolean(doc?.archivedAt);
+    if (isArchived) return false;
+    return category.includes("protocol") || filename.includes("protocol");
+  });
+  const trialContextDocuments = (trialContext?.documents || null) as
+    | {
+        protocolCount?: number | null;
+        currentProtocol?: { id?: number | null } | null;
+      }
+    | null;
+  const hasProtocolInHubFromContext =
+    Number(trialContextDocuments?.protocolCount || 0) > 0 || Boolean(trialContextDocuments?.currentProtocol?.id);
+  const hasProtocolInHub = hasProtocolInHubFromList || hasProtocolInHubFromContext;
+  const timelineReady = Boolean(trial?.startDate) && Boolean(trial?.endDate);
+  const trialStatusValue = (trial?.status || "not-started").toLowerCase();
+  const trialStatusLabel =
+    trialStatusValue === "not-started"
+      ? "Not started"
+      : trialStatusValue === "on-hold"
+      ? "On hold"
+      : trialStatusValue.charAt(0).toUpperCase() + trialStatusValue.slice(1);
+  const trialStatusDisplayClass =
+    trialStatusValue === "active" || trialStatusValue === "recruiting"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-emerald-100 text-emerald-700"
+      : trialStatusValue === "on-hold"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700"
+      : trialStatusValue === "terminated"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-red-100 text-red-700"
+      : trialStatusValue === "completed"
+      ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-700"
+      : "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-700";
+  const contextSuggestions = rawContextSuggestions.filter(
+    (signal) => !(signal.id === "set_trial_timeline" && timelineReady)
+  );
+  const primarySuggestion = contextSuggestions[0];
+  const normalizedAssignedRoles = trialTeamMembers.map((member) =>
+    String(member.role || "").toLowerCase().trim()
+  );
+  const hasPrincipalInvestigator = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("principal investigator") ||
+      role === "pi"
+  );
+  const hasCrc = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("crc") ||
+      role.includes("clinical research coordinator") ||
+      role.includes("study coordinator")
+  );
+  const hasOperationalSupportRole = normalizedAssignedRoles.some(
+    (role) =>
+      role.includes("nurse") ||
+      role.includes("lab") ||
+      role.includes("data manager") ||
+      role.includes("regulatory") ||
+      role.includes("safety") ||
+      role.includes("pharmac") ||
+      role.includes("quality") ||
+      role.includes("project manager")
+  );
+  const teamReadinessRequirements = [
+    !hasPrincipalInvestigator ? "PI" : null,
+    !hasCrc ? "CRC" : null,
+    !hasOperationalSupportRole ? "1 support role (Nurse/Lab/Data/Regulatory/Safety)" : null,
+  ].filter(Boolean) as string[];
+  const teamReady = hasPrincipalInvestigator && hasCrc && hasOperationalSupportRole;
+  const launchChecklist = [
+    ...(!hasProtocolInHub
+      ? [
+          {
+            id: "protocol-sync",
+            title: "Attach protocol to Document Hub",
+            subtitle: "Themison AI needs the protocol file to generate traceable execution guidance.",
+            done: false,
+          },
+        ]
+      : []),
+    {
+      id: "setup-wizard",
+      title: "Generate execution plan in Study Setup Agent",
+      subtitle: "Convert protocol requirements into operational tasks.",
+      done: scaffoldTasks.length > 0,
+    },
+    {
+      id: "team",
+      title: "Assign trial team members",
+      subtitle: teamReady
+        ? "Core trial team is in place."
+        : `Missing: ${teamReadinessRequirements.join(", ")}.`,
+      done: teamReady,
+    },
+    {
+      id: "timeline",
+      title: "Set start and end dates",
+      subtitle: "Operational timeline anchors planning and accountability.",
+      done: timelineReady,
+    },
+    {
+      id: "activate-trial",
+      title: "Activate trial when launch is ready",
+      subtitle: "Switch status from Not started to Active when onboarding is complete.",
+      done: (trial?.status || "not-started") !== "not-started",
+    },
+  ];
+  const firstIncompleteChecklistItem = launchChecklist.find((item) => !item.done);
+  const nextOperationalTasks = scaffoldTasks
+    .filter((task: any) => task?.status !== "completed")
+    .slice(0, 5);
+
+  const aiRecommendation = primarySuggestion
+    ? primarySuggestion.description
+    : firstIncompleteChecklistItem
+    ? firstIncompleteChecklistItem.id === "protocol-sync"
+      ? "Protocol file is missing from Document Hub. Upload it so Themison AI can generate traceable guidance."
+      : firstIncompleteChecklistItem.id === "setup-wizard"
+      ? "Run Study Setup Agent to generate the first AI-backed execution plan."
+      : firstIncompleteChecklistItem.id === "team"
+      ? "Assign core team members so work can be routed to the right owners."
+      : firstIncompleteChecklistItem.id === "timeline"
+      ? "Set start/end dates to unlock time-based planning and alerts."
+      : firstIncompleteChecklistItem.id === "activate-trial"
+      ? "All onboarding is ready. Set status to Active when the trial is ready to start."
+      : "Open Themison AI for protocol-grounded guidance."
+    : nextOperationalTasks.length > 0
+    ? "Execution plan is live. Assign owners to the next tasks and monitor progress."
+    : "Launch readiness is complete. Generate or refresh your execution plan as needed.";
+  const recommendedActionLabel = primarySuggestion
+    ? primarySuggestion.actionLabel
+    : firstIncompleteChecklistItem
+    ? firstIncompleteChecklistItem.id === "protocol-sync"
+      ? "Open Document Hub"
+      : firstIncompleteChecklistItem.id === "setup-wizard"
+      ? "Open Study Setup Agent"
+      : firstIncompleteChecklistItem.id === "team"
+      ? "Assign Team Members"
+      : firstIncompleteChecklistItem.id === "timeline"
+      ? "Set Timeline"
+      : firstIncompleteChecklistItem.id === "activate-trial"
+      ? "Set Trial Status"
+      : "Open Themison AI"
+    : nextOperationalTasks.length > 0
+    ? "Open Study Setup Agent"
+    : "Open Themison AI";
+  const handleAiRecommendedAction = () => {
+    if (primarySuggestion) {
+      logEvent({
+        eventType: "ai_suggestion_applied",
+        action: "clicked",
+        entityType: "trial",
+        entityId: trialId,
+        payload: {
+          suggestionId: primarySuggestion.id,
+          target: primarySuggestion.actionTarget,
+          demoMode: currentDataMode,
+        },
+        aiInvolved: true,
+      });
+
+      if (primarySuggestion.actionTarget === "document-hub") {
+        setActiveTab("document-hub");
+        return;
+      }
+      if (primarySuggestion.actionTarget === "study-setup-wizard") {
+        setActiveTab("study-setup-wizard");
+        return;
+      }
+      if (primarySuggestion.actionTarget === "assistant") {
+        navigate(`/trial/${trialId}/assistant`);
+        return;
+      }
+      setActiveTab("overview");
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+
+    if (!firstIncompleteChecklistItem) {
+      if (nextOperationalTasks.length > 0) {
+        setActiveTab("study-setup-wizard");
+      } else {
+        navigate(`/trial/${trialId}/assistant`);
+      }
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "protocol-sync") {
+      setActiveTab("document-hub");
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "setup-wizard") {
+      setActiveTab("study-setup-wizard");
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "team") {
+      setManageTeamOpen(true);
+      return;
+    }
+    if (firstIncompleteChecklistItem.id === "timeline" || firstIncompleteChecklistItem.id === "activate-trial") {
+      setActiveTab("overview");
+      if (typeof window !== "undefined") {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      return;
+    }
+    navigate(`/trial/${trialId}/assistant`);
+  };
+
+  const formatDate = (value?: string | Date | null) => {
+    if (!value) return "Not available";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return String(value);
+    return parsed.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
     });
-    const trialContextDocuments = (trialContext?.documents || null) as
-        | {
-            protocolCount?: number | null;
-            currentProtocol?: { id?: number | null } | null;
-        }
-        | null;
-    const hasProtocolInHubFromContext =
-        Number(trialContextDocuments?.protocolCount || 0) > 0 || Boolean(trialContextDocuments?.currentProtocol?.id);
-    const hasProtocolInHub = hasProtocolInHubFromList || hasProtocolInHubFromContext;
-    const timelineReady = Boolean(trial?.startDate) && Boolean(trial?.endDate);
-    const trialStatusValue = (trial?.status || "not-started").toLowerCase();
-    const trialStatusLabel =
-        trialStatusValue === "not-started"
-            ? "Not started"
-            : trialStatusValue === "on-hold"
-                ? "On hold"
-                : trialStatusValue.charAt(0).toUpperCase() + trialStatusValue.slice(1);
-    const trialStatusDisplayClass =
-        trialStatusValue === "active" || trialStatusValue === "recruiting"
-            ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-emerald-100 text-emerald-700"
-            : trialStatusValue === "on-hold"
-                ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-700"
-                : trialStatusValue === "terminated"
-                    ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-red-100 text-red-700"
-                    : trialStatusValue === "completed"
-                        ? "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-700"
-                        : "inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-700";
-    const contextSuggestions = rawContextSuggestions.filter(
-        (signal) => !(signal.id === "set_trial_timeline" && timelineReady)
-    );
-    const primarySuggestion = contextSuggestions[0];
-    const normalizedAssignedRoles = trialTeamMembers.map((member) =>
-        String(member.role || "").toLowerCase().trim()
-    );
-    const hasPrincipalInvestigator = normalizedAssignedRoles.some(
-        (role) =>
-            role.includes("principal investigator") ||
-            role === "pi"
-    );
-    const hasCrc = normalizedAssignedRoles.some(
-        (role) =>
-            role.includes("crc") ||
-            role.includes("clinical research coordinator") ||
-            role.includes("study coordinator")
-    );
-    const hasOperationalSupportRole = normalizedAssignedRoles.some(
-        (role) =>
-            role.includes("nurse") ||
-            role.includes("lab") ||
-            role.includes("data manager") ||
-            role.includes("regulatory") ||
-            role.includes("safety") ||
-            role.includes("pharmac") ||
-            role.includes("quality") ||
-            role.includes("project manager")
-    );
-    const teamReadinessRequirements = [
-        !hasPrincipalInvestigator ? "PI" : null,
-        !hasCrc ? "CRC" : null,
-        !hasOperationalSupportRole ? "1 support role (Nurse/Lab/Data/Regulatory/Safety)" : null,
-    ].filter(Boolean) as string[];
-    const teamReady = hasPrincipalInvestigator && hasCrc && hasOperationalSupportRole;
-    const launchChecklist = [
-        ...(!hasProtocolInHub
-            ? [
-                {
-                    id: "protocol-sync",
-                    title: "Attach protocol to Document Hub",
-                    subtitle: "Themison AI needs the protocol file to generate traceable execution guidance.",
-                    done: false,
-                },
-            ]
-            : []),
-        {
-            id: "setup-wizard",
-            title: "Generate execution plan in Study Setup Agent",
-            subtitle: "Convert protocol requirements into operational tasks.",
-            done: scaffoldTasks.length > 0,
-        },
-        {
-            id: "team",
-            title: "Assign trial team members",
-            subtitle: teamReady
-                ? "Core trial team is in place."
-                : `Missing: ${teamReadinessRequirements.join(", ")}.`,
-            done: teamReady,
-        },
-        {
-            id: "timeline",
-            title: "Set start and end dates",
-            subtitle: "Operational timeline anchors planning and accountability.",
-            done: timelineReady,
-        },
-        {
-            id: "activate-trial",
-            title: "Activate trial when launch is ready",
-            subtitle: "Switch status from Not started to Active when onboarding is complete.",
-            done: (trial?.status || "not-started") !== "not-started",
-        },
-    ];
-    const firstIncompleteChecklistItem = launchChecklist.find((item) => !item.done);
-    const nextOperationalTasks = scaffoldTasks
-        .filter((task: any) => task?.status !== "completed")
-        .slice(0, 5);
+  };
 
-    const aiRecommendation = primarySuggestion
-        ? primarySuggestion.description
-        : firstIncompleteChecklistItem
-            ? firstIncompleteChecklistItem.id === "protocol-sync"
-                ? "Protocol file is missing from Document Hub. Upload it so Themison AI can generate traceable guidance."
-                : firstIncompleteChecklistItem.id === "setup-wizard"
-                    ? "Run Study Setup Agent to generate the first AI-backed execution plan."
-                    : firstIncompleteChecklistItem.id === "team"
-                        ? "Assign core team members so work can be routed to the right owners."
-                        : firstIncompleteChecklistItem.id === "timeline"
-                            ? "Set start/end dates to unlock time-based planning and alerts."
-                            : firstIncompleteChecklistItem.id === "activate-trial"
-                                ? "All onboarding is ready. Set status to Active when the trial is ready to start."
-                                : "Open Themison AI for protocol-grounded guidance."
-            : nextOperationalTasks.length > 0
-                ? "Execution plan is live. Assign owners to the next tasks and monitor progress."
-                : "Launch readiness is complete. Generate or refresh your execution plan as needed.";
-    const recommendedActionLabel = primarySuggestion
-        ? primarySuggestion.actionLabel
-        : firstIncompleteChecklistItem
-            ? firstIncompleteChecklistItem.id === "protocol-sync"
-                ? "Open Document Hub"
-                : firstIncompleteChecklistItem.id === "setup-wizard"
-                    ? "Open Study Setup Agent"
-                    : firstIncompleteChecklistItem.id === "team"
-                        ? "Assign Team Members"
-                        : firstIncompleteChecklistItem.id === "timeline"
-                            ? "Set Timeline"
-                            : firstIncompleteChecklistItem.id === "activate-trial"
-                                ? "Set Trial Status"
-                                : "Open Themison AI"
-            : nextOperationalTasks.length > 0
-                ? "Open Study Setup Agent"
-                : "Open Themison AI";
-    const handleAiRecommendedAction = () => {
-        if (primarySuggestion) {
-            logEvent({
-                eventType: "ai_suggestion_applied",
-                action: "clicked",
-                entityType: "trial",
-                entityId: trialId,
+  const handleDeleteTrialFromSettings = async () => {
+    const displayName = trial?.investigationalProduct || trial?.title || trialId;
+    const confirmed = window.confirm(
+      `Delete "${displayName}"?\n\nThis will remove the trial and related sandbox data.`
+    );
+    if (!confirmed) return;
+    await deleteTrialMutation.mutateAsync({
+      id: trialId,
+      demoMode: currentDataMode,
+    });
+  };
+
+  const setupPhases = useMemo(() => {
+    if (scopedMapPhases.length === 0) return [];
+    const taskById = new Map(scopedMapTasks.map((task) => [task.id, task]));
+    const depsByTask = new Map<string, any[]>();
+    for (const dep of scopedMapDependencies) {
+      const current = depsByTask.get(dep.targetTaskId) ?? [];
+      current.push({
+        ...dep,
+        sourceTaskName: taskById.get(dep.sourceTaskId)?.name || null,
+      });
+      depsByTask.set(dep.targetTaskId, current);
+    }
+
+    return [...scopedMapPhases]
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((phase) => {
+        const phaseTasks = scopedMapTasks
+          .filter((task) => task.phaseId === phase.id)
+          .sort((a, b) => a.orderInPhase - b.orderInPhase)
+          .map((task) => {
+            const firstRef = task.protocolRefs?.[0] as Record<string, any> | undefined;
+            const protocolPageRaw = firstRef?.page;
+            const protocolPage =
+              typeof protocolPageRaw === "number"
+                ? protocolPageRaw
+                : protocolPageRaw
+                ? Number(protocolPageRaw)
+                : null;
+            return {
+              id: task.id,
+              name: task.name,
+              suggestedDate: task.suggestedDate
+                ? new Date(task.suggestedDate)
+                : task.dueDate
+                ? new Date(task.dueDate)
+                : null,
+              startDate: task.startDate ? new Date(task.startDate) : null,
+              dueDate: task.dueDate ? new Date(task.dueDate) : null,
+              suggestedAssigneeId: task.assignedUserId ?? null,
+              dependencies: depsByTask.get(task.id) ?? [],
+              status: task.status,
+              category: task.category,
+              assignedRole: task.assignedRole ?? null,
+              estimatedDuration: task.estimatedDuration ?? null,
+              priority: task.priority,
+              aiConfidence: task.aiConfidence ?? null,
+              conditionalNote: task.conditionalNote ?? null,
+              protocolReference: {
+                section: typeof firstRef?.section === "string" ? firstRef.section : null,
+                page: Number.isFinite(protocolPage as number) ? (protocolPage as number) : null,
+                extractedText:
+                  typeof firstRef?.extractedText === "string" ? firstRef.extractedText : null,
+              },
+            };
+          });
+        return {
+          id: phase.id,
+          name: phase.name,
+          color: phase.color,
+          tasks: phaseTasks,
+        };
+      });
+  }, [scopedMapPhases, scopedMapTasks, scopedMapDependencies]);
+
+  const setupSections = useMemo(() => {
+    if (scopedMapSections.length > 0) {
+      const normalizeSectionKey = (name: string) => {
+        const normalized = String(name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        if (/(schedule|visit window|study days|soa|soe)/.test(normalized)) return "schedule";
+        if (/(inclusion|exclusion|eligib)/.test(normalized)) return "eligibility";
+        if (/(randomi[sz]ation|irt|allocation)/.test(normalized)) return "randomization";
+        if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "dosing";
+        if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "procedure";
+        if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "lab";
+        if (/(adverse event|safety|sae|ae)/.test(normalized)) return "safety";
+        if (/(concomitant|medication)/.test(normalized)) return "medication";
+        return normalized || "custom";
+      };
+
+      const dedupedSections = [...scopedMapSections]
+        .sort((a, b) => a.displayOrder - b.displayOrder)
+        .filter((section, index, all) => {
+          const key = normalizeSectionKey(section.name);
+          return all.findIndex((row) => normalizeSectionKey(row.name) === key) === index;
+        });
+
+      const mappedSections = dedupedSections
+        .map((section) => ({
+          id: section.id,
+          name: section.name,
+          dateReference: section.dateReference
+            ? new Date(section.dateReference).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+            : null,
+          pageReference: section.pageStart ? `P.${section.pageStart}` : null,
+          pageStart: section.pageStart ?? null,
+          linkedTaskIds: section.linkedTaskIds ?? [],
+          linkedPhaseIds: section.linkedPhaseIds ?? [],
+        }));
+
+      const hasEnrollmentSection = mappedSections.some(
+        (section) => normalizeSectionKey(section.name) === "randomization"
+      );
+      if (!hasEnrollmentSection) {
+        const enrollmentMatches = setupPhases.flatMap((phase) =>
+          phase.tasks
+            .filter((task) => {
+              const normalizedName = String(task.name || "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
+              const normalizedRef = String(task.protocolReference?.section || "")
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim();
+              return (
+                normalizedName.includes("enroll") ||
+                normalizedName.includes("enrol") ||
+                normalizedName.includes("random") ||
+                normalizedName.includes("irt") ||
+                normalizedRef.includes("enroll") ||
+                normalizedRef.includes("enrol") ||
+                normalizedRef.includes("random") ||
+                normalizedRef.includes("irt")
+              );
+            })
+            .map((task) => ({
+              taskId: task.id,
+              phaseId: phase.id,
+              page: task.protocolReference?.page ?? null,
+            }))
+        );
+
+        const linkedTaskIds = Array.from(new Set(enrollmentMatches.map((row) => row.taskId)));
+        const linkedPhaseIds = Array.from(new Set(enrollmentMatches.map((row) => row.phaseId)));
+        const firstPage =
+          enrollmentMatches.find((row) => typeof row.page === "number" && Number.isFinite(row.page))?.page ??
+          null;
+        mappedSections.push({
+          id: "fallback-enrollment-randomization",
+          name: "Enrollment & Randomization",
+          dateReference: null,
+          pageReference: firstPage ? `P.${firstPage}` : null,
+          pageStart: firstPage,
+          linkedTaskIds,
+          linkedPhaseIds,
+        });
+      }
+
+      return mappedSections;
+    }
+
+    if (setupPhases.length === 0) return [];
+
+    type FallbackSection = {
+      id: string;
+      name: string;
+      linkedTaskIds: string[];
+      linkedPhaseIds: string[];
+      pageStart: number | null;
+    };
+
+    const buckets: Array<{
+      id: string;
+      name: string;
+      match: (task: any, normalizedName: string) => boolean;
+    }> = [
+      {
+        id: "schedule",
+        name: "Schedule of Events",
+        match: () => true,
+      },
+      {
+        id: "inclusion-exclusion",
+        name: "Inclusion / Exclusion",
+        match: (task, normalizedName) =>
+          task.category === "eligibility" ||
+          task.category === "consent" ||
+          normalizedName.includes("inclusion") ||
+          normalizedName.includes("exclusion") ||
+          normalizedName.includes("consent"),
+      },
+      {
+        id: "enrollment-randomization",
+        name: "Enrollment & Randomization",
+        match: (task, normalizedName) =>
+          task.category === "coordination" ||
+          normalizedName.includes("enroll") ||
+          normalizedName.includes("enrol") ||
+          normalizedName.includes("random") ||
+          normalizedName.includes("irt"),
+      },
+      {
+        id: "dosing",
+        name: "Dosing & Administration",
+        match: (task, normalizedName) =>
+          task.category === "drug_administration" ||
+          normalizedName.includes("dose") ||
+          normalizedName.includes("infusion") ||
+          normalizedName.includes("administration"),
+      },
+      {
+        id: "procedures",
+        name: "Procedures & Assessments",
+        match: (task) =>
+          ["assessment", "vital_signs", "questionnaire", "imaging"].includes(String(task.category || "")),
+      },
+      {
+        id: "lab",
+        name: "Lab & Samples",
+        match: (task, normalizedName) =>
+          task.category === "lab_sample" ||
+          normalizedName.includes("sample") ||
+          normalizedName.includes("blood") ||
+          normalizedName.includes("lab"),
+      },
+      {
+        id: "safety",
+        name: "Adverse Events & Safety",
+        match: (task, normalizedName) =>
+          task.category === "safety_reporting" ||
+          normalizedName.includes("adverse") ||
+          normalizedName.includes("safety"),
+      },
+      {
+        id: "concomitant",
+        name: "Concomitant Medications",
+        match: (_task, normalizedName) =>
+          normalizedName.includes("concomitant") || normalizedName.includes("medication"),
+      },
+    ];
+
+    const fallbackMap = new Map<string, FallbackSection>();
+    for (const bucket of buckets) {
+      fallbackMap.set(bucket.id, {
+        id: `fallback-${bucket.id}`,
+        name: bucket.name,
+        linkedTaskIds: [],
+        linkedPhaseIds: [],
+        pageStart: null,
+      });
+    }
+
+    for (const phase of setupPhases) {
+      for (const task of phase.tasks) {
+        const normalizedName = String(task.name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+        for (const bucket of buckets) {
+          if (!bucket.match(task, normalizedName)) continue;
+          const target = fallbackMap.get(bucket.id);
+          if (!target) continue;
+          if (!target.linkedTaskIds.includes(task.id)) target.linkedTaskIds.push(task.id);
+          if (!target.linkedPhaseIds.includes(phase.id)) target.linkedPhaseIds.push(phase.id);
+          if (!target.pageStart && task.protocolReference?.page) {
+            target.pageStart = task.protocolReference.page;
+          }
+        }
+      }
+    }
+
+    const fallbackSections = Array.from(fallbackMap.values()).filter((section) => section.linkedTaskIds.length > 0);
+    if (fallbackSections.length > 0) {
+      return fallbackSections.map((section, index) => ({
+        id: section.id,
+        name: section.name,
+        dateReference: null,
+        pageReference: section.pageStart ? `P.${section.pageStart}` : null,
+        pageStart: section.pageStart,
+        linkedTaskIds: section.linkedTaskIds,
+        linkedPhaseIds: section.linkedPhaseIds,
+        displayOrder: index,
+      }));
+    }
+
+    const allTasks = setupPhases.flatMap((phase) => phase.tasks);
+    const allTaskIds = allTasks.map((task) => task.id);
+    const allPhaseIds = setupPhases.map((phase) => phase.id);
+    const firstPage = allTasks.find((task) => task.protocolReference?.page)?.protocolReference?.page ?? null;
+
+    return [
+      {
+        id: "fallback-schedule",
+        name: "Schedule of Events",
+        dateReference: null,
+        pageReference: firstPage ? `P.${firstPage}` : null,
+        pageStart: firstPage,
+        linkedTaskIds: allTaskIds,
+        linkedPhaseIds: allPhaseIds,
+      },
+    ];
+  }, [scopedMapSections, setupPhases]);
+
+  const setupDependencyCandidates = useMemo(
+    () =>
+      scopedMapTasks
+        .filter((task) => task.id !== setupEditingTaskId)
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [scopedMapTasks, setupEditingTaskId]
+  );
+
+  const setupAssignedMembersForTaskForm = useMemo(
+    () =>
+      trialTeamMembers.map((member) => ({
+        id: String(member.id),
+        name: member.name,
+        role: member.role || "",
+      })),
+    [trialTeamMembers]
+  );
+
+  useEffect(() => {
+    if (!setupTaskModalOpen || setupPhases.length === 0) return;
+    if (setupPhases.some((phase) => phase.id === setupTaskForm.phaseId)) return;
+    setSetupTaskForm((prev) => ({ ...prev, phaseId: setupPhases[0]?.id || "" }));
+  }, [setupTaskModalOpen, setupPhases, setupTaskForm.phaseId]);
+
+  const syncSetupTaskDependencies = async (targetTaskId: string, selectedSourceTaskIds: string[]) => {
+    if (!map?.id) return;
+    const existingDeps = scopedMapDependencies.filter((dep) => dep.targetTaskId === targetTaskId);
+    const existingSourceSet = new Set(existingDeps.map((dep) => dep.sourceTaskId));
+    const selectedSourceSet = new Set(selectedSourceTaskIds);
+    const toAdd = selectedSourceTaskIds.filter((taskId) => !existingSourceSet.has(taskId));
+    const toRemove = existingDeps.filter((dep) => !selectedSourceSet.has(dep.sourceTaskId));
+
+    for (const sourceTaskId of toAdd) {
+      await addExecutionDependency({
+        sourceTaskId,
+        targetTaskId,
+        dependencyType: "finish_to_start",
+      });
+    }
+
+    for (const dep of toRemove) {
+      await removeExecutionDependency(dep.id);
+    }
+  };
+
+  const handleAddSetupTask = () => {
+    if (!map?.id || setupPhases.length === 0) {
+      toast.error("No execution map loaded");
+      return;
+    }
+    setSetupTaskModalMode("create");
+    setSetupEditingTaskId(null);
+    setSetupDependencyTaskIds([]);
+    setSetupTaskForm({
+      title: "",
+      description: "",
+      phaseId: setupPhases[0]?.id || "",
+      category: "custom",
+      status: map.status === "active" ? "todo" : "suggested",
+      priority: "medium",
+      assignedRole: "",
+      assigneeMemberId: "",
+      dueDate: "",
+      sourceSection: "",
+      sourcePage: "",
+      sourceText: "",
+    });
+    setSetupTaskModalOpen(true);
+  };
+
+  const handleEditSetupTask = (taskId: string) => {
+    const task = scopedMapTasks.find((row) => row.id === taskId);
+    if (!task) return;
+    const sourceRef = (task.protocolRefs || [])[0] as unknown as Record<string, unknown> | undefined;
+    const sourcePageRaw = sourceRef?.page;
+    const sourcePage =
+      typeof sourcePageRaw === "number"
+        ? String(sourcePageRaw)
+        : typeof sourcePageRaw === "string"
+        ? sourcePageRaw
+        : "";
+    const memberForAssignee = setupAssignedMembersForTaskForm.find(
+      (member) =>
+        String(member.id) === String(task.assignedUserId || "") ||
+        String(member.id) === `member-${String(task.assignedUserId || "")}` ||
+        member.name === (task.suggestedAssignee || "")
+    );
+    const predecessorTaskIds = scopedMapDependencies
+      .filter((dep) => dep.targetTaskId === task.id)
+      .map((dep) => dep.sourceTaskId);
+
+    setSetupTaskModalMode("edit");
+    setSetupEditingTaskId(task.id);
+    setSetupDependencyTaskIds(predecessorTaskIds);
+    setSetupTaskForm({
+      title: task.name || "",
+      description: task.description || "",
+      phaseId: task.phaseId,
+      category: (task.category as TaskCategory) || "custom",
+      status: (task.status as TaskStatus) || "todo",
+      priority: (task.priority as TaskPriority) || "medium",
+      assignedRole: String(task.assignedRole || ""),
+      assigneeMemberId: memberForAssignee ? String(memberForAssignee.id) : "",
+      dueDate: toDateInputValue(task.dueDate || task.suggestedDate),
+      sourceSection: String(sourceRef?.section || ""),
+      sourcePage,
+      sourceText: String(sourceRef?.extractedText || ""),
+    });
+    setSetupTaskModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!pendingOpenSetupTaskId) return;
+    if (activeTab !== "study-setup-wizard") return;
+    const task = scopedMapTasks.find((row) => row.id === pendingOpenSetupTaskId);
+    if (!task) return;
+    handleEditSetupTask(task.id);
+    setPendingOpenSetupTaskId(null);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    params.delete("openTask");
+    params.delete("mapId");
+    const nextQuery = params.toString();
+    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState(window.history.state, "", nextUrl);
+  }, [activeTab, pendingOpenSetupTaskId, scopedMapTasks, handleEditSetupTask]);
+
+  const handleSaveSetupTaskModal = async () => {
+    if (!map?.id) {
+      toast.error("No execution map loaded");
+      return;
+    }
+    const title = setupTaskForm.title.trim();
+    if (!title) {
+      toast.error("Task title is required.");
+      return;
+    }
+    if (!setupTaskForm.phaseId) {
+      toast.error("Phase / visit is required.");
+      return;
+    }
+
+    const selectedMember = setupAssignedMembersForTaskForm.find(
+      (member) => String(member.id) === setupTaskForm.assigneeMemberId
+    );
+    const selectedMemberNumericId = selectedMember ? parseMemberNumericId(selectedMember.id) : null;
+    const assignedRole =
+      setupTaskForm.assignedRole &&
+      SETUP_ASSIGNED_ROLE_OPTIONS.includes(setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
+        ? (setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
+        : null;
+    const dueDateIso = toIsoDateTime(setupTaskForm.dueDate);
+    const pageNumber = Number(setupTaskForm.sourcePage);
+    const hasSource =
+      Boolean(setupTaskForm.sourceSection.trim()) ||
+      Boolean(setupTaskForm.sourceText.trim()) ||
+      (Number.isFinite(pageNumber) && pageNumber > 0);
+    const protocolRefs = hasSource
+      ? [
+          {
+            section: setupTaskForm.sourceSection.trim() || "Protocol",
+            ...(Number.isFinite(pageNumber) && pageNumber > 0 ? { page: Math.round(pageNumber) } : {}),
+            ...(setupTaskForm.sourceText.trim() ? { extractedText: setupTaskForm.sourceText.trim() } : {}),
+          },
+        ]
+      : [];
+
+    try {
+      if (setupTaskModalMode === "create") {
+        const created = await addExecutionTask(setupTaskForm.phaseId, {
+          name: title,
+          description: setupTaskForm.description.trim() || undefined,
+          category: setupTaskForm.category,
+          status: setupTaskForm.status,
+          priority: setupTaskForm.priority,
+          assignedRole,
+          assignedUserId: selectedMemberNumericId,
+          suggestedAssignee: selectedMember?.name || null,
+          suggestedDate: dueDateIso,
+          dueDate: dueDateIso,
+          createdBy: "user",
+          isCustom: true,
+          protocolRefs: protocolRefs as any,
+          tags: [],
+        });
+        await syncSetupTaskDependencies(created.id, setupDependencyTaskIds);
+        toast.success("Task created.");
+      } else {
+        const taskId = setupEditingTaskId;
+        const existing = taskId ? scopedMapTasks.find((task) => task.id === taskId) : null;
+        if (!taskId || !existing) {
+          toast.error("Task not found.");
+          return;
+        }
+        await updateExecutionTask(taskId, {
+          name: title,
+          description: setupTaskForm.description.trim() || "",
+          category: setupTaskForm.category,
+          status: setupTaskForm.status,
+          priority: setupTaskForm.priority,
+          assignedRole,
+          assignedUserId: selectedMemberNumericId,
+          suggestedAssignee: selectedMember?.name || null,
+          suggestedDate: dueDateIso,
+          dueDate: dueDateIso,
+          protocolRefs: protocolRefs as any,
+          isCustom: true,
+          createdBy: "user",
+        });
+        if (existing.phaseId !== setupTaskForm.phaseId) {
+          const nextOrder = scopedMapTasks.filter((task) => task.phaseId === setupTaskForm.phaseId).length;
+          await moveExecutionTask(taskId, setupTaskForm.phaseId, nextOrder);
+        }
+        await syncSetupTaskDependencies(taskId, setupDependencyTaskIds);
+        toast.success("Task updated.");
+      }
+      setSetupTaskModalOpen(false);
+      setSetupEditingTaskId(null);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to save task.");
+    }
+  };
+
+  const handleDeleteSetupTaskFromModal = async () => {
+    if (!setupEditingTaskId) return;
+    const task = scopedMapTasks.find((item) => item.id === setupEditingTaskId);
+    if (!task) return;
+    const confirmed = window.confirm(`Delete "${task.name}"?`);
+    if (!confirmed) return;
+    try {
+      await removeExecutionTask(setupEditingTaskId);
+      setSetupTaskModalOpen(false);
+      setSetupEditingTaskId(null);
+      toast.success("Task deleted.");
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to delete task.");
+    }
+  };
+
+  const handleDeleteSetupTask = async (taskId: string) => {
+    const task = scopedMapTasks.find((row) => row.id === taskId);
+    if (!task) return;
+    if (!window.confirm(`Delete task "${task.name}"?`)) return;
+    try {
+      await removeExecutionTask(taskId);
+      toast.success("Task deleted");
+    } catch (error: any) {
+      toast.error(`Failed to delete task: ${error?.message || "Unknown error"}`);
+    }
+  };
+
+  const handleLaunchExecutionMap = async () => {
+    if (isLaunchingExecutionMap) return;
+
+    const mapId = executionMapSummary?.id || map?.id;
+    if (!mapId) {
+      toast.error("No execution map loaded");
+      return;
+    }
+
+    setIsLaunchingExecutionMap(true);
+    try {
+      const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
+      await launchMapMutation.mutateAsync({ mapId });
+      await Promise.all([
+        utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode }),
+        utils.map.load.invalidate({ mapId }),
+        utils.map.loadWorkspace.invalidate(),
+      ]);
+      const refreshedSummary = await refetchExecutionMapSummary();
+      const resolvedMapId = refreshedSummary.data?.id || mapId;
+      await loadExecutionMap(resolvedMapId);
+      if (confirmation.updated > 0) {
+        toast.success(
+          `Execution map launched (${confirmation.updated} suggested task${confirmation.updated === 1 ? "" : "s"} auto-confirmed)`
+        );
+      } else {
+        toast.success("Execution map launched");
+      }
+    } catch (error: any) {
+      toast.error(`Failed to launch map: ${error?.message || "Review suggested tasks first."}`);
+    } finally {
+      setIsLaunchingExecutionMap(false);
+    }
+  };
+
+  let mainContent: React.ReactNode = null;
+  let lockPageScrollToScaffold = false;
+  const hasRenderableSetupMap =
+    isCurrentTrialExecutionMap && !!map?.id && setupPhases.length > 0 && scopedMapTasks.length > 0;
+  const renderSetupScaffoldWorkspace = (fullscreen: boolean) => (
+    <div
+      className={
+        fullscreen
+          ? "h-full w-full bg-white flex flex-col"
+          : "h-full bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col"
+      }
+    >
+      <div
+        className={`relative ${
+          fullscreen ? "px-6 py-5 border-b border-gray-100" : "px-6 pt-5 pb-4 border-b border-gray-200"
+        }`}
+      >
+        <div className="w-full max-w-[720px]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-900">Step 4 of 4</p>
+          <div className="mt-6 h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+            <div className="h-full rounded-full bg-[#0E0017]" style={{ width: "100%" }} />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mt-8">Review & Launch</h2>
+          <p className="text-sm text-gray-500 mt-2">
+            Validate the generated execution plan, adjust tasks if needed, then confirm launch.
+          </p>
+        </div>
+        {fullscreen ? (
+          <button
+            type="button"
+            onClick={() => setIsSetupFullscreenVisible(false)}
+            className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
+            aria-label="Close fullscreen setup"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={openSetupFullscreen}
+            className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
+            aria-label="Expand setup"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
+        <div className="h-full min-h-0">
+          <TaskScaffoldView
+            phases={setupPhases}
+            sections={setupSections}
+            view={setupScaffoldView}
+            onViewChange={setSetupScaffoldView}
+            isConfirming={isLaunchingExecutionMap}
+            timelineStartDate={trial?.startDate ? new Date(trial.startDate) : null}
+            timelineEndDate={trial?.endDate ? new Date(trial.endDate) : null}
+            onConfirm={handleLaunchExecutionMap}
+            onAddTask={handleAddSetupTask}
+            onEditTask={handleEditSetupTask}
+            onDeleteTask={handleDeleteSetupTask}
+            onOpenProtocolPage={(page, sectionName) => {
+              const protocolDoc =
+                protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
+                protocols[0];
+              const url = protocolDoc?.fileUrl as string | undefined;
+              if (!url) {
+                toast.error("No protocol PDF available to open");
+                return;
+              }
+              const target = page && Number.isFinite(page) ? `${url}#page=${page}` : url;
+              window.open(target, "_blank", "noopener,noreferrer");
+              logEvent({
+                eventType: "document_section_accessed",
+                action: "open_source_from_protocol_map",
+                entityType: "protocol_section",
                 payload: {
-                    suggestionId: primarySuggestion.id,
-                    target: primarySuggestion.actionTarget,
-                    demoMode: currentDataMode,
+                  sectionName,
+                  page: page ?? null,
+                  trialId,
                 },
                 aiInvolved: true,
-            });
+              });
+            }}
+            onReorderTasks={(phaseId, orderedTaskIds) => {
+              void reorderExecutionTasks(phaseId, orderedTaskIds).catch((error) => {
+                toast.error(`Failed to reorder tasks: ${error?.message || "Unknown error"}`);
+              });
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
 
-            if (primarySuggestion.actionTarget === "document-hub") {
-                setActiveTab("document-hub");
-                return;
-            }
-            if (primarySuggestion.actionTarget === "study-setup-wizard") {
-                setActiveTab("study-setup-wizard");
-                return;
-            }
-            if (primarySuggestion.actionTarget === "assistant") {
-                navigate(`/trial/${trialId}/assistant`);
-                return;
-            }
-            setActiveTab("overview");
-            if (typeof window !== "undefined") {
-                window.scrollTo({ top: 0, behavior: "smooth" });
-            }
-            return;
-        }
+  const renderSetupAgentAlwaysOn = () => (
+    <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
+      <div className="h-full bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="relative h-full w-full overflow-hidden flex items-center justify-center py-10">
+          <div
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              backgroundColor: "#ffffff",
+              backgroundImage: "radial-gradient(rgba(148, 163, 184, 0.16) 1px, transparent 1px)",
+              backgroundSize: "18px 18px",
+            }}
+          />
+          <div
+            className="absolute inset-0 bg-center bg-cover bg-no-repeat opacity-75 pointer-events-none"
+            style={{ backgroundImage: `url(${studySetupBackground})` }}
+          />
+          <div className="relative z-10 text-center max-w-3xl px-6 pb-10">
+            <div className="mx-auto h-[360px] w-[360px]">
+              <DotLottieReact
+                src="https://lottie.host/d8617406-7b38-4ae4-968d-b934a05d4a10/UKTFUbeuwK.lottie"
+                autoplay
+                loop
+                className="h-full w-full"
+              />
+            </div>
+            <h2 className="mt-2 text-3xl font-bold text-gray-900">Themison Study Setup Agent is always on</h2>
+            <p className="mt-3 text-base text-gray-600">
+              If a new amendment arrives, Themison will flag impacted tasks, timing windows, and dependencies so your
+              execution plan stays current.
+            </p>
+            <div className="mt-6 flex items-center justify-center gap-3">
+              <Button
+                className="bg-[#2F6FED] hover:bg-[#255BD1] text-white"
+                onClick={() => navigate(`/tasks?trialId=${trialId}`)}
+              >
+                Open Task Manager
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+              <Button variant="outline" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+                Ask Themison AI
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
-        if (!firstIncompleteChecklistItem) {
-            if (nextOperationalTasks.length > 0) {
-                setActiveTab("study-setup-wizard");
-            } else {
-                navigate(`/trial/${trialId}/assistant`);
-            }
-            return;
-        }
-        if (firstIncompleteChecklistItem.id === "protocol-sync") {
-            setActiveTab("document-hub");
-            return;
-        }
-        if (firstIncompleteChecklistItem.id === "setup-wizard") {
-            setActiveTab("study-setup-wizard");
-            return;
-        }
-        if (firstIncompleteChecklistItem.id === "team") {
-            setManageTeamOpen(true);
-            return;
-        }
-        if (firstIncompleteChecklistItem.id === "timeline" || firstIncompleteChecklistItem.id === "activate-trial") {
-            setActiveTab("overview");
-            if (typeof window !== "undefined") {
-                window.scrollTo({ top: 0, behavior: "smooth" });
-            }
-            return;
-        }
-        navigate(`/trial/${trialId}/assistant`);
-    };
-
-    const formatDate = (value?: string | Date | null) => {
-        if (!value) return "Not available";
-        const parsed = new Date(value);
-        if (Number.isNaN(parsed.getTime())) return String(value);
-        return parsed.toLocaleDateString("en-US", {
-            year: "numeric",
-            month: "short",
-            day: "numeric",
-        });
-    };
-
-    const handleDeleteTrialFromSettings = async () => {
-        const displayName = trial?.investigationalProduct || trial?.title || trialId;
-        const confirmed = window.confirm(
-            `Delete "${displayName}"?\n\nThis will remove the trial and related sandbox data.`
-        );
-        if (!confirmed) return;
-        await deleteTrialMutation.mutateAsync({
-            id: trialId,
-            demoMode: currentDataMode,
-        });
-    };
-
-    const setupPhases = useMemo(() => {
-        if (scopedMapPhases.length === 0) return [];
-        const taskById = new Map(scopedMapTasks.map((task) => [task.id, task]));
-        const depsByTask = new Map<string, any[]>();
-        for (const dep of scopedMapDependencies) {
-            const current = depsByTask.get(dep.targetTaskId) ?? [];
-            current.push({
-                ...dep,
-                sourceTaskName: taskById.get(dep.sourceTaskId)?.name || null,
-            });
-            depsByTask.set(dep.targetTaskId, current);
-        }
-
-        return [...scopedMapPhases]
-            .sort((a, b) => a.displayOrder - b.displayOrder)
-            .map((phase) => {
-                const phaseTasks = scopedMapTasks
-                    .filter((task) => task.phaseId === phase.id)
-                    .sort((a, b) => a.orderInPhase - b.orderInPhase)
-                    .map((task) => {
-                        const firstRef = task.protocolRefs?.[0] as Record<string, any> | undefined;
-                        const protocolPageRaw = firstRef?.page;
-                        const protocolPage =
-                            typeof protocolPageRaw === "number"
-                                ? protocolPageRaw
-                                : protocolPageRaw
-                                    ? Number(protocolPageRaw)
-                                    : null;
-                        return {
-                            id: task.id,
-                            name: task.name,
-                            suggestedDate: task.suggestedDate
-                                ? new Date(task.suggestedDate)
-                                : task.dueDate
-                                    ? new Date(task.dueDate)
-                                    : null,
-                            startDate: task.startDate ? new Date(task.startDate) : null,
-                            dueDate: task.dueDate ? new Date(task.dueDate) : null,
-                            suggestedAssigneeId: task.assignedUserId ?? null,
-                            dependencies: depsByTask.get(task.id) ?? [],
-                            status: task.status,
-                            category: task.category,
-                            assignedRole: task.assignedRole ?? null,
-                            estimatedDuration: task.estimatedDuration ?? null,
-                            priority: task.priority,
-                            aiConfidence: task.aiConfidence ?? null,
-                            conditionalNote: task.conditionalNote ?? null,
-                            protocolReference: {
-                                section: typeof firstRef?.section === "string" ? firstRef.section : null,
-                                page: Number.isFinite(protocolPage as number) ? (protocolPage as number) : null,
-                                extractedText:
-                                    typeof firstRef?.extractedText === "string" ? firstRef.extractedText : null,
-                            },
-                        };
-                    });
-                return {
-                    id: phase.id,
-                    name: phase.name,
-                    color: phase.color,
-                    tasks: phaseTasks,
-                };
-            });
-    }, [scopedMapPhases, scopedMapTasks, scopedMapDependencies]);
-
-    const setupSections = useMemo(() => {
-        if (scopedMapSections.length > 0) {
-            const normalizeSectionKey = (name: string) => {
-                const normalized = String(name || "")
-                    .toLowerCase()
-                    .replace(/[^a-z0-9]+/g, " ")
-                    .trim();
-                if (/(schedule|visit window|study days|soa|soe)/.test(normalized)) return "schedule";
-                if (/(inclusion|exclusion|eligib)/.test(normalized)) return "eligibility";
-                if (/(randomi[sz]ation|irt|allocation)/.test(normalized)) return "randomization";
-                if (/(dosing|dose|drug administration|administration)/.test(normalized)) return "dosing";
-                if (/(procedure|assessment|exam|ecg|vital)/.test(normalized)) return "procedure";
-                if (/(lab|sample|hematology|chemistry|pk|biomarker|urinalysis)/.test(normalized)) return "lab";
-                if (/(adverse event|safety|sae|ae)/.test(normalized)) return "safety";
-                if (/(concomitant|medication)/.test(normalized)) return "medication";
-                return normalized || "custom";
-            };
-
-            const dedupedSections = [...scopedMapSections]
-                .sort((a, b) => a.displayOrder - b.displayOrder)
-                .filter((section, index, all) => {
-                    const key = normalizeSectionKey(section.name);
-                    return all.findIndex((row) => normalizeSectionKey(row.name) === key) === index;
-                });
-
-            const mappedSections = dedupedSections
-                .map((section) => ({
-                    id: section.id,
-                    name: section.name,
-                    dateReference: section.dateReference
-                        ? new Date(section.dateReference).toLocaleDateString("en-US", { month: "short", day: "numeric" })
-                        : null,
-                    pageReference: section.pageStart ? `P.${section.pageStart}` : null,
-                    pageStart: section.pageStart ?? null,
-                    linkedTaskIds: section.linkedTaskIds ?? [],
-                    linkedPhaseIds: section.linkedPhaseIds ?? [],
-                }));
-
-            const hasEnrollmentSection = mappedSections.some(
-                (section) => normalizeSectionKey(section.name) === "randomization"
-            );
-            if (!hasEnrollmentSection) {
-                const enrollmentMatches = setupPhases.flatMap((phase) =>
-                    phase.tasks
-                        .filter((task) => {
-                            const normalizedName = String(task.name || "")
-                                .toLowerCase()
-                                .replace(/[^a-z0-9]+/g, " ")
-                                .trim();
-                            const normalizedRef = String(task.protocolReference?.section || "")
-                                .toLowerCase()
-                                .replace(/[^a-z0-9]+/g, " ")
-                                .trim();
-                            return (
-                                normalizedName.includes("enroll") ||
-                                normalizedName.includes("enrol") ||
-                                normalizedName.includes("random") ||
-                                normalizedName.includes("irt") ||
-                                normalizedRef.includes("enroll") ||
-                                normalizedRef.includes("enrol") ||
-                                normalizedRef.includes("random") ||
-                                normalizedRef.includes("irt")
-                            );
-                        })
-                        .map((task) => ({
-                            taskId: task.id,
-                            phaseId: phase.id,
-                            page: task.protocolReference?.page ?? null,
-                        }))
-                );
-
-                const linkedTaskIds = Array.from(new Set(enrollmentMatches.map((row) => row.taskId)));
-                const linkedPhaseIds = Array.from(new Set(enrollmentMatches.map((row) => row.phaseId)));
-                const firstPage =
-                    enrollmentMatches.find((row) => typeof row.page === "number" && Number.isFinite(row.page))?.page ??
-                    null;
-                mappedSections.push({
-                    id: "fallback-enrollment-randomization",
-                    name: "Enrollment & Randomization",
-                    dateReference: null,
-                    pageReference: firstPage ? `P.${firstPage}` : null,
-                    pageStart: firstPage,
-                    linkedTaskIds,
-                    linkedPhaseIds,
-                });
-            }
-
-            return mappedSections;
-        }
-
-        if (setupPhases.length === 0) return [];
-
-        type FallbackSection = {
-            id: string;
-            name: string;
-            linkedTaskIds: string[];
-            linkedPhaseIds: string[];
-            pageStart: number | null;
-        };
-
-        const buckets: Array<{
-            id: string;
-            name: string;
-            match: (task: any, normalizedName: string) => boolean;
-        }> = [
-                {
-                    id: "schedule",
-                    name: "Schedule of Events",
-                    match: () => true,
-                },
-                {
-                    id: "inclusion-exclusion",
-                    name: "Inclusion / Exclusion",
-                    match: (task, normalizedName) =>
-                        task.category === "eligibility" ||
-                        task.category === "consent" ||
-                        normalizedName.includes("inclusion") ||
-                        normalizedName.includes("exclusion") ||
-                        normalizedName.includes("consent"),
-                },
-                {
-                    id: "enrollment-randomization",
-                    name: "Enrollment & Randomization",
-                    match: (task, normalizedName) =>
-                        task.category === "coordination" ||
-                        normalizedName.includes("enroll") ||
-                        normalizedName.includes("enrol") ||
-                        normalizedName.includes("random") ||
-                        normalizedName.includes("irt"),
-                },
-                {
-                    id: "dosing",
-                    name: "Dosing & Administration",
-                    match: (task, normalizedName) =>
-                        task.category === "drug_administration" ||
-                        normalizedName.includes("dose") ||
-                        normalizedName.includes("infusion") ||
-                        normalizedName.includes("administration"),
-                },
-                {
-                    id: "procedures",
-                    name: "Procedures & Assessments",
-                    match: (task) =>
-                        ["assessment", "vital_signs", "questionnaire", "imaging"].includes(String(task.category || "")),
-                },
-                {
-                    id: "lab",
-                    name: "Lab & Samples",
-                    match: (task, normalizedName) =>
-                        task.category === "lab_sample" ||
-                        normalizedName.includes("sample") ||
-                        normalizedName.includes("blood") ||
-                        normalizedName.includes("lab"),
-                },
-                {
-                    id: "safety",
-                    name: "Adverse Events & Safety",
-                    match: (task, normalizedName) =>
-                        task.category === "safety_reporting" ||
-                        normalizedName.includes("adverse") ||
-                        normalizedName.includes("safety"),
-                },
-                {
-                    id: "concomitant",
-                    name: "Concomitant Medications",
-                    match: (_task, normalizedName) =>
-                        normalizedName.includes("concomitant") || normalizedName.includes("medication"),
-                },
-            ];
-
-        const fallbackMap = new Map<string, FallbackSection>();
-        for (const bucket of buckets) {
-            fallbackMap.set(bucket.id, {
-                id: `fallback-${bucket.id}`,
-                name: bucket.name,
-                linkedTaskIds: [],
-                linkedPhaseIds: [],
-                pageStart: null,
-            });
-        }
-
-        for (const phase of setupPhases) {
-            for (const task of phase.tasks) {
-                const normalizedName = String(task.name || "")
-                    .toLowerCase()
-                    .replace(/[^a-z0-9]+/g, " ")
-                    .trim();
-                for (const bucket of buckets) {
-                    if (!bucket.match(task, normalizedName)) continue;
-                    const target = fallbackMap.get(bucket.id);
-                    if (!target) continue;
-                    if (!target.linkedTaskIds.includes(task.id)) target.linkedTaskIds.push(task.id);
-                    if (!target.linkedPhaseIds.includes(phase.id)) target.linkedPhaseIds.push(phase.id);
-                    if (!target.pageStart && task.protocolReference?.page) {
-                        target.pageStart = task.protocolReference.page;
-                    }
-                }
-            }
-        }
-
-        const fallbackSections = Array.from(fallbackMap.values()).filter((section) => section.linkedTaskIds.length > 0);
-        if (fallbackSections.length > 0) {
-            return fallbackSections.map((section, index) => ({
-                id: section.id,
-                name: section.name,
-                dateReference: null,
-                pageReference: section.pageStart ? `P.${section.pageStart}` : null,
-                pageStart: section.pageStart,
-                linkedTaskIds: section.linkedTaskIds,
-                linkedPhaseIds: section.linkedPhaseIds,
-                displayOrder: index,
-            }));
-        }
-
-        const allTasks = setupPhases.flatMap((phase) => phase.tasks);
-        const allTaskIds = allTasks.map((task) => task.id);
-        const allPhaseIds = setupPhases.map((phase) => phase.id);
-        const firstPage = allTasks.find((task) => task.protocolReference?.page)?.protocolReference?.page ?? null;
-
-        return [
-            {
-                id: "fallback-schedule",
-                name: "Schedule of Events",
-                dateReference: null,
-                pageReference: firstPage ? `P.${firstPage}` : null,
-                pageStart: firstPage,
-                linkedTaskIds: allTaskIds,
-                linkedPhaseIds: allPhaseIds,
-            },
-        ];
-    }, [scopedMapSections, setupPhases]);
-
-    const setupDependencyCandidates = useMemo(
-        () =>
-            scopedMapTasks
-                .filter((task) => task.id !== setupEditingTaskId)
-                .slice()
-                .sort((a, b) => a.name.localeCompare(b.name)),
-        [scopedMapTasks, setupEditingTaskId]
+  if (activeTab === "document-hub") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <Documents trialId={trialId} />
+      </div>
     );
+  } else if (activeTab === "study-setup-wizard") {
+    const isSyncingExecutionMap = importLegacyScaffold.isPending;
+    const generationReady = Boolean(generatedSetupMapId) && !(isGeneratingScaffold || isSyncingExecutionMap);
+    const showSetupAgentAlwaysOn =
+      isSetupPlanLaunched && !(isGeneratingScaffold || isSyncingExecutionMap || generationReady);
+    const shouldShowSetupWizard =
+      isGeneratingScaffold || isSyncingExecutionMap || generationReady || !hasRenderableSetupMap || showSetupAgentAlwaysOn;
 
-    const setupAssignedMembersForTaskForm = useMemo(
-        () =>
-            trialTeamMembers.map((member) => ({
-                id: String(member.id),
-                name: member.name,
-                role: member.role || "",
-            })),
-        [trialTeamMembers]
-    );
-
-    useEffect(() => {
-        if (!setupTaskModalOpen || setupPhases.length === 0) return;
-        if (setupPhases.some((phase) => phase.id === setupTaskForm.phaseId)) return;
-        setSetupTaskForm((prev) => ({ ...prev, phaseId: setupPhases[0]?.id || "" }));
-    }, [setupTaskModalOpen, setupPhases, setupTaskForm.phaseId]);
-
-    const syncSetupTaskDependencies = async (targetTaskId: string, selectedSourceTaskIds: string[]) => {
-        if (!map?.id) return;
-        const existingDeps = scopedMapDependencies.filter((dep) => dep.targetTaskId === targetTaskId);
-        const existingSourceSet = new Set(existingDeps.map((dep) => dep.sourceTaskId));
-        const selectedSourceSet = new Set(selectedSourceTaskIds);
-        const toAdd = selectedSourceTaskIds.filter((taskId) => !existingSourceSet.has(taskId));
-        const toRemove = existingDeps.filter((dep) => !selectedSourceSet.has(dep.sourceTaskId));
-
-        for (const sourceTaskId of toAdd) {
-            await addExecutionDependency({
-                sourceTaskId,
-                targetTaskId,
-                dependencyType: "finish_to_start",
-            });
-        }
-
-        for (const dep of toRemove) {
-            await removeExecutionDependency(dep.id);
-        }
-    };
-
-    const handleAddSetupTask = () => {
-        if (!map?.id || setupPhases.length === 0) {
-            toast.error("No execution map loaded");
-            return;
-        }
-        setSetupTaskModalMode("create");
-        setSetupEditingTaskId(null);
-        setSetupDependencyTaskIds([]);
-        setSetupTaskForm({
-            title: "",
-            description: "",
-            phaseId: setupPhases[0]?.id || "",
-            category: "custom",
-            status: map.status === "active" ? "todo" : "suggested",
-            priority: "medium",
-            assignedRole: "",
-            assigneeMemberId: "",
-            dueDate: "",
-            sourceSection: "",
-            sourcePage: "",
-            sourceText: "",
-        });
-        setSetupTaskModalOpen(true);
-    };
-
-    const handleEditSetupTask = (taskId: string) => {
-        const task = scopedMapTasks.find((row) => row.id === taskId);
-        if (!task) return;
-        const sourceRef = (task.protocolRefs || [])[0] as unknown as Record<string, unknown> | undefined;
-        const sourcePageRaw = sourceRef?.page;
-        const sourcePage =
-            typeof sourcePageRaw === "number"
-                ? String(sourcePageRaw)
-                : typeof sourcePageRaw === "string"
-                    ? sourcePageRaw
-                    : "";
-        const memberForAssignee = setupAssignedMembersForTaskForm.find(
-            (member) =>
-                String(member.id) === String(task.assignedUserId || "") ||
-                String(member.id) === `member-${String(task.assignedUserId || "")}` ||
-                member.name === (task.suggestedAssignee || "")
-        );
-        const predecessorTaskIds = scopedMapDependencies
-            .filter((dep) => dep.targetTaskId === task.id)
-            .map((dep) => dep.sourceTaskId);
-
-        setSetupTaskModalMode("edit");
-        setSetupEditingTaskId(task.id);
-        setSetupDependencyTaskIds(predecessorTaskIds);
-        setSetupTaskForm({
-            title: task.name || "",
-            description: task.description || "",
-            phaseId: task.phaseId,
-            category: (task.category as TaskCategory) || "custom",
-            status: (task.status as TaskStatus) || "todo",
-            priority: (task.priority as TaskPriority) || "medium",
-            assignedRole: String(task.assignedRole || ""),
-            assigneeMemberId: memberForAssignee ? String(memberForAssignee.id) : "",
-            dueDate: toDateInputValue(task.dueDate || task.suggestedDate),
-            sourceSection: String(sourceRef?.section || ""),
-            sourcePage,
-            sourceText: String(sourceRef?.extractedText || ""),
-        });
-        setSetupTaskModalOpen(true);
-    };
-
-    useEffect(() => {
-        if (!pendingOpenSetupTaskId) return;
-        if (activeTab !== "study-setup-wizard") return;
-        const task = scopedMapTasks.find((row) => row.id === pendingOpenSetupTaskId);
-        if (!task) return;
-        handleEditSetupTask(task.id);
-        setPendingOpenSetupTaskId(null);
-        if (typeof window === "undefined") return;
-        const params = new URLSearchParams(window.location.search);
-        params.delete("openTask");
-        params.delete("mapId");
-        const nextQuery = params.toString();
-        const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`;
-        window.history.replaceState(window.history.state, "", nextUrl);
-    }, [activeTab, pendingOpenSetupTaskId, scopedMapTasks, handleEditSetupTask]);
-
-    const handleSaveSetupTaskModal = async () => {
-        if (!map?.id) {
-            toast.error("No execution map loaded");
-            return;
-        }
-        const title = setupTaskForm.title.trim();
-        if (!title) {
-            toast.error("Task title is required.");
-            return;
-        }
-        if (!setupTaskForm.phaseId) {
-            toast.error("Phase / visit is required.");
-            return;
-        }
-
-        const selectedMember = setupAssignedMembersForTaskForm.find(
-            (member) => String(member.id) === setupTaskForm.assigneeMemberId
-        );
-        const selectedMemberNumericId = selectedMember ? parseMemberNumericId(selectedMember.id) : null;
-        const assignedRole =
-            setupTaskForm.assignedRole &&
-                SETUP_ASSIGNED_ROLE_OPTIONS.includes(setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
-                ? (setupTaskForm.assignedRole as (typeof SETUP_ASSIGNED_ROLE_OPTIONS)[number])
-                : null;
-        const dueDateIso = toIsoDateTime(setupTaskForm.dueDate);
-        const pageNumber = Number(setupTaskForm.sourcePage);
-        const hasSource =
-            Boolean(setupTaskForm.sourceSection.trim()) ||
-            Boolean(setupTaskForm.sourceText.trim()) ||
-            (Number.isFinite(pageNumber) && pageNumber > 0);
-        const protocolRefs = hasSource
-            ? [
-                {
-                    section: setupTaskForm.sourceSection.trim() || "Protocol",
-                    ...(Number.isFinite(pageNumber) && pageNumber > 0 ? { page: Math.round(pageNumber) } : {}),
-                    ...(setupTaskForm.sourceText.trim() ? { extractedText: setupTaskForm.sourceText.trim() } : {}),
-                },
-            ]
-            : [];
-
-        try {
-            if (setupTaskModalMode === "create") {
-                const created = await addExecutionTask(setupTaskForm.phaseId, {
-                    name: title,
-                    description: setupTaskForm.description.trim() || undefined,
-                    category: setupTaskForm.category,
-                    status: setupTaskForm.status,
-                    priority: setupTaskForm.priority,
-                    assignedRole,
-                    assignedUserId: selectedMemberNumericId,
-                    suggestedAssignee: selectedMember?.name || null,
-                    suggestedDate: dueDateIso,
-                    dueDate: dueDateIso,
-                    createdBy: "user",
-                    isCustom: true,
-                    protocolRefs: protocolRefs as any,
-                    tags: [],
-                });
-                await syncSetupTaskDependencies(created.id, setupDependencyTaskIds);
-                toast.success("Task created.");
-            } else {
-                const taskId = setupEditingTaskId;
-                const existing = taskId ? scopedMapTasks.find((task) => task.id === taskId) : null;
-                if (!taskId || !existing) {
-                    toast.error("Task not found.");
-                    return;
-                }
-                await updateExecutionTask(taskId, {
-                    name: title,
-                    description: setupTaskForm.description.trim() || "",
-                    category: setupTaskForm.category,
-                    status: setupTaskForm.status,
-                    priority: setupTaskForm.priority,
-                    assignedRole,
-                    assignedUserId: selectedMemberNumericId,
-                    suggestedAssignee: selectedMember?.name || null,
-                    suggestedDate: dueDateIso,
-                    dueDate: dueDateIso,
-                    protocolRefs: protocolRefs as any,
-                    isCustom: true,
-                    createdBy: "user",
-                });
-                if (existing.phaseId !== setupTaskForm.phaseId) {
-                    const nextOrder = scopedMapTasks.filter((task) => task.phaseId === setupTaskForm.phaseId).length;
-                    await moveExecutionTask(taskId, setupTaskForm.phaseId, nextOrder);
-                }
-                await syncSetupTaskDependencies(taskId, setupDependencyTaskIds);
-                toast.success("Task updated.");
-            }
-            setSetupTaskModalOpen(false);
-            setSetupEditingTaskId(null);
-        } catch (error: any) {
-            toast.error(error?.message || "Failed to save task.");
-        }
-    };
-
-    const handleDeleteSetupTaskFromModal = async () => {
-        if (!setupEditingTaskId) return;
-        const task = scopedMapTasks.find((item) => item.id === setupEditingTaskId);
-        if (!task) return;
-        const confirmed = window.confirm(`Delete "${task.name}"?`);
-        if (!confirmed) return;
-        try {
-            await removeExecutionTask(setupEditingTaskId);
-            setSetupTaskModalOpen(false);
-            setSetupEditingTaskId(null);
-            toast.success("Task deleted.");
-        } catch (error: any) {
-            toast.error(error?.message || "Failed to delete task.");
-        }
-    };
-
-    const handleDeleteSetupTask = async (taskId: string) => {
-        const task = scopedMapTasks.find((row) => row.id === taskId);
-        if (!task) return;
-        if (!window.confirm(`Delete task "${task.name}"?`)) return;
-        try {
-            await removeExecutionTask(taskId);
-            toast.success("Task deleted");
-        } catch (error: any) {
-            toast.error(`Failed to delete task: ${error?.message || "Unknown error"}`);
-        }
-    };
-
-    const handleLaunchExecutionMap = async () => {
-        if (isLaunchingExecutionMap) return;
-
-        const mapId = executionMapSummary?.id || map?.id;
-        if (!mapId) {
-            toast.error("No execution map loaded");
-            return;
-        }
-
-        setIsLaunchingExecutionMap(true);
-        try {
-            const confirmation = await confirmSuggestedMutation.mutateAsync({ mapId });
-            await launchMapMutation.mutateAsync({ mapId });
-            await Promise.all([
-                utils.map.getByTrial.invalidate({ trialId, includeArchived: false, demoMode: currentDataMode }),
-                utils.map.load.invalidate({ mapId }),
-                utils.map.loadWorkspace.invalidate(),
-            ]);
-            const refreshedSummary = await refetchExecutionMapSummary();
-            const resolvedMapId = refreshedSummary.data?.id || mapId;
-            await loadExecutionMap(resolvedMapId);
-            if (confirmation.updated > 0) {
-                toast.success(
-                    `Execution map launched (${confirmation.updated} suggested task${confirmation.updated === 1 ? "" : "s"} auto-confirmed)`
-                );
-            } else {
-                toast.success("Execution map launched");
-            }
-        } catch (error: any) {
-            toast.error(`Failed to launch map: ${error?.message || "Review suggested tasks first."}`);
-        } finally {
-            setIsLaunchingExecutionMap(false);
-        }
-    };
-
-    let mainContent: React.ReactNode = null;
-    let lockPageScrollToScaffold = false;
-    const hasRenderableSetupMap =
-        isCurrentTrialExecutionMap && !!map?.id && setupPhases.length > 0 && scopedMapTasks.length > 0;
-    const renderSetupScaffoldWorkspace = (fullscreen: boolean) => (
-        <div
-            className={
-                fullscreen
-                    ? "h-full w-full bg-white flex flex-col"
-                    : "h-full bg-white rounded-lg border border-gray-200 overflow-hidden flex flex-col"
-            }
-        >
+    mainContent = showSetupAgentAlwaysOn ? (
+      renderSetupAgentAlwaysOn()
+    ) : !shouldShowSetupWizard ? (
+      <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
+        {renderSetupScaffoldWorkspace(false)}
+        {isSetupFullscreenOpen ? (
+          <div className="fixed inset-0 z-[70] pointer-events-auto">
             <div
-                className={`relative ${fullscreen ? "px-6 py-5 border-b border-gray-100" : "px-6 pt-5 pb-4 border-b border-gray-200"
-                    }`}
-            >
-                <div className="w-full max-w-[720px]">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-900">Step 4 of 4</p>
-                    <div className="mt-6 h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
-                        <div className="h-full rounded-full bg-[#0E0017]" style={{ width: "100%" }} />
-                    </div>
-                    <h2 className="text-2xl font-bold text-gray-900 mt-8">Review & Launch</h2>
-                    <p className="text-sm text-gray-500 mt-2">
-                        Validate the generated execution plan, adjust tasks if needed, then confirm launch.
-                    </p>
-                </div>
-                {fullscreen ? (
-                    <button
-                        type="button"
-                        onClick={() => setIsSetupFullscreenVisible(false)}
-                        className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
-                        aria-label="Close fullscreen setup"
-                    >
-                        <X className="w-4 h-4" />
-                    </button>
-                ) : (
-                    <button
-                        type="button"
-                        onClick={openSetupFullscreen}
-                        className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
-                        aria-label="Expand setup"
-                    >
-                        <Maximize2 className="w-4 h-4" />
-                    </button>
-                )}
-            </div>
-            <div className="flex-1 min-h-0 overflow-hidden px-6 py-4">
-                <div className="h-full min-h-0">
-                    <TaskScaffoldView
-                        phases={setupPhases}
-                        sections={setupSections}
-                        view={setupScaffoldView}
-                        onViewChange={setSetupScaffoldView}
-                        isConfirming={isLaunchingExecutionMap}
-                        timelineStartDate={trial?.startDate ? new Date(trial.startDate) : null}
-                        timelineEndDate={trial?.endDate ? new Date(trial.endDate) : null}
-                        onConfirm={handleLaunchExecutionMap}
-                        onAddTask={handleAddSetupTask}
-                        onEditTask={handleEditSetupTask}
-                        onDeleteTask={handleDeleteSetupTask}
-                        onOpenProtocolPage={(page, sectionName) => {
-                            const protocolDoc =
-                                protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
-                                protocols[0];
-                            const url = protocolDoc?.fileUrl as string | undefined;
-                            if (!url) {
-                                toast.error("No protocol PDF available to open");
-                                return;
-                            }
-                            const target = page && Number.isFinite(page) ? `${url}#page=${page}` : url;
-                            window.open(target, "_blank", "noopener,noreferrer");
-                            logEvent({
-                                eventType: "document_section_accessed",
-                                action: "open_source_from_protocol_map",
-                                entityType: "protocol_section",
-                                payload: {
-                                    sectionName,
-                                    page: page ?? null,
-                                    trialId,
-                                },
-                                aiInvolved: true,
-                            });
-                        }}
-                        onReorderTasks={(phaseId, orderedTaskIds) => {
-                            void reorderExecutionTasks(phaseId, orderedTaskIds).catch((error) => {
-                                toast.error(`Failed to reorder tasks: ${error?.message || "Unknown error"}`);
-                            });
-                        }}
-                    />
-                </div>
-            </div>
-        </div>
-    );
-
-    const renderSetupAgentAlwaysOn = () => (
-        <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
-            <div className="h-full bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="relative h-full w-full overflow-hidden flex items-center justify-center py-10">
-                    <div
-                        className="absolute inset-0 pointer-events-none"
-                        style={{
-                            backgroundColor: "#ffffff",
-                            backgroundImage: "radial-gradient(rgba(148, 163, 184, 0.16) 1px, transparent 1px)",
-                            backgroundSize: "18px 18px",
-                        }}
-                    />
-                    <div
-                        className="absolute inset-0 bg-center bg-cover bg-no-repeat opacity-75 pointer-events-none"
-                        style={{ backgroundImage: `url(${studySetupBackground})` }}
-                    />
-                    <div className="relative z-10 text-center max-w-3xl px-6 pb-10">
-                        <div className="mx-auto h-[360px] w-[360px]">
-                            <DotLottieReact
-                                src="https://lottie.host/d8617406-7b38-4ae4-968d-b934a05d4a10/UKTFUbeuwK.lottie"
-                                autoplay
-                                loop
-                                className="h-full w-full"
-                            />
-                        </div>
-                        <h2 className="mt-2 text-3xl font-bold text-gray-900">Themison Study Setup Agent is always on</h2>
-                        <p className="mt-3 text-base text-gray-600">
-                            If a new amendment arrives, Themison will flag impacted tasks, timing windows, and dependencies so your
-                            execution plan stays current.
-                        </p>
-                        <div className="mt-6 flex items-center justify-center gap-3">
-                            <Button
-                                className="bg-[#2F6FED] hover:bg-[#255BD1] text-white"
-                                onClick={() => navigate(`/tasks?trialId=${trialId}`)}
-                            >
-                                Open Task Manager
-                                <ArrowRight className="h-4 w-4 ml-2" />
-                            </Button>
-                            <Button variant="outline" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
-                                Ask Themison AI
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-
-    if (activeTab === "document-hub") {
-        mainContent = (
-            <div className="px-6 pb-6">
-                <Documents trialId={trialId} />
-            </div>
-        );
-    } else if (activeTab === "study-setup-wizard") {
-        const isSyncingExecutionMap = importLegacyScaffold.isPending;
-        const generationReady = Boolean(generatedSetupMapId) && !(isGeneratingScaffold || isSyncingExecutionMap);
-        const showSetupAgentAlwaysOn =
-            isSetupPlanLaunched && !(isGeneratingScaffold || isSyncingExecutionMap || generationReady);
-        const shouldShowSetupWizard =
-            isGeneratingScaffold || isSyncingExecutionMap || generationReady || !hasRenderableSetupMap || showSetupAgentAlwaysOn;
-
-        mainContent = showSetupAgentAlwaysOn ? (
-            renderSetupAgentAlwaysOn()
-        ) : !shouldShowSetupWizard ? (
-            <div className="h-full min-h-0 overflow-hidden px-6 pb-6">
-                {renderSetupScaffoldWorkspace(false)}
-                {isSetupFullscreenOpen ? (
-                    <div className="fixed inset-0 z-[70] pointer-events-auto">
-                        <div
-                            className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-500 ${isSetupFullscreenVisible ? "opacity-100" : "opacity-0"
-                                }`}
-                            onClick={() => setIsSetupFullscreenVisible(false)}
-                        />
-                        <div
-                            className={`absolute left-0 top-0 h-full w-full bg-white flex flex-col transform-gpu transition-[transform,opacity] duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${isSetupFullscreenVisible ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"
-                                }`}
-                        >
-                            {renderSetupScaffoldWorkspace(true)}
-                        </div>
-                    </div>
-                ) : null}
-            </div>
-        ) : (
-            <div className="px-6 pb-6 space-y-3">
-                <StudySetupWizardEntry
-                    trialId={trialId}
-                    onGenerate={() => {
-                        void handleGenerateScaffold();
-                    }}
-                    onCancelGenerate={handleCancelGenerateScaffold}
-                    generationReady={generationReady}
-                    onSeePlan={() => {
-                        void handleOpenGeneratedScaffold();
-                    }}
-                    isGenerating={isGeneratingScaffold || isSyncingExecutionMap}
-                />
-            </div>
-        );
-        if (!shouldShowSetupWizard || showSetupAgentAlwaysOn) {
-            lockPageScrollToScaffold = true;
-        }
-    } else if (activeTab === "bookmarks") {
-        mainContent = (
-            <div className="px-6 pb-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                        <div>
-                            <h2 className="text-base font-semibold text-gray-900">Trial Systems</h2>
-                            <p className="text-sm text-gray-500 mt-1">Quick access to external systems used in this trial.</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <Button className="text-sm h-9">
-                                <Plus className="h-4 w-4 mr-2" />
-                                Add Link
-                            </Button>
-                            <Button variant="outline" className="text-sm h-9">
-                                <Pencil className="h-4 w-4 mr-2" />
-                                Edit
-                            </Button>
-                            <Button variant="outline" className="text-sm h-9">
-                                <Share2 className="h-4 w-4 mr-2" />
-                                Share
-                            </Button>
-                        </div>
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap items-center gap-4 border-b border-gray-200 pb-3 text-sm">
-                        {["All", "EDC", "CTMS", "eTMF / eISF", "Sponsor Portal", "Safety", "Other"].map((tab) => (
-                            <button
-                                key={tab}
-                                className={tab === "All" ? "text-blue-600 border-b-2 border-blue-600 pb-1" : "text-gray-500 hover:text-gray-700 pb-1"}
-                            >
-                                {tab}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="mt-4 flex flex-wrap items-center gap-3">
-                        <div className="relative min-w-[260px] flex-1">
-                            <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                            <Input placeholder="Search systems..." className="pl-9 h-10" />
-                        </div>
-                        <Button variant="outline" size="sm" className="h-9 text-sm">
-                            Categories
-                            <ChevronDown className="h-4 w-4 ml-2" />
-                        </Button>
-                        <Button variant="outline" size="sm" className="h-9 text-sm">
-                            <Filter className="h-4 w-4 mr-2" />
-                            Filter
-                        </Button>
-                    </div>
-
-                    <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                        {mockBookmarks.map((bookmark) => (
-                            <div key={bookmark.id} className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                                <div className="p-4 space-y-3">
-                                    <div className="flex items-center gap-3">
-                                        <div className="h-10 w-10 rounded-md border border-gray-200 bg-white flex items-center justify-center overflow-hidden">
-                                            <img src={getFaviconUrl(bookmark.url)} alt={`${bookmark.name} logo`} className="h-5 w-5" loading="lazy" />
-                                        </div>
-                                        <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                                            {bookmark.type}
-                                        </span>
-                                    </div>
-                                    <div>
-                                        <div className="text-sm font-semibold text-gray-900">{bookmark.name}</div>
-                                        <p className="text-sm text-gray-500 mt-1">{bookmark.notes}</p>
-                                    </div>
-                                </div>
-                                <button className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
-                                    <span>Open</span>
-                                    <ArrowRight className="h-4 w-4 text-gray-400" />
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </div>
-        );
-    } else if (activeTab === "team") {
-        mainContent = (
-            <div className="px-6 pb-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-base font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
-                        <Button variant="outline" size="sm" onClick={() => setManageTeamOpen(true)}>
-                            Manage Team
-                        </Button>
-                    </div>
-                    {trialTeamMembers.length === 0 ? (
-                        <p className="text-sm text-gray-500">No members assigned yet.</p>
-                    ) : (
-                        <div className="space-y-2">
-                            {trialTeamMembers.map((member) => (
-                                <div key={member.id} className="rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
-                                    <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
-                                        <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
-                                        <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
-                                            <User className="h-4 w-4" />
-                                        </AvatarFallback>
-                                    </Avatar>
-                                    <div>
-                                        <p className="text-sm font-medium text-gray-900">{member.name}</p>
-                                        <p className="text-xs text-gray-500">{member.role}</p>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    } else if (activeTab === "patients") {
-        // mainContent = (
-        //   <div className="px-6 pb-6">
-        //     <div className="bg-white rounded-xl border border-gray-200 p-6">
-        //       <h2 className="text-base font-semibold text-gray-900">Patients</h2>
-        //       <p className="text-sm text-gray-500 mt-1">Enrollment tracking for this trial.</p>
-        //       <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
-        //         <div className="rounded-lg border border-gray-200 p-4">
-        //           <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Enrolled Patients</p>
-        //           <p className="text-3xl font-semibold text-gray-900 mt-2">{enrolledPatients}</p>
-        //         </div>
-        //         <div className="rounded-lg border border-gray-200 p-4">
-        //           <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Target Patients</p>
-        //           <p className="text-3xl font-semibold text-gray-900 mt-2">{targetPatients}</p>
-        //         </div>
-        //       </div>
-        //     </div>
-        //   </div>
-        // );
-        mainContent = (
-            <div className="px-6 pb-6">
-                <PatientsTabDemo
-                    enrolledPatients={enrolledPatients}
-                    targetPatients={targetPatients}
-                />
-            </div>
-        );
-    } else if (activeTab === "notifications") {
-        mainContent = (
-            <div className="px-6 pb-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <h2 className="text-base font-semibold text-gray-900">Notifications</h2>
-                    <p className="text-sm text-gray-500 mt-1">Trial-level alerts and reminders will appear here.</p>
-                </div>
-            </div>
-        );
-    } else if (activeTab === "settings") {
-        mainContent = (
-            <div className="px-6 pb-6 space-y-5">
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <h2 className="text-base font-semibold text-gray-900">Trial Settings</h2>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Manage stable configuration and safety-critical actions for this trial.
-                    </p>
-
-                    <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div className="rounded-lg border border-gray-200 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Trial ID</p>
-                            <p className="mt-1 font-medium text-gray-900">{trialId}</p>
-                        </div>
-                        <div className="rounded-lg border border-gray-200 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Data Mode</p>
-                            <p className="mt-1 font-medium text-gray-900">{currentDataMode}</p>
-                        </div>
-                        <div className="rounded-lg border border-gray-200 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Created</p>
-                            <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.createdAt)}</p>
-                        </div>
-                        <div className="rounded-lg border border-gray-200 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last Updated</p>
-                            <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.updatedAt)}</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <h2 className="text-base font-semibold text-gray-900">Workspace Controls</h2>
-                    <p className="text-sm text-gray-500 mt-1">
-                        Team assignment is managed in the Team tab. Document controls are managed in Document Hub.
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setActiveTab("team")}>
-                            Manage Team
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setActiveTab("document-hub")}>
-                            Open Document Hub
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setActiveTab("overview")}>
-                            Open Overview
-                        </Button>
-                    </div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-red-200 p-6">
-                    <div className="flex items-start gap-3">
-                        <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
-                        <div>
-                            <h2 className="text-base font-semibold text-red-700">Danger Zone</h2>
-                            <p className="text-sm text-red-600 mt-1">
-                                Deleting a trial removes all associated sandbox data: documents, setup plan, and AI context snapshots.
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="mt-5 max-w-sm space-y-2">
-                        <label className="text-sm font-medium text-gray-700">Type `DELETE` to enable</label>
-                        <Input
-                            value={deleteConfirmText}
-                            onChange={(event) => setDeleteConfirmText(event.target.value)}
-                            placeholder="Type DELETE"
-                        />
-                    </div>
-
-                    <div className="mt-4">
-                        <Button
-                            onClick={handleDeleteTrialFromSettings}
-                            disabled={deleteConfirmText !== "DELETE" || deleteTrialMutation.isPending}
-                            className="bg-red-600 hover:bg-red-700 text-white"
-                        >
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            {deleteTrialMutation.isPending ? "Deleting..." : "Delete Trial"}
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        );
-    } else if (activeTab === "visit-template") {
-        mainContent = (
-            <div className="px-6 pb-6">
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <h2 className="text-base font-semibold text-gray-900">Visit Template</h2>
-                    <p className="text-sm text-gray-500 mt-1">Visit template tools will be available here.</p>
-                </div>
-            </div>
-        );
-    } else {
-        mainContent = (
-            <div className="px-6 pb-6 space-y-5">
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-                    <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700/70">
-                            Investigational Product / Drug Name
-                        </p>
-                        <EditableField
-                            value={trial?.investigationalProduct || ""}
-                            onSave={async (newValue) => {
-                                await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, investigationalProduct: newValue });
-                            }}
-                            emptyText="Add investigational product"
-                            className="mt-2 text-3xl font-semibold text-gray-900"
-                        />
-
-                        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Sponsor:</span>
-                                <div className="mt-1 flex items-center justify-between gap-2">
-                                    <EditableField
-                                        value={trial?.sponsor || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sponsor: newValue });
-                                        }}
-                                        emptyText="Add sponsor"
-                                        className="text-sm font-medium text-gray-900 min-w-0"
-                                    />
-                                    {sponsorLogoUrl && !sponsorLogoFailed ? (
-                                        <img
-                                            src={sponsorLogoUrl}
-                                            alt={`${trial?.sponsor || "Sponsor"} logo`}
-                                            className="h-7 w-7 rounded-sm border border-gray-200 bg-white object-contain p-0.5"
-                                            onError={() => setSponsorLogoFailed(true)}
-                                        />
-                                    ) : (
-                                        <div className="h-7 min-w-7 rounded-sm border border-gray-200 bg-blue-50 text-blue-700 text-[10px] font-semibold flex items-center justify-center px-1">
-                                            {sponsorInitials}
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Phase:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.phase || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, phase: newValue });
-                                        }}
-                                        emptyText="Add phase"
-                                        className="text-sm font-medium text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Protocol Number:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.protocolNumber || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, protocolNumber: newValue });
-                                        }}
-                                        emptyText="Add protocol number"
-                                        className="text-sm font-medium text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">NCT Number:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.nctNumber || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, nctNumber: newValue });
-                                        }}
-                                        emptyText="Add NCT number"
-                                        className="text-sm font-medium text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Current Version:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.currentVersion || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, currentVersion: newValue });
-                                        }}
-                                        emptyText="Add current version"
-                                        className="text-sm font-medium text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Location:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.location || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, location: newValue });
-                                        }}
-                                        emptyText="Add location"
-                                        className="text-sm font-medium text-gray-900"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-5 space-y-1">
-                            <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Protocol Title:</span>
-                            <div className="mt-1">
-                                <EditableField
-                                    value={trial?.title || ""}
-                                    onSave={async (newValue) => {
-                                        await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, title: newValue });
-                                    }}
-                                    emptyText="Add protocol title"
-                                    className="text-sm text-gray-900"
-                                />
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="bg-white rounded-xl border border-gray-200 p-6">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-sm font-semibold text-gray-900">Operational Status</h2>
-                        </div>
-
-                        <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2">
-                            <div className="flex items-center justify-between gap-2">
-                                <div className="text-[11px] uppercase tracking-wide font-semibold text-blue-700">
-                                    Themison AI Recommendation
-                                </div>
-                                {primarySuggestion ? (
-                                    <span
-                                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${primarySuggestion.priority === "high"
-                                            ? "bg-red-100 text-red-700"
-                                            : primarySuggestion.priority === "medium"
-                                                ? "bg-amber-100 text-amber-700"
-                                                : "bg-blue-100 text-blue-700"
-                                            }`}
-                                    >
-                                        {primarySuggestion.priority}
-                                    </span>
-                                ) : null}
-                            </div>
-                            {primarySuggestion ? (
-                                <p className="text-sm font-medium text-blue-900 mt-1">{primarySuggestion.title}</p>
-                            ) : null}
-                            <p className="text-sm text-blue-800 mt-1">{aiRecommendation}</p>
-                        </div>
-
-                        <div className="mt-4 space-y-4">
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-gray-600">Status:</span>
-                                <EditableField
-                                    value={trialStatusValue}
-                                    displayValue={trialStatusLabel}
-                                    onSave={async (newValue) => {
-                                        await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, status: newValue as any });
-                                    }}
-                                    type="select"
-                                    options={[
-                                        { value: "not-started", label: "Not started" },
-                                        { value: "active", label: "Active" },
-                                        { value: "recruiting", label: "Recruiting" },
-                                        { value: "on-hold", label: "On hold" },
-                                        { value: "completed", label: "Completed" },
-                                        { value: "terminated", label: "Terminated" },
-                                    ]}
-                                    emptyText="Not started"
-                                    className="text-sm"
-                                    displayClassName={trialStatusDisplayClass}
-                                />
-                            </div>
-
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-gray-600">Start Date:</span>
-                                <EditableField
-                                    value={trial?.startDate ? new Date(trial.startDate).toISOString().split("T")[0] : ""}
-                                    onSave={async (newValue) => {
-                                        await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, startDate: newValue });
-                                    }}
-                                    type="date"
-                                    emptyText="Set date"
-                                    className="text-sm text-gray-900"
-                                />
-                            </div>
-
-                            <div className="flex items-center justify-between gap-4">
-                                <span className="text-sm text-gray-600">End Date:</span>
-                                <EditableField
-                                    value={trial?.endDate ? new Date(trial.endDate).toISOString().split("T")[0] : ""}
-                                    onSave={async (newValue) => {
-                                        await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, endDate: newValue });
-                                    }}
-                                    type="date"
-                                    emptyText="Set date"
-                                    className="text-sm text-gray-900"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="mt-4 border-t border-gray-200 pt-4">
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                    <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
-                                    <p className="mt-1 text-2xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
-                                    <p className="mt-1 text-xs text-gray-500">Target: {(targetPatients || 0).toLocaleString()}</p>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                    <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>
-                                    <p className="mt-1 text-2xl font-semibold text-gray-900">{enrollmentPercent}%</p>
-                                    <p className="mt-1 text-xs text-gray-500">Current recruitment progress</p>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                    <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Pending Tasks</p>
-                                    <p className="mt-1 text-2xl font-semibold text-gray-900">{pendingTasks.toLocaleString()}</p>
-                                    <p className="mt-1 text-xs text-gray-500">
-                                        {dueTodayTasks} due today
-                                        {overdueTasks > 0 ? ` · ${overdueTasks} overdue` : ""}
-                                    </p>
-                                </div>
-                                <div className="rounded-lg border border-gray-200 bg-white p-3">
-                                    <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Task Completion</p>
-                                    <p className="mt-1 text-2xl font-semibold text-gray-900">{completionRate}%</p>
-                                    <p className="mt-1 text-xs text-gray-500">{completedTasks.toLocaleString()} completed tasks</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="mt-4">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="h-9 w-full justify-center"
-                                onClick={() => navigate(`/trial/${trialId}/assistant`)}
-                            >
-                                <Brain className="h-4 w-4 mr-2" />
-                                Ask Themison AI
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-gray-200 p-6">
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-sm font-semibold text-gray-900">Themison AI Signals</h2>
-                        <span className="text-xs text-gray-500">{contextSuggestions.length} signals</span>
-                    </div>
-                    <div className="mt-3 space-y-2">
-                        {contextSuggestions.length > 0 ? (
-                            contextSuggestions.slice(0, 3).map((signal) => (
-                                <div key={signal.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div className="text-sm font-medium text-gray-900">{signal.title}</div>
-                                        <span
-                                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${signal.priority === "high"
-                                                ? "bg-red-100 text-red-700"
-                                                : signal.priority === "medium"
-                                                    ? "bg-amber-100 text-amber-700"
-                                                    : "bg-blue-100 text-blue-700"
-                                                }`}
-                                        >
-                                            {signal.priority}
-                                        </span>
-                                    </div>
-                                    <div className="text-xs text-gray-500 mt-1">{signal.description}</div>
-                                </div>
-                            ))
-                        ) : (
-                            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                                No active signals for this page right now.
-                            </div>
-                        )}
-                        {primarySuggestion ? (
-                            <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
-                                <Sparkles className="h-4 w-4 mr-2" />
-                                {recommendedActionLabel}
-                            </Button>
-                        ) : null}
-                    </div>
-
-                    <div className="mt-5 border-t border-gray-200 pt-4">
-                        <div className="flex items-center justify-between">
-                            <h3 className="text-sm font-semibold text-gray-900">
-                                {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
-                            </h3>
-                            {nextOperationalTasks.length > 0 ? (
-                                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
-                                    View plan
-                                </button>
-                            ) : null}
-                        </div>
-
-                        {nextOperationalTasks.length > 0 ? (
-                            <div className="mt-3 space-y-2">
-                                {nextOperationalTasks.map((task: any, index: number) => (
-                                    <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                                        <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
-                                        <div className="text-xs text-gray-500 mt-1">
-                                            {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="mt-3 space-y-2">
-                                {launchChecklist.map((item) => (
-                                    <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
-                                        <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
-                                            {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
-                                        </div>
-                                        <div>
-                                            <div className="text-sm font-medium text-gray-900">{item.title}</div>
-                                            <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
-                                        </div>
-                                    </div>
-                                ))}
-                                {!primarySuggestion && firstIncompleteChecklistItem ? (
-                                    <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
-                                        <Sparkles className="h-4 w-4 mr-2" />
-                                        {recommendedActionLabel}
-                                    </Button>
-                                ) : null}
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-                    <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
-                        <h2 className="text-sm font-semibold text-gray-900">Study Design & Objectives</h2>
-                        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-1 md:col-span-2">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Indication / Therapeutic Area:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.indication || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, indication: newValue });
-                                        }}
-                                        emptyText="Add indication"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Sample Size:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.sampleSize || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sampleSize: newValue });
-                                        }}
-                                        emptyText="Add sample size"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Number of Sites:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.numberOfSites || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, numberOfSites: newValue });
-                                        }}
-                                        emptyText="Add number of sites"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Duration:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.studyDuration || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDuration: newValue });
-                                        }}
-                                        emptyText="Add study duration"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1 md:col-span-2">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Design Type:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.studyDesignType || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDesignType: newValue });
-                                        }}
-                                        emptyText="Add study design type"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1 md:col-span-2">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Objective:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.primaryObjective || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryObjective: newValue });
-                                        }}
-                                        emptyText="Add primary objective"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="space-y-1 md:col-span-2">
-                                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Endpoint:</span>
-                                <div className="mt-1">
-                                    <EditableField
-                                        value={trial?.primaryEndpoint || ""}
-                                        onSave={async (newValue) => {
-                                            await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryEndpoint: newValue });
-                                        }}
-                                        emptyText="Add primary endpoint"
-                                        className="text-sm text-gray-900"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="space-y-5">
-                        <div className="bg-white rounded-xl border border-gray-200 p-6">
-                            <div className="flex items-center justify-between">
-                                <h2 className="text-sm font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
-                                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setManageTeamOpen(true)}>
-                                    Manage Team
-                                </button>
-                            </div>
-                            {trialTeamMembers.length === 0 ? (
-                                <p className="text-sm text-gray-500 mt-3">No team members assigned.</p>
-                            ) : (
-                                <div className="mt-3 space-y-2">
-                                    {trialTeamMembers.map((member) => (
-                                        <div key={member.id} className="flex items-center gap-3">
-                                            <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
-                                                <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
-                                                <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
-                                                    <User className="h-4 w-4" />
-                                                </AvatarFallback>
-                                            </Avatar>
-                                            <div>
-                                                <p className="text-sm font-medium text-gray-900">{member.name}</p>
-                                                <p className="text-xs text-gray-500">{member.role}</p>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-    return (
-        <div
-            className={`bg-[#F9FAFB] flex flex-col ${lockPageScrollToScaffold ? "h-full overflow-hidden" : "min-h-full"
-                }`}
-        >
-            <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
-                <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
-                    <button
-                        onClick={() => {
-                            logEvent({
-                                eventType: "feature_used",
-                                action: "back_to_trials",
-                                entityType: "navigation",
-                                payload: { from: "trial_detail" },
-                            });
-                            navigate("/trial-workspace");
-                        }}
-                        className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors pr-5 border-r border-gray-200"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        <span>All Trials</span>
-                    </button>
-
-                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-                        {tabs.map((tab) => {
-                            const Icon = tab.icon;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => {
-                                        setActiveTab(tab.id);
-                                        logEvent({
-                                            eventType: "feature_used",
-                                            action: "switch_tab",
-                                            entityType: "trial_tab",
-                                            entityId: tab.id,
-                                            payload: { trialId },
-                                        });
-                                    }}
-                                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${activeTab === tab.id ? "text-blue-700 bg-blue-50" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                                        }`}
-                                >
-                                    <Icon className="h-4 w-4" />
-                                    <span>{tab.label}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-
-            <div className={lockPageScrollToScaffold ? "pt-4 flex-1 min-h-0 overflow-hidden" : "pt-4"}>
-                {mainContent}
-            </div>
-
-            <Dialog
-                open={setupTaskModalOpen}
-                onOpenChange={(open) => {
-                    setSetupTaskModalOpen(open);
-                    if (!open) {
-                        setSetupEditingTaskId(null);
-                    }
-                }}
-            >
-                <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
-                    <DialogHeader className="px-6 py-5 border-b border-gray-200">
-                        <DialogTitle className="text-3xl font-bold text-gray-900">
-                            {setupTaskModalMode === "create" ? "Create New Task" : "Edit Task"}
-                        </DialogTitle>
-                    </DialogHeader>
-
-                    <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-5">
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-900">Title *</label>
-                            <Input
-                                value={setupTaskForm.title}
-                                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, title: event.target.value }))}
-                                placeholder="Enter task title"
-                            />
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-900">Description</label>
-                            <Textarea
-                                rows={4}
-                                value={setupTaskForm.description}
-                                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, description: event.target.value }))}
-                                placeholder="Enter task description (optional)"
-                            />
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Trial *</label>
-                                <Input
-                                    value={`${trial?.investigationalProduct || trial?.title || trialId} · ${trial?.sponsor || "No sponsor"}`}
-                                    disabled
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Phase / Visit *</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.phaseId}
-                                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, phaseId: event.target.value }))}
-                                >
-                                    <option value="">Select phase</option>
-                                    {setupPhases.map((phase) => (
-                                        <option key={phase.id} value={phase.id}>
-                                            {phase.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Category</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.category}
-                                    onChange={(event) =>
-                                        setSetupTaskForm((prev) => ({ ...prev, category: event.target.value as TaskCategory }))
-                                    }
-                                >
-                                    {SETUP_TASK_CATEGORY_OPTIONS.map((category) => (
-                                        <option key={category} value={category}>
-                                            {titleCase(category)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Status</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.status}
-                                    onChange={(event) =>
-                                        setSetupTaskForm((prev) => ({ ...prev, status: event.target.value as TaskStatus }))
-                                    }
-                                >
-                                    {SETUP_TASK_STATUS_OPTIONS.map((status) => (
-                                        <option key={status} value={status}>
-                                            {titleCase(status)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Priority</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.priority}
-                                    onChange={(event) =>
-                                        setSetupTaskForm((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))
-                                    }
-                                >
-                                    {SETUP_TASK_PRIORITY_OPTIONS.map((priority) => (
-                                        <option key={priority} value={priority}>
-                                            {titleCase(priority)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Responsible Role</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.assignedRole}
-                                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, assignedRole: event.target.value }))}
-                                >
-                                    <option value="">Unassigned</option>
-                                    {SETUP_ASSIGNED_ROLE_OPTIONS.map((role) => (
-                                        <option key={role} value={role}>
-                                            {formatRoleLabel(role)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-gray-900">Assignee</label>
-                                <select
-                                    className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
-                                    value={setupTaskForm.assigneeMemberId}
-                                    onChange={(event) => {
-                                        const nextMemberId = event.target.value;
-                                        const member = setupAssignedMembersForTaskForm.find(
-                                            (candidate) => String(candidate.id) === nextMemberId
-                                        );
-                                        const inferredRole = member ? normalizeRoleToken(member.role || "") : "";
-                                        setSetupTaskForm((prev) => ({
-                                            ...prev,
-                                            assigneeMemberId: nextMemberId,
-                                            assignedRole:
-                                                inferredRole && SETUP_ASSIGNED_ROLE_OPTIONS.includes(inferredRole as any)
-                                                    ? inferredRole
-                                                    : prev.assignedRole,
-                                        }));
-                                    }}
-                                >
-                                    <option value="">Unassigned</option>
-                                    {setupAssignedMembersForTaskForm.map((member) => (
-                                        <option key={member.id} value={String(member.id)}>
-                                            {member.name} · {formatRoleLabel(member.role)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-900">Due Date</label>
-                            <Input
-                                type="date"
-                                value={setupTaskForm.dueDate}
-                                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, dueDate: event.target.value }))}
-                            />
-                        </div>
-
-                        <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-                            <div className="flex items-center justify-between gap-3">
-                                <h4 className="text-sm font-semibold text-gray-900">Protocol Source (optional)</h4>
-                                <button
-                                    type="button"
-                                    className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                                    onClick={() => {
-                                        const protocolDoc =
-                                            protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
-                                            protocols[0];
-                                        const url = protocolDoc?.fileUrl as string | undefined;
-                                        if (!url) {
-                                            toast.error("No protocol PDF available to open");
-                                            return;
-                                        }
-                                        const page = Number(setupTaskForm.sourcePage);
-                                        const target = Number.isFinite(page) && page > 0 ? `${url}#page=${Math.round(page)}` : url;
-                                        window.open(target, "_blank", "noopener,noreferrer");
-                                    }}
-                                >
-                                    Open protocol
-                                    <ArrowRight className="h-3.5 w-3.5" />
-                                </button>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div className="space-y-2 md:col-span-2">
-                                    <label className="text-sm text-gray-700">Section</label>
-                                    <Input
-                                        value={setupTaskForm.sourceSection}
-                                        onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceSection: event.target.value }))}
-                                        placeholder="e.g. Schedule of Events"
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm text-gray-700">Page</label>
-                                    <Input
-                                        type="number"
-                                        min={1}
-                                        value={setupTaskForm.sourcePage}
-                                        onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourcePage: event.target.value }))}
-                                        placeholder="e.g. 22"
-                                    />
-                                </div>
-                                <div className="space-y-2 md:col-span-2">
-                                    <label className="text-sm text-gray-700">Evidence Text</label>
-                                    <Textarea
-                                        rows={3}
-                                        value={setupTaskForm.sourceText}
-                                        onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceText: event.target.value }))}
-                                        placeholder="Optional excerpt for traceability"
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="rounded-lg border border-gray-200 p-4 space-y-3">
-                            <h4 className="text-sm font-semibold text-gray-900">Dependencies (predecessor tasks)</h4>
-                            <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
-                                {setupDependencyCandidates.length === 0 ? (
-                                    <p className="text-sm text-gray-500">No dependency candidates in this trial map.</p>
-                                ) : (
-                                    setupDependencyCandidates.map((candidate) => {
-                                        const phase = setupPhases.find((entry) => entry.id === candidate.phaseId);
-                                        const checked = setupDependencyTaskIds.includes(candidate.id);
-                                        return (
-                                            <label key={candidate.id} className="flex items-start gap-2 rounded-md border border-gray-100 px-3 py-2">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={checked}
-                                                    onChange={(event) => {
-                                                        const nextChecked = event.target.checked;
-                                                        setSetupDependencyTaskIds((prev) =>
-                                                            nextChecked ? Array.from(new Set([...prev, candidate.id])) : prev.filter((id) => id !== candidate.id)
-                                                        );
-                                                    }}
-                                                    className="mt-0.5 h-4 w-4 rounded border-gray-300"
-                                                />
-                                                <span className="text-sm text-gray-800">
-                                                    {candidate.name}
-                                                    <span className="block text-xs text-gray-500">{phase?.name || "Unassigned phase"}</span>
-                                                </span>
-                                            </label>
-                                        );
-                                    })
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-                        <div>
-                            {setupTaskModalMode === "edit" && setupEditingTaskId ? (
-                                <button
-                                    type="button"
-                                    className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
-                                    onClick={handleDeleteSetupTaskFromModal}
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                    Delete Task
-                                </button>
-                            ) : null}
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                className="h-9 rounded-md border border-gray-200 px-4 text-sm text-gray-700 hover:bg-gray-50"
-                                onClick={() => {
-                                    setSetupTaskModalOpen(false);
-                                    setSetupEditingTaskId(null);
-                                }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className="h-9 rounded-md bg-[#2F6FED] px-4 text-sm font-medium text-white hover:bg-[#255BD1]"
-                                onClick={handleSaveSetupTaskModal}
-                            >
-                                {setupTaskModalMode === "create" ? "Create Task" : "Save Changes"}
-                            </button>
-                        </div>
-                    </div>
-                </DialogContent>
-            </Dialog>
-
-            <Dialog open={manageTeamOpen} onOpenChange={setManageTeamOpen}>
-                <DialogContent className="max-w-2xl">
-                    <DialogHeader>
-                        <DialogTitle>Manage Team</DialogTitle>
-                    </DialogHeader>
-
-                    <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-4">
-                        <div className="text-sm text-blue-700">
-                            <div>Can’t find someone?</div>
-                            <div>Create a new member here to update your Organization list.</div>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={() => setAddMemberOpen(true)}>
-                            Create New Member
-                        </Button>
-                    </div>
-
-                    <div className="space-y-3 max-h-[50vh] overflow-auto pr-1">
-                        {(state.teamMembers || []).map((member, index) => {
-                            const isSelected = assignedMemberIds.includes(member.id);
-                            const isSuggested = index < 3;
-                            return (
-                                <button
-                                    key={member.id}
-                                    type="button"
-                                    onClick={() => toggleAssignedMember(member.id)}
-                                    className={`w-full rounded-lg border px-4 py-3 text-left transition-colors flex items-center justify-between ${isSelected ? "border-blue-200 bg-blue-50" : "border-gray-200 hover:border-gray-300"
-                                        }`}
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className="h-5 w-5 rounded border border-gray-300 flex items-center justify-center bg-white">
-                                            {isSelected ? <Check className="h-3.5 w-3.5 text-blue-600" /> : null}
-                                        </div>
-                                        <div>
-                                            <div className="text-sm font-medium text-gray-900">{member.name}</div>
-                                            <div className="text-xs text-gray-500">{member.clinicalRole || member.role}</div>
-                                        </div>
-                                    </div>
-                                    {isSuggested ? (
-                                        <span className="text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
-                                            Suggested
-                                        </span>
-                                    ) : null}
-                                </button>
-                            );
-                        })}
-                    </div>
-                </DialogContent>
-            </Dialog>
-
-            <AddMemberPanel
-                open={addMemberOpen}
-                onClose={() => setAddMemberOpen(false)}
-                editingMemberId={null}
-                initialValues={{
-                    name: "",
-                    email: "",
-                    avatar: null,
-                    clinicalRole: "Principal Investigator",
-                    appRole: "Admin",
-                    team: "",
-                    site: "",
-                }}
-                onMemberSaved={(memberId) => {
-                    persistAssignedMembers(assignedMemberIds.includes(memberId) ? assignedMemberIds : [...assignedMemberIds, memberId]);
-                }}
+              className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-500 ${
+                isSetupFullscreenVisible ? "opacity-100" : "opacity-0"
+              }`}
+              onClick={() => setIsSetupFullscreenVisible(false)}
             />
-        </div>
+            <div
+              className={`absolute left-0 top-0 h-full w-full bg-white flex flex-col transform-gpu transition-[transform,opacity] duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
+                isSetupFullscreenVisible ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"
+              }`}
+            >
+              {renderSetupScaffoldWorkspace(true)}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    ) : (
+      <div className="px-6 pb-6 space-y-3">
+        <StudySetupWizardEntry
+          trialId={trialId}
+          onGenerate={() => {
+            void handleGenerateScaffold();
+          }}
+          onCancelGenerate={handleCancelGenerateScaffold}
+          generationReady={generationReady}
+          onSeePlan={() => {
+            void handleOpenGeneratedScaffold();
+          }}
+          isGenerating={isGeneratingScaffold || isSyncingExecutionMap}
+        />
+      </div>
     );
+    if (!shouldShowSetupWizard || showSetupAgentAlwaysOn) {
+      lockPageScrollToScaffold = true;
+    }
+  } else if (activeTab === "bookmarks") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Trial Systems</h2>
+              <p className="text-sm text-gray-500 mt-1">Quick access to external systems used in this trial.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button className="text-sm h-9">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Link
+              </Button>
+              <Button variant="outline" className="text-sm h-9">
+                <Pencil className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+              <Button variant="outline" className="text-sm h-9">
+                <Share2 className="h-4 w-4 mr-2" />
+                Share
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-4 border-b border-gray-200 pb-3 text-sm">
+            {["All", "EDC", "CTMS", "eTMF / eISF", "Sponsor Portal", "Safety", "Other"].map((tab) => (
+              <button
+                key={tab}
+                className={tab === "All" ? "text-blue-600 border-b-2 border-blue-600 pb-1" : "text-gray-500 hover:text-gray-700 pb-1"}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[260px] flex-1">
+              <Search className="h-4 w-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Input placeholder="Search systems..." className="pl-9 h-10" />
+            </div>
+            <Button variant="outline" size="sm" className="h-9 text-sm">
+              Categories
+              <ChevronDown className="h-4 w-4 ml-2" />
+            </Button>
+            <Button variant="outline" size="sm" className="h-9 text-sm">
+              <Filter className="h-4 w-4 mr-2" />
+              Filter
+            </Button>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {mockBookmarks.map((bookmark) => (
+              <div key={bookmark.id} className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <div className="h-10 w-10 rounded-md border border-gray-200 bg-white flex items-center justify-center overflow-hidden">
+                      <img src={getFaviconUrl(bookmark.url)} alt={`${bookmark.name} logo`} className="h-5 w-5" loading="lazy" />
+                    </div>
+                    <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                      {bookmark.type}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">{bookmark.name}</div>
+                    <p className="text-sm text-gray-500 mt-1">{bookmark.notes}</p>
+                  </div>
+                </div>
+                <button className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors">
+                  <span>Open</span>
+                  <ArrowRight className="h-4 w-4 text-gray-400" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  } else if (activeTab === "team") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
+            <Button variant="outline" size="sm" onClick={() => setManageTeamOpen(true)}>
+              Manage Team
+            </Button>
+          </div>
+          {trialTeamMembers.length === 0 ? (
+            <p className="text-sm text-gray-500">No members assigned yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {trialTeamMembers.map((member) => (
+                <div key={member.id} className="rounded-lg border border-gray-200 px-4 py-3 flex items-center gap-3">
+                  <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
+                    <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
+                    <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
+                      <User className="h-4 w-4" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                    <p className="text-xs text-gray-500">{member.role}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  } else if (activeTab === "patients") {
+    mainContent = (
+      <div className="px-6 pb-6 space-y-6">
+        {/* Statistics Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in duration-200">
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Enrolled Patients</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">{patientsQuery.data?.length ?? enrolledPatients}</p>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg text-blue-600">
+              <UserCheck className="h-6 w-6" />
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Target Patients</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">{targetPatients}</p>
+            </div>
+            <div className="p-3 bg-gray-50 rounded-lg text-gray-600">
+              <UsersIcon className="h-6 w-6" />
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Enrollment Progress</p>
+              <p className="text-3xl font-bold text-gray-900 mt-2">
+                {targetPatients > 0 ? Math.round(((patientsQuery.data?.length ?? enrolledPatients) / targetPatients) * 100) : 0}%
+              </p>
+            </div>
+            <div className="p-3 bg-indigo-50 rounded-lg text-indigo-600">
+              <Sparkles className="h-6 w-6" />
+            </div>
+          </div>
+        </div>
+
+        {/* Workspace Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Patients List Card */}
+          <div className={`bg-white rounded-xl border border-gray-200 shadow-sm p-6 overflow-hidden transition-all duration-300 ${selectedPatientId ? "lg:col-span-2" : "lg:col-span-3"}`}>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pb-4 border-b border-gray-100 gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Enrolled Cohort</h3>
+                <p className="text-xs text-gray-500 mt-0.5">Clinical trial participants currently active.</p>
+              </div>
+              <Button
+                onClick={() => {
+                  void generateCodeQuery.refetch();
+                  setIsEnrollDialogOpen(true);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5 shadow-sm text-sm py-2 px-4 font-medium transition-colors"
+              >
+                <Plus className="h-4 w-4" /> Enroll Participant
+              </Button>
+            </div>
+
+            {patientsQuery.isLoading ? (
+              <div className="py-20 text-center text-sm text-gray-500 flex flex-col items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mb-2"></div>
+                Loading enrolled patient data...
+              </div>
+            ) : !patientsQuery.data || patientsQuery.data.length === 0 ? (
+              <div className="py-20 text-center flex flex-col items-center justify-center border-2 border-dashed border-gray-100 rounded-lg mt-6 bg-gray-50/50">
+                <UserCheck className="h-10 w-10 text-gray-300 mb-3" />
+                <p className="font-medium text-gray-900 text-sm">No Patients Enrolled</p>
+                <p className="text-xs text-gray-500 mt-1 max-w-sm">Start tracking the trial progress by enrolling your first clinical participant.</p>
+              </div>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left border-collapse text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 text-xs font-semibold text-gray-400 uppercase bg-gray-50/50">
+                      <th className="py-3 px-4 rounded-l-lg">Patient Code</th>
+                      <th className="py-3 px-4">Name</th>
+                      <th className="py-3 px-4">Enrollment Date</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 rounded-r-lg text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {patientsQuery.data.map((enrollment) => {
+                      const isSelected = selectedPatientId === enrollment.patient_id;
+                      return (
+                        <tr
+                          key={enrollment.id}
+                          onClick={() => setSelectedPatientId(enrollment.patient_id)}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected ? "bg-indigo-50/40 hover:bg-indigo-50/60" : "hover:bg-gray-50/50"
+                          }`}
+                        >
+                          <td className="py-3.5 px-4 font-mono font-medium text-indigo-600">
+                            {enrollment.patient_code}
+                          </td>
+                          <td className="py-3.5 px-4 font-medium text-gray-950">
+                            {enrollment.patient_first_name} {enrollment.patient_last_name}
+                          </td>
+                          <td className="py-3.5 px-4 text-gray-600">
+                            {enrollment.enrollment_date
+                              ? new Date(enrollment.enrollment_date).toLocaleDateString()
+                              : "N/A"}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                enrollment.status === "enrolled"
+                                  ? "bg-green-50 text-green-700 border border-green-200"
+                                  : "bg-gray-50 text-gray-700 border border-gray-200"
+                              }`}
+                            >
+                              {enrollment.status}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="ghost"
+                              className="text-xs text-indigo-600 hover:text-indigo-700 font-medium"
+                              onClick={() => setSelectedPatientId(enrollment.patient_id)}
+                            >
+                              View Visits
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Selected Patient Details side card */}
+          {selectedPatientId && selectedPatient && (
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 flex flex-col h-full animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 font-semibold text-sm">
+                    {selectedPatient.patient_first_name?.[0]}
+                    {selectedPatient.patient_last_name?.[0]}
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-gray-955 leading-tight text-sm">
+                      {selectedPatient.patient_first_name} {selectedPatient.patient_last_name}
+                    </h3>
+                    <p className="text-xs font-mono text-indigo-600 mt-0.5">{selectedPatient.patient_code}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedPatientId(null)}
+                  className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Patient Core Info */}
+              <div className="py-4 border-b border-gray-100 space-y-2.5 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Date of Birth:</span>
+                  <span className="font-medium text-gray-900">
+                    {selectedPatient.patient_data?.date_of_birth
+                      ? new Date(selectedPatient.patient_data.date_of_birth).toLocaleDateString()
+                      : "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Gender:</span>
+                  <span className="font-medium text-gray-900 capitalize">
+                    {selectedPatient.patient_data?.gender || "N/A"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Status:</span>
+                  <span className="font-medium text-gray-900 capitalize">{selectedPatient.status}</span>
+                </div>
+                {selectedPatient.notes && (
+                  <div className="pt-2">
+                    <p className="text-gray-400 mb-1">Enrollment Notes:</p>
+                    <p className="text-gray-700 bg-gray-50 p-2 rounded-lg leading-relaxed">{selectedPatient.notes}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Visit Schedule Section */}
+              <div className="flex-1 flex flex-col pt-4 min-h-0">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="text-sm font-semibold text-gray-950">Clinical Visits</h4>
+                  <Button
+                    onClick={() => setIsScheduleVisitDialogOpen(true)}
+                    variant="outline"
+                    className="text-xs border-indigo-100 text-indigo-600 hover:bg-indigo-50 font-medium py-1 px-2.5 h-7 rounded-md"
+                  >
+                    Schedule Visit
+                  </Button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-3 pr-1 max-h-[300px]">
+                  {visitsQuery.isLoading ? (
+                    <div className="py-12 text-center text-xs text-gray-500">Loading visit logs...</div>
+                  ) : !visitsQuery.data || visitsQuery.data.length === 0 ? (
+                    <div className="py-12 text-center text-xs text-gray-400 flex flex-col items-center justify-center">
+                      <Calendar className="h-8 w-8 text-gray-200 mb-2" />
+                      No visits scheduled yet
+                    </div>
+                  ) : (
+                    visitsQuery.data.map((visit) => (
+                      <div
+                        key={visit.id}
+                        className="p-3 border border-gray-100 rounded-xl hover:border-gray-200 transition-all bg-gray-50/20 text-xs"
+                      >
+                        <div className="flex items-center justify-between text-[11px] mb-1">
+                          <span
+                            className={`font-semibold capitalize px-2 py-0.5 rounded-full ${
+                              visit.visit_type === "screening"
+                                ? "bg-blue-50 text-blue-700 border border-blue-100"
+                                : visit.visit_type === "baseline"
+                                ? "bg-green-50 text-green-700 border border-green-100"
+                                : "bg-purple-50 text-purple-700 border border-purple-100"
+                            }`}
+                          >
+                            {visit.visit_type.replace("_", " ")}
+                          </span>
+                          <span className="font-mono text-gray-400">
+                            {new Date(visit.visit_date).toLocaleDateString()} {visit.visit_time || ""}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-800 font-medium mt-1">
+                          Doctor: <span className="text-gray-950">{visit.doctor_name || "Assigned staff"}</span>
+                        </div>
+                        {visit.location && (
+                          <div className="text-xs text-gray-500 mt-0.5">Location: {visit.location}</div>
+                        )}
+                        {visit.notes && (
+                          <div className="text-xs text-gray-600 bg-white p-2 rounded-lg border border-gray-50 mt-2 leading-relaxed">
+                            {visit.notes}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Enroll Participant Dialog */}
+        <Dialog open={isEnrollDialogOpen} onOpenChange={setIsEnrollDialogOpen}>
+          <DialogContent className="sm:max-w-lg bg-white rounded-xl shadow-lg border border-gray-100 p-6">
+            <DialogHeader>
+              <DialogTitle className="text-base font-semibold text-gray-955">Enroll Clinical Trial Participant</DialogTitle>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-4 pt-3 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">First Name *</label>
+                <Input
+                  value={enrollForm.firstName}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, firstName: e.target.value }))}
+                  placeholder="John"
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Last Name *</label>
+                <Input
+                  value={enrollForm.lastName}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, lastName: e.target.value }))}
+                  placeholder="Doe"
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Patient Code *</label>
+                <Input
+                  value={enrollForm.patientCode}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, patientCode: e.target.value }))}
+                  className="font-mono bg-gray-50/50 rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Gender *</label>
+                <select
+                  value={enrollForm.gender}
+                  onChange={(e) =>
+                    setEnrollForm((prev) => ({
+                      ...prev,
+                      gender: e.target.value as any,
+                    }))
+                  }
+                  className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                  <option value="prefer_not_to_say">Prefer Not To Say</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Date of Birth</label>
+                <Input
+                  type="date"
+                  value={enrollForm.dateOfBirth}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, dateOfBirth: e.target.value }))}
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Email Address</label>
+                <Input
+                  type="email"
+                  value={enrollForm.email}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, email: e.target.value }))}
+                  placeholder="john.doe@example.com"
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Phone Number</label>
+                <Input
+                  value={enrollForm.phone}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, phone: e.target.value }))}
+                  placeholder="(555) 019-2834"
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Consent Date</label>
+                <Input
+                  type="date"
+                  value={enrollForm.consentDate}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, consentDate: e.target.value }))}
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Screening Notes</label>
+                <Textarea
+                  value={enrollForm.screeningNotes}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, screeningNotes: e.target.value }))}
+                  placeholder="Describe patient qualifications, inclusions/exclusions..."
+                  className="rounded-lg border-gray-200 h-16 min-h-0 text-xs"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">General Notes</label>
+                <Textarea
+                  value={enrollForm.notes}
+                  onChange={(e) => setEnrollForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Additional enrollment details..."
+                  className="rounded-lg border-gray-200 h-16 min-h-0 text-xs"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2.5 mt-5 border-t border-gray-100 pt-4">
+              <Button
+                variant="outline"
+                onClick={() => setIsEnrollDialogOpen(false)}
+                className="rounded-lg text-xs font-medium h-9 border-gray-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={enrollPatientMutation.isPending || !enrollForm.firstName || !enrollForm.lastName || !enrollForm.patientCode}
+                onClick={() => enrollPatientMutation.mutate({ trialId: trialId || "", ...enrollForm })}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium h-9 px-4 flex items-center gap-1.5 shadow-sm"
+              >
+                {enrollPatientMutation.isPending && (
+                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                )}
+                Confirm Enrollment
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Schedule Clinical Visit Dialog */}
+        <Dialog open={isScheduleVisitDialogOpen} onOpenChange={setIsScheduleVisitDialogOpen}>
+          <DialogContent className="sm:max-w-md bg-white rounded-xl shadow-lg border border-gray-100 p-6">
+            <DialogHeader>
+              <DialogTitle className="text-base font-semibold text-gray-955">Schedule Patient Visit</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-3 text-sm">
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Visit Date *</label>
+                <Input
+                  type="date"
+                  value={visitForm.visitDate}
+                  onChange={(e) => setVisitForm((prev) => ({ ...prev, visitDate: e.target.value }))}
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Visit Time *</label>
+                <Input
+                  type="time"
+                  value={visitForm.visitTime}
+                  onChange={(e) => setVisitForm((prev) => ({ ...prev, visitTime: e.target.value }))}
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Visit Type *</label>
+                <select
+                  value={visitForm.visitType}
+                  onChange={(e) =>
+                    setVisitForm((prev) => ({
+                      ...prev,
+                      visitType: e.target.value,
+                    }))
+                  }
+                  className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="screening">Screening Visit</option>
+                  <option value="baseline">Baseline Visit</option>
+                  <option value="treatment">Treatment Visit</option>
+                  <option value="follow_up">Follow-up Visit</option>
+                  <option value="study_closeout">Study Closeout</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Location</label>
+                <Input
+                  value={visitForm.location}
+                  onChange={(e) => setVisitForm((prev) => ({ ...prev, location: e.target.value }))}
+                  placeholder="Main Clinic"
+                  className="rounded-lg border-gray-200"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase mb-1">Notes</label>
+                <Textarea
+                  value={visitForm.notes}
+                  onChange={(e) => setVisitForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Specific requirements or medical tests needed..."
+                  className="rounded-lg border-gray-200 h-20 min-h-0 text-xs"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2.5 mt-5 border-t border-gray-100 pt-4">
+              <Button
+                variant="outline"
+                onClick={() => setIsScheduleVisitDialogOpen(false)}
+                className="rounded-lg text-xs font-medium h-9 border-gray-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={createVisitMutation.isPending || !visitForm.visitDate}
+                onClick={() =>
+                  createVisitMutation.mutate({
+                    patientId: selectedPatientId || "",
+                    trialId: trialId || "",
+                    ...visitForm,
+                  })
+                }
+                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium h-9 px-4 flex items-center gap-1.5 shadow-sm"
+              >
+                {createVisitMutation.isPending && (
+                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                )}
+                Schedule Visit
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  } else if (activeTab === "notifications") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Notifications</h2>
+          <p className="text-sm text-gray-500 mt-1">Trial-level alerts and reminders will appear here.</p>
+        </div>
+      </div>
+    );
+  } else if (activeTab === "settings") {
+    mainContent = (
+      <div className="px-6 pb-6 space-y-5">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Trial Settings</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage stable configuration and safety-critical actions for this trial.
+          </p>
+
+          <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Trial ID</p>
+              <p className="mt-1 font-medium text-gray-900">{trialId}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Data Mode</p>
+              <p className="mt-1 font-medium text-gray-900">{currentDataMode}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Created</p>
+              <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.createdAt)}</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last Updated</p>
+              <p className="mt-1 font-medium text-gray-900">{formatDate((trial as any)?.updatedAt)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Workspace Controls</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Team assignment is managed in the Team tab. Document controls are managed in Document Hub.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("team")}>
+              Manage Team
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("document-hub")}>
+              Open Document Hub
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setActiveTab("overview")}>
+              Open Overview
+            </Button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-red-200 p-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-600 mt-0.5" />
+            <div>
+              <h2 className="text-base font-semibold text-red-700">Danger Zone</h2>
+              <p className="text-sm text-red-600 mt-1">
+                Deleting a trial removes all associated sandbox data: documents, setup plan, and AI context snapshots.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 max-w-sm space-y-2">
+            <label className="text-sm font-medium text-gray-700">Type `DELETE` to enable</label>
+            <Input
+              value={deleteConfirmText}
+              onChange={(event) => setDeleteConfirmText(event.target.value)}
+              placeholder="Type DELETE"
+            />
+          </div>
+
+          <div className="mt-4">
+            <Button
+              onClick={handleDeleteTrialFromSettings}
+              disabled={deleteConfirmText !== "DELETE" || deleteTrialMutation.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {deleteTrialMutation.isPending ? "Deleting..." : "Delete Trial"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  } else if (activeTab === "visit-template") {
+    mainContent = (
+      <div className="px-6 pb-6">
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-base font-semibold text-gray-900">Visit Template</h2>
+          <p className="text-sm text-gray-500 mt-1">Visit template tools will be available here.</p>
+        </div>
+      </div>
+    );
+  } else {
+    mainContent = (
+      <div className="px-6 pb-6 space-y-5">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700/70">
+              Investigational Product / Drug Name
+            </p>
+            <EditableField
+              value={trial?.investigationalProduct || ""}
+              onSave={async (newValue) => {
+                await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, investigationalProduct: newValue });
+              }}
+              emptyText="Add investigational product"
+              className="mt-2 text-3xl font-semibold text-gray-900"
+            />
+
+            <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Sponsor:</span>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <EditableField
+                    value={trial?.sponsor || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sponsor: newValue });
+                    }}
+                    emptyText="Add sponsor"
+                    className="text-sm font-medium text-gray-900 min-w-0"
+                  />
+                  {sponsorLogoUrl && !sponsorLogoFailed ? (
+                    <img
+                      src={sponsorLogoUrl}
+                      alt={`${trial?.sponsor || "Sponsor"} logo`}
+                      className="h-7 w-7 rounded-sm border border-gray-200 bg-white object-contain p-0.5"
+                      onError={() => setSponsorLogoFailed(true)}
+                    />
+                  ) : (
+                    <div className="h-7 min-w-7 rounded-sm border border-gray-200 bg-blue-50 text-blue-700 text-[10px] font-semibold flex items-center justify-center px-1">
+                      {sponsorInitials}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Phase:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.phase || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, phase: newValue });
+                    }}
+                    emptyText="Add phase"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Protocol Number:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.protocolNumber || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, protocolNumber: newValue });
+                    }}
+                    emptyText="Add protocol number"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">NCT Number:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.nctNumber || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, nctNumber: newValue });
+                    }}
+                    emptyText="Add NCT number"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Current Version:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.currentVersion || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, currentVersion: newValue });
+                    }}
+                    emptyText="Add current version"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-3">
+                <span className="block text-[11px] uppercase tracking-wide font-semibold text-gray-400">Location:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.location || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, location: newValue });
+                    }}
+                    emptyText="Add location"
+                    className="text-sm font-medium text-gray-900"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-1">
+              <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Protocol Title:</span>
+              <div className="mt-1">
+                <EditableField
+                  value={trial?.title || ""}
+                  onSave={async (newValue) => {
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, title: newValue });
+                  }}
+                  emptyText="Add protocol title"
+                  className="text-sm text-gray-900"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-gray-900">Operational Status</h2>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-wide font-semibold text-blue-700">
+                  Themison AI Recommendation
+                </div>
+                {primarySuggestion ? (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                      primarySuggestion.priority === "high"
+                        ? "bg-red-100 text-red-700"
+                        : primarySuggestion.priority === "medium"
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-blue-100 text-blue-700"
+                    }`}
+                  >
+                    {primarySuggestion.priority}
+                  </span>
+                ) : null}
+              </div>
+              {primarySuggestion ? (
+                <p className="text-sm font-medium text-blue-900 mt-1">{primarySuggestion.title}</p>
+              ) : null}
+              <p className="text-sm text-blue-800 mt-1">{aiRecommendation}</p>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">Status:</span>
+                <EditableField
+                  value={trialStatusValue}
+                  displayValue={trialStatusLabel}
+                  onSave={async (newValue) => {
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, status: newValue as any });
+                  }}
+                  type="select"
+                  options={[
+                    { value: "not-started", label: "Not started" },
+                    { value: "active", label: "Active" },
+                    { value: "recruiting", label: "Recruiting" },
+                    { value: "on-hold", label: "On hold" },
+                    { value: "completed", label: "Completed" },
+                    { value: "terminated", label: "Terminated" },
+                  ]}
+                  emptyText="Not started"
+                  className="text-sm"
+                  displayClassName={trialStatusDisplayClass}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">Start Date:</span>
+                <EditableField
+                  value={trial?.startDate ? new Date(trial.startDate).toISOString().split("T")[0] : ""}
+                  onSave={async (newValue) => {
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, startDate: newValue });
+                  }}
+                  type="date"
+                  emptyText="Set date"
+                  className="text-sm text-gray-900"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-sm text-gray-600">End Date:</span>
+                <EditableField
+                  value={trial?.endDate ? new Date(trial.endDate).toISOString().split("T")[0] : ""}
+                  onSave={async (newValue) => {
+                    await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, endDate: newValue });
+                  }}
+                  type="date"
+                  emptyText="Set date"
+                  className="text-sm text-gray-900"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-gray-200 pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Patients</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{enrolledPatients.toLocaleString()}</p>
+                  <p className="mt-1 text-xs text-gray-500">Target: {(targetPatients || 0).toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Enrollment Progress</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{enrollmentPercent}%</p>
+                  <p className="mt-1 text-xs text-gray-500">Current recruitment progress</p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Pending Tasks</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{pendingTasks.toLocaleString()}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {dueTodayTasks} due today
+                    {overdueTasks > 0 ? ` · ${overdueTasks} overdue` : ""}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <p className="text-[11px] uppercase tracking-wide font-semibold text-gray-400">Task Completion</p>
+                  <p className="mt-1 text-2xl font-semibold text-gray-900">{completionRate}%</p>
+                  <p className="mt-1 text-xs text-gray-500">{completedTasks.toLocaleString()} completed tasks</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 w-full justify-center"
+                onClick={() => navigate(`/trial/${trialId}/assistant`)}
+              >
+                <Brain className="h-4 w-4 mr-2" />
+                Ask Themison AI
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-900">Themison AI Signals</h2>
+            <span className="text-xs text-gray-500">{contextSuggestions.length} signals</span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {contextSuggestions.length > 0 ? (
+              contextSuggestions.slice(0, 3).map((signal) => (
+                <div key={signal.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium text-gray-900">{signal.title}</div>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        signal.priority === "high"
+                          ? "bg-red-100 text-red-700"
+                          : signal.priority === "medium"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-blue-100 text-blue-700"
+                      }`}
+                    >
+                      {signal.priority}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">{signal.description}</div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                No active signals for this page right now.
+              </div>
+            )}
+            {primarySuggestion ? (
+              <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                <Sparkles className="h-4 w-4 mr-2" />
+                {recommendedActionLabel}
+              </Button>
+            ) : null}
+          </div>
+
+          <div className="mt-5 border-t border-gray-200 pt-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">
+                {nextOperationalTasks.length > 0 ? "Next Operational Tasks" : "AI Launch Checklist"}
+              </h3>
+              {nextOperationalTasks.length > 0 ? (
+                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setActiveTab("study-setup-wizard")}>
+                  View plan
+                </button>
+              ) : null}
+            </div>
+
+            {nextOperationalTasks.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {nextOperationalTasks.map((task: any, index: number) => (
+                  <div key={`${task.id ?? index}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="text-sm font-medium text-gray-900">{task.name || "Untitled task"}</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {task.protocolSection ? `Source: ${task.protocolSection}` : "Generated from protocol"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {launchChecklist.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 flex items-start gap-2">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full flex items-center justify-center ${item.done ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
+                      {item.done ? <Check className="h-3 w-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                      <div className="text-xs text-gray-500 mt-1">{item.subtitle}</div>
+                    </div>
+                  </div>
+                ))}
+                {!primarySuggestion && firstIncompleteChecklistItem ? (
+                  <Button variant="outline" size="sm" className="w-full mt-2" onClick={handleAiRecommendedAction}>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    {recommendedActionLabel}
+                  </Button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2 bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-sm font-semibold text-gray-900">Study Design & Objectives</h2>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Indication / Therapeutic Area:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.indication || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, indication: newValue });
+                    }}
+                    emptyText="Add indication"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Sample Size:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.sampleSize || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, sampleSize: newValue });
+                    }}
+                    emptyText="Add sample size"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Number of Sites:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.numberOfSites || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, numberOfSites: newValue });
+                    }}
+                    emptyText="Add number of sites"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Duration:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.studyDuration || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDuration: newValue });
+                    }}
+                    emptyText="Add study duration"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Study Design Type:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.studyDesignType || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, studyDesignType: newValue });
+                    }}
+                    emptyText="Add study design type"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Objective:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.primaryObjective || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryObjective: newValue });
+                    }}
+                    emptyText="Add primary objective"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1 md:col-span-2">
+                <span className="block text-xs font-semibold text-gray-400 uppercase tracking-wide">Primary Endpoint:</span>
+                <div className="mt-1">
+                  <EditableField
+                    value={trial?.primaryEndpoint || ""}
+                    onSave={async (newValue) => {
+                      await updateTrial.mutateAsync({ id: trialId, demoMode: currentDataMode, primaryEndpoint: newValue });
+                    }}
+                    emptyText="Add primary endpoint"
+                    className="text-sm text-gray-900"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div className="bg-white rounded-xl border border-gray-200 p-6">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">Assigned Team ({trialTeamMembers.length})</h2>
+                <button className="text-xs text-blue-600 hover:text-blue-700" onClick={() => setManageTeamOpen(true)}>
+                  Manage Team
+                </button>
+              </div>
+              {trialTeamMembers.length === 0 ? (
+                <p className="text-sm text-gray-500 mt-3">No team members assigned.</p>
+              ) : (
+                <div className="mt-3 space-y-2">
+                  {trialTeamMembers.map((member) => (
+                    <div key={member.id} className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8 rounded-md border border-gray-200 bg-gray-100">
+                        <AvatarImage src={member.avatar || undefined} alt={member.name} className="rounded-md object-cover" />
+                        <AvatarFallback className="rounded-md bg-[#e6e7eb] text-gray-600">
+                          <User className="h-4 w-4" />
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                        <p className="text-xs text-gray-500">{member.role}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div
+      className={`bg-[#F9FAFB] flex flex-col ${
+        lockPageScrollToScaffold ? "h-full overflow-hidden" : "min-h-full"
+      }`}
+    >
+      <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
+        <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
+          <button
+            onClick={() => {
+              logEvent({
+                eventType: "feature_used",
+                action: "back_to_trials",
+                entityType: "navigation",
+                payload: { from: "trial_detail" },
+              });
+              navigate("/trial-workspace");
+            }}
+            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors pr-5 border-r border-gray-200"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            <span>All Trials</span>
+          </button>
+
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    logEvent({
+                      eventType: "feature_used",
+                      action: "switch_tab",
+                      entityType: "trial_tab",
+                      entityId: tab.id,
+                      payload: { trialId },
+                    });
+                  }}
+                  className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
+                    activeTab === tab.id ? "text-blue-700 bg-blue-50" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className={lockPageScrollToScaffold ? "pt-4 flex-1 min-h-0 overflow-hidden" : "pt-4"}>
+        {mainContent}
+      </div>
+
+      <Dialog
+        open={setupTaskModalOpen}
+        onOpenChange={(open) => {
+          setSetupTaskModalOpen(open);
+          if (!open) {
+            setSetupEditingTaskId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
+          <DialogHeader className="px-6 py-5 border-b border-gray-200">
+            <DialogTitle className="text-3xl font-bold text-gray-900">
+              {setupTaskModalMode === "create" ? "Create New Task" : "Edit Task"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Title *</label>
+              <Input
+                value={setupTaskForm.title}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, title: event.target.value }))}
+                placeholder="Enter task title"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Description</label>
+              <Textarea
+                rows={4}
+                value={setupTaskForm.description}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, description: event.target.value }))}
+                placeholder="Enter task description (optional)"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Trial *</label>
+                <Input
+                  value={`${trial?.investigationalProduct || trial?.title || trialId} · ${trial?.sponsor || "No sponsor"}`}
+                  disabled
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Phase / Visit *</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.phaseId}
+                  onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, phaseId: event.target.value }))}
+                >
+                  <option value="">Select phase</option>
+                  {setupPhases.map((phase) => (
+                    <option key={phase.id} value={phase.id}>
+                      {phase.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Category</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.category}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, category: event.target.value as TaskCategory }))
+                  }
+                >
+                  {SETUP_TASK_CATEGORY_OPTIONS.map((category) => (
+                    <option key={category} value={category}>
+                      {titleCase(category)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Status</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.status}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, status: event.target.value as TaskStatus }))
+                  }
+                >
+                  {SETUP_TASK_STATUS_OPTIONS.map((status) => (
+                    <option key={status} value={status}>
+                      {titleCase(status)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Priority</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.priority}
+                  onChange={(event) =>
+                    setSetupTaskForm((prev) => ({ ...prev, priority: event.target.value as TaskPriority }))
+                  }
+                >
+                  {SETUP_TASK_PRIORITY_OPTIONS.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {titleCase(priority)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Responsible Role</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.assignedRole}
+                  onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, assignedRole: event.target.value }))}
+                >
+                  <option value="">Unassigned</option>
+                  {SETUP_ASSIGNED_ROLE_OPTIONS.map((role) => (
+                    <option key={role} value={role}>
+                      {formatRoleLabel(role)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-900">Assignee</label>
+                <select
+                  className="h-10 w-full rounded-md border border-gray-200 bg-white px-3 text-sm"
+                  value={setupTaskForm.assigneeMemberId}
+                  onChange={(event) => {
+                    const nextMemberId = event.target.value;
+                    const member = setupAssignedMembersForTaskForm.find(
+                      (candidate) => String(candidate.id) === nextMemberId
+                    );
+                    const inferredRole = member ? normalizeRoleToken(member.role || "") : "";
+                    setSetupTaskForm((prev) => ({
+                      ...prev,
+                      assigneeMemberId: nextMemberId,
+                      assignedRole:
+                        inferredRole && SETUP_ASSIGNED_ROLE_OPTIONS.includes(inferredRole as any)
+                          ? inferredRole
+                          : prev.assignedRole,
+                    }));
+                  }}
+                >
+                  <option value="">Unassigned</option>
+                  {setupAssignedMembersForTaskForm.map((member) => (
+                    <option key={member.id} value={String(member.id)}>
+                      {member.name} · {formatRoleLabel(member.role)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-900">Due Date</label>
+              <Input
+                type="date"
+                value={setupTaskForm.dueDate}
+                onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+              />
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold text-gray-900">Protocol Source (optional)</h4>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  onClick={() => {
+                    const protocolDoc =
+                      protocols.find((doc: any) => String(doc?.category || "").toLowerCase().includes("protocol")) ||
+                      protocols[0];
+                    const url = protocolDoc?.fileUrl as string | undefined;
+                    if (!url) {
+                      toast.error("No protocol PDF available to open");
+                      return;
+                    }
+                    const page = Number(setupTaskForm.sourcePage);
+                    const target = Number.isFinite(page) && page > 0 ? `${url}#page=${Math.round(page)}` : url;
+                    window.open(target, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Open protocol
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm text-gray-700">Section</label>
+                  <Input
+                    value={setupTaskForm.sourceSection}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceSection: event.target.value }))}
+                    placeholder="e.g. Schedule of Events"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm text-gray-700">Page</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={setupTaskForm.sourcePage}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourcePage: event.target.value }))}
+                    placeholder="e.g. 22"
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <label className="text-sm text-gray-700">Evidence Text</label>
+                  <Textarea
+                    rows={3}
+                    value={setupTaskForm.sourceText}
+                    onChange={(event) => setSetupTaskForm((prev) => ({ ...prev, sourceText: event.target.value }))}
+                    placeholder="Optional excerpt for traceability"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4 space-y-3">
+              <h4 className="text-sm font-semibold text-gray-900">Dependencies (predecessor tasks)</h4>
+              <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                {setupDependencyCandidates.length === 0 ? (
+                  <p className="text-sm text-gray-500">No dependency candidates in this trial map.</p>
+                ) : (
+                  setupDependencyCandidates.map((candidate) => {
+                    const phase = setupPhases.find((entry) => entry.id === candidate.phaseId);
+                    const checked = setupDependencyTaskIds.includes(candidate.id);
+                    return (
+                      <label key={candidate.id} className="flex items-start gap-2 rounded-md border border-gray-100 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const nextChecked = event.target.checked;
+                            setSetupDependencyTaskIds((prev) =>
+                              nextChecked ? Array.from(new Set([...prev, candidate.id])) : prev.filter((id) => id !== candidate.id)
+                            );
+                          }}
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-800">
+                          {candidate.name}
+                          <span className="block text-xs text-gray-500">{phase?.name || "Unassigned phase"}</span>
+                        </span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+            <div>
+              {setupTaskModalMode === "edit" && setupEditingTaskId ? (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 text-sm text-red-600 hover:text-red-700"
+                  onClick={handleDeleteSetupTaskFromModal}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete Task
+                </button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="h-9 rounded-md border border-gray-200 px-4 text-sm text-gray-700 hover:bg-gray-50"
+                onClick={() => {
+                  setSetupTaskModalOpen(false);
+                  setSetupEditingTaskId(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="h-9 rounded-md bg-[#2F6FED] px-4 text-sm font-medium text-white hover:bg-[#255BD1]"
+                onClick={handleSaveSetupTaskModal}
+              >
+                {setupTaskModalMode === "create" ? "Create Task" : "Save Changes"}
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={manageTeamOpen} onOpenChange={setManageTeamOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Manage Team</DialogTitle>
+          </DialogHeader>
+
+          <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-center justify-between gap-4">
+            <div className="text-sm text-blue-700">
+              <div>Can’t find someone?</div>
+              <div>Create a new member here to update your Organization list.</div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setAddMemberOpen(true)}>
+              Create New Member
+            </Button>
+          </div>
+
+          <div className="space-y-3 max-h-[50vh] overflow-auto pr-1">
+            {(state.teamMembers || []).map((member, index) => {
+              const isSelected = assignedMemberIds.includes(member.id);
+              const isSuggested = index < 3;
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  onClick={() => toggleAssignedMember(member.id)}
+                  className={`w-full rounded-lg border px-4 py-3 text-left transition-colors flex items-center justify-between ${
+                    isSelected ? "border-blue-200 bg-blue-50" : "border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-5 w-5 rounded border border-gray-300 flex items-center justify-center bg-white">
+                      {isSelected ? <Check className="h-3.5 w-3.5 text-blue-600" /> : null}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">{member.name}</div>
+                      <div className="text-xs text-gray-500">{member.clinicalRole || member.role}</div>
+                    </div>
+                  </div>
+                  {isSuggested ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-600 px-2 py-1 rounded-full">
+                      Suggested
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AddMemberPanel
+        open={addMemberOpen}
+        onClose={() => setAddMemberOpen(false)}
+        editingMemberId={null}
+        initialValues={{
+          name: "",
+          email: "",
+          avatar: null,
+          clinicalRole: "Principal Investigator",
+          appRole: "Admin",
+          team: "",
+          site: "",
+        }}
+        onMemberSaved={(memberId) => {
+          persistAssignedMembers(assignedMemberIds.includes(memberId) ? assignedMemberIds : [...assignedMemberIds, memberId]);
+        }}
+      />
+    </div>
+  );
 }
