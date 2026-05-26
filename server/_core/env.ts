@@ -48,8 +48,8 @@ if (process.env.NODE_ENV === "development") {
 
 export const ENV = {
     appId: process.env.AUTH0_CLIENT_ID ?? process.env.VITE_APP_ID ?? "",
-    auth0Domain: process.env.AUTH0_DOMAIN ?? "",
-    auth0Audience: process.env.AUTH0_AUDIENCE ?? "",
+    auth0Domain: process.env.AUTH0_DOMAIN ?? process.env.VITE_AUTH0_DOMAIN ?? "",
+    auth0Audience: process.env.AUTH0_AUDIENCE ?? process.env.VITE_AUTH0_AUDIENCE ?? "",
     auth0Secret: process.env.AUTH0_SECRET ?? "",
     cookieSecret: process.env.JWT_SECRET ?? "",
     databaseUrl: process.env.DATABASE_URL ?? "",
@@ -73,9 +73,7 @@ export const ENV = {
     // bundle via import.meta.env. The same Auth0 tenant is shared with the
     // production frontend and core-backend, so JWTs minted here validate
     // against core-backend's existing AUTH0_DOMAIN/AUTH0_AUDIENCE config.
-    auth0Domain: process.env.VITE_AUTH0_DOMAIN ?? "",
     auth0ClientId: process.env.VITE_AUTH0_CLIENT_ID ?? "",
-    auth0Audience: process.env.VITE_AUTH0_AUDIENCE ?? "",
     auth0RedirectUri:
         process.env.VITE_AUTH0_REDIRECT_URI ?? "http://localhost:3000/callback",
     // --- Core backend (Phase 2 of integration) ---

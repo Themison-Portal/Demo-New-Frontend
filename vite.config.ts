@@ -157,7 +157,7 @@ function vitePluginManusDebugCollector(): Plugin {
 // Set DISABLE_MANUS_RUNTIME=true in the env to skip them. Leave unset
 // when running on the Manus platform.
 const disableManus = /^(1|true|yes)$/i.test(process.env.DISABLE_MANUS_RUNTIME ?? "");
-const plugins: Plugin[] = [react(), tailwindcss(), jsxLocPlugin()];
+const plugins: any[] = [react(), tailwindcss(), jsxLocPlugin()];
 if (!disableManus) {
   plugins.push(vitePluginManusRuntime(), vitePluginManusDebugCollector());
 }
