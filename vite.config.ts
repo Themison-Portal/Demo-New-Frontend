@@ -163,6 +163,7 @@ if (!disableManus) {
 }
 
 export default defineConfig({
+  envPrefix: ["VITE_", "AUTH0_"],
   plugins,
   resolve: {
     alias: {

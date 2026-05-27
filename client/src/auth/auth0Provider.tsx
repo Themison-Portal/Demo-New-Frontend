@@ -68,11 +68,11 @@ export async function triggerAuth0Login(opts?: RedirectLoginOptions): Promise<vo
 }
 
 const buildClientOptions = (): Auth0ClientOptions => {
-  const domain = import.meta.env.VITE_AUTH0_DOMAIN as string | undefined;
-  const clientId = import.meta.env.VITE_AUTH0_CLIENT_ID as string | undefined;
-  const audience = import.meta.env.VITE_AUTH0_AUDIENCE as string | undefined;
+  const domain = (import.meta.env.VITE_AUTH0_DOMAIN || import.meta.env.AUTH0_DOMAIN) as string | undefined;
+  const clientId = (import.meta.env.VITE_AUTH0_CLIENT_ID || import.meta.env.AUTH0_CLIENT_ID) as string | undefined;
+  const audience = (import.meta.env.VITE_AUTH0_AUDIENCE || import.meta.env.AUTH0_AUDIENCE) as string | undefined;
   const redirectUri =
-    (import.meta.env.VITE_AUTH0_REDIRECT_URI as string | undefined) ??
+    (import.meta.env.VITE_AUTH0_REDIRECT_URI || import.meta.env.AUTH0_REDIRECT_URI) as string | undefined ??
     `${window.location.origin}/callback`;
 
   if (!domain || !clientId) {
