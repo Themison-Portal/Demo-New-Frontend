@@ -1,5 +1,7 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
+import { decodeJwt } from "jose";
 import type { User } from "../../drizzle/schema";
+import { getUserByOpenId, upsertUser } from "../db";
 import { ENV } from "./env";
 import { sdk } from "./sdk";
 
@@ -65,6 +67,35 @@ export async function createContext(
     user = null;
   }
 
+  // If cookie-based authentication failed or is not present, but an Auth0 token is provided
+  if (!user && authToken) {
+    try {
+      const decoded = decodeJwt(authToken);
+      const openId = decoded.sub;
+      if (openId) {
+        const email = (decoded.email || decoded["https://themison.com/email"]) as string | undefined;
+        const name = (decoded.name || decoded.nickname) as string | undefined;
+
+        const dbUser = await getUserByOpenId(openId);
+        if (dbUser) {
+          user = dbUser;
+        } else {
+          const signedInAt = new Date();
+          await upsertUser({
+            openId,
+            name: name || null,
+            email: email || null,
+            loginMethod: "auth0",
+            lastSignedIn: signedInAt,
+          });
+          user = (await getUserByOpenId(openId)) ?? null;
+        }
+      }
+    } catch (err) {
+      console.warn("[Auth0] Failed to decode user from authToken:", err);
+    }
+  }
+
   return {
     req: opts.req,
     res: opts.res,
@@ -72,3 +103,4 @@ export async function createContext(
     authToken,
   };
 }
+
