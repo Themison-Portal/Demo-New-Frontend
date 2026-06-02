@@ -178,3 +178,29 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
     url: await buildDownloadUrl(baseUrl, key, apiKey),
   };
 }
+
+/**
+ * Read the raw bytes for a stored object. Use this when a downstream
+ * consumer (e.g. pdf-parse) needs the buffer in-process and you want to
+ * skip the public-URL round-trip that `storageGet` -> HTTP fetch would
+ * otherwise require.
+ *
+ * - Local fallback: reads directly from `LOCAL_STORAGE_ROOT`.
+ * - Forge proxy: fetches the signed download URL once and returns the body.
+ */
+export async function storageReadBytes(relKey: string): Promise<Buffer> {
+  const key = normalizeKey(relKey);
+  if (isUsingLocalStorage()) {
+    const filePath = path.join(LOCAL_STORAGE_ROOT, key);
+    return fs.readFile(filePath);
+  }
+  const { baseUrl, apiKey } = getStorageConfig();
+  const downloadUrl = await buildDownloadUrl(baseUrl, key, apiKey);
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(
+      `storageReadBytes: failed to fetch ${key} (${response.status} ${response.statusText})`
+    );
+  }
+  return Buffer.from(await response.arrayBuffer());
+}

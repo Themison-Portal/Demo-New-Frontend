@@ -5,7 +5,7 @@ import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
 import { type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
-import { storagePut } from "./storage";
+import { storagePut, storageReadBytes } from "./storage";
 import { randomUUID } from "crypto";
 import {
   getProtocolContextChunks,
@@ -768,7 +768,10 @@ export const studySetupWizardRouter = router({
 
       let protocolContent = "";
       try {
-        protocolContent = await extractPdfText(uploaded.url);
+        // Read from the in-memory buffer instead of round-tripping through
+        // <PUBLIC_BASE_URL>/local-storage/... — avoids a network hop and
+        // works even when PUBLIC_BASE_URL is misconfigured (e.g. in cloud).
+        protocolContent = await extractPdfText(fileBuffer);
       } catch (error) {
         throw new Error("Failed to read protocol document. Please ensure it is a valid PDF.");
       }
@@ -1095,10 +1098,14 @@ Rules:
 - If drug administration exists in a phase, include pre-dose checks and post-dose observation.
 - Keep dependencies as task names referencing prior tasks in same phase or previous phases.`;
 
-      // Extract text from the PDF
+      // Extract text from the PDF. Read bytes directly via storageReadBytes
+      // instead of fetching protocol.fileUrl over HTTP — avoids the
+      // <PUBLIC_BASE_URL>/local-storage/... round-trip that breaks when
+      // PUBLIC_BASE_URL isn't set to the FE's public hostname (e.g. cloud).
       let protocolContent = '';
       try {
-        protocolContent = await extractPdfText(protocol.fileUrl);
+        const pdfBuffer = await storageReadBytes(protocol.fileKey);
+        protocolContent = await extractPdfText(pdfBuffer);
         console.log(`Extracted ${protocolContent.length} characters from PDF`);
       } catch (error) {
         console.error('Failed to extract PDF text:', error);
