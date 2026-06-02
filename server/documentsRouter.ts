@@ -300,9 +300,12 @@ export const documentsRouter = router({
         throw new Error("File size exceeds 50MB limit");
       }
 
-      // Generate unique file key
+      // Generate unique file key. The trial id may carry a "mode:" prefix
+      // from resolveTrialId (e.g. "building:<slug>"); NTFS treats `:` as an
+      // Alternate Data Stream separator so we strip it here.
       const fileExtension = input.filename.split(".").pop();
-      const fileKey = `protocols/${resolvedTrialId}/${nanoid()}.${fileExtension}`;
+      const safeTrialIdSegment = String(resolvedTrialId).replace(/:/g, "_");
+      const fileKey = `protocols/${safeTrialIdSegment}/${nanoid()}.${fileExtension}`;
 
       // Upload to S3
       const contentType = fileExtension === "pdf" ? "application/pdf" : "application/octet-stream";
@@ -440,15 +443,19 @@ export const documentsRouter = router({
       // back to the legacy in-FE pipeline below when preconditions
       // aren't met, so existing trials keep working unchanged.
       const coreBackendTrialId = trialMeta?.coreBackendTrialId ?? null;
+      // When AUTH_DISABLED=true the FastAPI backend mocks the user, so an
+      // Auth0 JWT is not actually required. Allow the BE forward to fire
+      // with a placeholder token in that case (BE never inspects it).
+      const authBypass = process.env.AUTH_DISABLED === "true";
       const useCoreBackend =
         !!protocolId &&
-        !!ctx.authToken &&
+        (!!ctx.authToken || authBypass) &&
         !!coreBackendTrialId &&
         !!ENV.coreBackendApiUrl;
 
       if (useCoreBackend && protocolId) {
         const documentName = input.filename;
-        const authToken = ctx.authToken!;
+        const authToken = ctx.authToken ?? "auth-disabled-bypass";
         const docCategory = input.category.toLowerCase().includes("protocol")
           ? "protocol"
           : input.category.toLowerCase();

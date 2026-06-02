@@ -3,6 +3,18 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 
+// BE accepts only: planning | active | completed | paused | cancelled
+// (trials_status_check). Map FE UI statuses to the nearest BE value.
+const FE_TO_BE_STATUS: Record<string, string> = {
+  "not-started": "planning",
+  recruiting: "active",
+  "on-hold": "paused",
+};
+function normalizeStatusForBackend(s: string | undefined | null): string {
+  if (!s) return "planning";
+  return FE_TO_BE_STATUS[s] ?? s;
+}
+
 function mapBackendTrialToClient(backendTrial: any) {
   return {
     id: backendTrial.id,
@@ -180,7 +192,7 @@ export const trialsRouter = router({
         sponsor: input.sponsor || "",
         phase: input.phase || "Phase I",
         location: input.location || "San Francisco, CA",
-        status: input.status || "planning",
+        status: normalizeStatusForBackend(input.status),
         study_start: input.studyStart || input.startDate || null,
         estimated_close_out: input.estimatedCloseOut || input.endDate || null,
         description: input.indication || "",
@@ -241,7 +253,7 @@ export const trialsRouter = router({
       if (input.title !== undefined) body.name = input.title;
       if (input.sponsor !== undefined) body.sponsor = input.sponsor;
       if (input.phase !== undefined) body.phase = input.phase;
-      if (input.status !== undefined) body.status = input.status;
+      if (input.status !== undefined) body.status = normalizeStatusForBackend(input.status);
       if (input.location !== undefined) body.location = input.location;
       if (input.studyStart !== undefined) body.study_start = input.studyStart;
       if (input.startDate !== undefined) body.study_start = input.startDate;
