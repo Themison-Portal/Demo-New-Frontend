@@ -460,7 +460,7 @@ export default function TrialDetail() {
   const setupMapStatus = isCurrentTrialExecutionMap ? map?.status : executionMapSummary?.status;
   const isSetupPlanLaunched = setupMapStatus === "active";
 
-  const { data: trial } = trpc.trials.getById.useQuery(
+  const { data: trial, isLoading: isTrialLoading } = trpc.trials.getById.useQuery(
     { id: trialId, demoMode: currentDataMode },
     { enabled: isValidTrialId }
   );
@@ -3255,6 +3255,87 @@ export default function TrialDetail() {
       </div>
     );
   }
+
+  if (isTrialLoading) {
+    return (
+      <div className="bg-[#F9FAFB] flex flex-col min-h-full">
+        {/* Skeleton Header */}
+        <div className="px-6 pt-5 pb-3 animate-pulse">
+          {/* Breadcrumbs */}
+          <div className="flex items-center gap-1.5">
+            <div className="h-3 w-16 bg-gray-200 rounded" />
+            <span className="text-gray-300">/</span>
+            <div className="h-3 w-24 bg-gray-200 rounded" />
+            <span className="text-gray-300">/</span>
+            <div className="h-3.5 w-32 bg-gray-200 rounded" />
+          </div>
+
+          {/* Title Area */}
+          <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="mt-1 h-12 w-12 rounded-xl bg-gray-200 shadow-sm" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="h-7 w-48 bg-gray-200 rounded-lg" />
+                  <div className="h-5 w-20 bg-gray-200 rounded-full" />
+                </div>
+                <div className="h-3.5 w-64 bg-gray-200 rounded mt-2.5" />
+              </div>
+            </div>
+
+            {/* KPI strip placeholder */}
+            <div className="flex items-center gap-4 bg-white border border-gray-150 rounded-xl px-4 py-3 shadow-sm">
+              <div className="w-28 space-y-2">
+                <div className="h-3 w-16 bg-gray-200 rounded" />
+                <div className="h-1.5 w-24 bg-gray-100 rounded-full" />
+              </div>
+              <div className="h-8 w-px bg-gray-200" />
+              <div className="w-28 space-y-2">
+                <div className="h-3 w-16 bg-gray-200 rounded" />
+                <div className="h-1.5 w-24 bg-gray-100 rounded-full" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Skeleton Body */}
+        <div className="flex flex-col lg:flex-row gap-6 px-6 pb-6 flex-1 animate-pulse min-h-0">
+          {/* Sidebar Menu Skeleton */}
+          <div className="w-full lg:w-64 flex-shrink-0 bg-white rounded-xl border border-gray-200 p-3 flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible gap-2 lg:space-y-2 shadow-sm h-fit">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+              <div key={i} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg w-28 lg:w-full bg-gray-50/50">
+                <div className="h-4 w-4 bg-gray-200 rounded" />
+                <div className="h-3.5 w-20 bg-gray-200 rounded" />
+              </div>
+            ))}
+          </div>
+
+          {/* Main Content Skeleton */}
+          <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6 shadow-sm space-y-6">
+            <div className="space-y-2.5">
+              <div className="h-4 w-28 bg-gray-200 rounded" />
+              <div className="h-8 w-64 bg-gray-200 rounded-lg" />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div key={i} className="rounded-lg border border-gray-100 p-4 space-y-2.5">
+                  <div className="h-3 w-20 bg-gray-100 rounded" />
+                  <div className="h-4 w-32 bg-gray-200 rounded" />
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2 border-t border-gray-100 pt-4">
+              <div className="h-3 w-24 bg-gray-200 rounded" />
+              <div className="h-4 w-full bg-gray-200 rounded" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`bg-[#F9FAFB] flex flex-col ${
