@@ -460,7 +460,7 @@ export default function TrialDetail() {
   const setupMapStatus = isCurrentTrialExecutionMap ? map?.status : executionMapSummary?.status;
   const isSetupPlanLaunched = setupMapStatus === "active";
 
-  const { data: trial } = trpc.trials.getById.useQuery(
+  const { data: trial, isLoading: isTrialLoading } = trpc.trials.getById.useQuery(
     { id: trialId, demoMode: currentDataMode },
     { enabled: isValidTrialId }
   );
@@ -3255,61 +3255,249 @@ export default function TrialDetail() {
       </div>
     );
   }
+
+  if (isTrialLoading) {
+    return (
+      <div className="bg-[#F9FAFB] flex flex-col min-h-full">
+        {/* Skeleton Header */}
+        <div className="px-6 pt-5 pb-3 animate-pulse">
+          {/* Breadcrumbs */}
+          <div className="flex items-center gap-1.5">
+            <div className="h-3 w-16 bg-gray-200 rounded" />
+            <span className="text-gray-300">/</span>
+            <div className="h-3 w-24 bg-gray-200 rounded" />
+            <span className="text-gray-300">/</span>
+            <div className="h-3.5 w-32 bg-gray-200 rounded" />
+          </div>
+
+          {/* Title Area */}
+          <div className="mt-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className="mt-1 h-12 w-12 rounded-xl bg-gray-200 shadow-sm" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <div className="h-7 w-48 bg-gray-200 rounded-lg" />
+                  <div className="h-5 w-20 bg-gray-200 rounded-full" />
+                </div>
+                <div className="h-3.5 w-64 bg-gray-200 rounded mt-2.5" />
+              </div>
+            </div>
+
+            {/* KPI strip placeholder */}
+            <div className="flex items-center gap-4 bg-white border border-gray-150 rounded-xl px-4 py-3 shadow-sm">
+              <div className="w-28 space-y-2">
+                <div className="h-3 w-16 bg-gray-200 rounded" />
+                <div className="h-1.5 w-24 bg-gray-100 rounded-full" />
+              </div>
+              <div className="h-8 w-px bg-gray-200" />
+              <div className="w-28 space-y-2">
+                <div className="h-3 w-16 bg-gray-200 rounded" />
+                <div className="h-1.5 w-24 bg-gray-100 rounded-full" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Skeleton Body */}
+        <div className="flex flex-col lg:flex-row gap-6 px-6 pb-6 flex-1 animate-pulse min-h-0">
+          {/* Sidebar Menu Skeleton */}
+          <div className="w-full lg:w-64 flex-shrink-0 bg-white rounded-xl border border-gray-200 p-3 flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible gap-2 lg:space-y-2 shadow-sm h-fit">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+              <div key={i} className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg w-28 lg:w-full bg-gray-50/50">
+                <div className="h-4 w-4 bg-gray-200 rounded" />
+                <div className="h-3.5 w-20 bg-gray-200 rounded" />
+              </div>
+            ))}
+          </div>
+
+          {/* Main Content Skeleton */}
+          <div className="flex-1 bg-white rounded-xl border border-gray-200 p-6 shadow-sm space-y-6">
+            <div className="space-y-2.5">
+              <div className="h-4 w-28 bg-gray-200 rounded" />
+              <div className="h-8 w-64 bg-gray-200 rounded-lg" />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <div key={i} className="rounded-lg border border-gray-100 p-4 space-y-2.5">
+                  <div className="h-3 w-20 bg-gray-100 rounded" />
+                  <div className="h-4 w-32 bg-gray-200 rounded" />
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-2 border-t border-gray-100 pt-4">
+              <div className="h-3 w-24 bg-gray-200 rounded" />
+              <div className="h-4 w-full bg-gray-200 rounded" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`bg-[#F9FAFB] flex flex-col ${
         lockPageScrollToScaffold ? "h-full overflow-hidden" : "min-h-full"
       }`}
-    >
-      <div className="sticky top-0 z-30 bg-[#F9FAFB] px-6 pt-3 pb-1 border-b border-transparent">
-        <div className="flex h-11 items-center gap-6 rounded-md border border-gray-200 bg-white px-5 py-0">
-          <button
-            onClick={() => {
-              logEvent({
-                eventType: "feature_used",
-                action: "back_to_trials",
-                entityType: "navigation",
-                payload: { from: "trial_detail" },
-              });
-              navigate("/trial-workspace");
-            }}
-            className="flex items-center gap-2 text-xs text-gray-500 hover:text-gray-700 transition-colors pr-5 border-r border-gray-200"
+    >      <div className="px-6 pt-5 pb-3">
+        <div className="flex items-center gap-1.5 text-xs text-gray-400">
+          <button 
+            onClick={() => navigate("/trial-workspace")} 
+            className="hover:text-blue-600 transition-colors"
           >
-            <ArrowLeft className="h-4 w-4" />
-            <span>All Trials</span>
+            Clinical Hub
           </button>
+          <span>/</span>
+          <button 
+            onClick={() => navigate("/trial-workspace")} 
+            className="hover:text-blue-600 transition-colors"
+          >
+            Trial Workspace
+          </button>
+          <span>/</span>
+          <span className="text-gray-600 font-medium">
+            {trial?.investigationalProduct || trial?.title || "Trial Details"}
+          </span>
+        </div>
 
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => {
-                    setActiveTab(tab.id);
-                    logEvent({
-                      eventType: "feature_used",
-                      action: "switch_tab",
-                      entityType: "trial_tab",
-                      entityId: tab.id,
-                      payload: { trialId },
-                    });
-                  }}
-                  className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
-                    activeTab === tab.id ? "text-blue-700 bg-blue-50" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
+        {/* Title area */}
+        <div className="mt-3 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="mt-1 h-12 w-12 rounded-xl border border-gray-200 bg-white flex items-center justify-center shadow-sm">
+              <FolderOpen className="h-6 w-6 text-blue-600" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-bold text-gray-955 tracking-tight">
+                  {trial?.investigationalProduct || trial?.title || "Clinical Trial"}
+                </h1>
+                <span className={trialStatusDisplayClass}>
+                  {trialStatusLabel}
+                </span>
+              </div>
+              <div className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-semibold text-gray-700">{trial?.sponsor || "No Sponsor"}</span>
+                <span className="text-gray-300">|</span>
+                <span>Protocol: {trial?.protocolNumber || "N/A"}</span>
+                {trial?.nctNumber && (
+                  <>
+                    <span className="text-gray-300">|</span>
+                    <span>NCT: {trial.nctNumber}</span>
+                  </>
+                )}
+                {trial?.phase && (
+                  <>
+                    <span className="text-gray-300">|</span>
+                    <span className="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-[10px] font-medium">{trial.phase}</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Compact real-time KPI overview strip */}
+          <div className="flex flex-wrap items-center gap-4 bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm">
+            <div className="text-xs">
+              <div className="flex items-center justify-between gap-2 text-gray-400 mb-1">
+                <span>Enrollment</span>
+                <span className="font-semibold text-gray-900">{enrollmentPercent}%</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-20 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-600 rounded-full transition-all duration-500" style={{ width: `${enrollmentPercent}%` }} />
+                </div>
+                <span className="text-[10px] text-gray-500 font-mono">{(patientsQuery.data?.length ?? enrolledPatients)}/{targetPatients}</span>
+              </div>
+            </div>
+
+            <div className="h-8 w-px bg-gray-200" />
+
+            <div className="text-xs">
+              <div className="flex items-center justify-between gap-2 text-gray-400 mb-1">
+                <span>Tasks Completed</span>
+                <span className="font-semibold text-gray-900">{completionRate}%</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 w-20 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-600 rounded-full transition-all duration-500" style={{ width: `${completionRate}%` }} />
+                </div>
+                <span className="text-[10px] text-gray-500 font-mono">{completedTasks}/{totalTasks}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className={lockPageScrollToScaffold ? "pt-4 flex-1 min-h-0 overflow-hidden" : "pt-4"}>
-        {mainContent}
+      <div className={`flex flex-col lg:flex-row gap-6 px-6 pb-6 min-h-0 flex-1 ${
+        lockPageScrollToScaffold ? "h-full overflow-hidden" : ""
+      }`}>
+        {/* Left Sidebar Menu */}
+        <div className="w-full lg:w-64 flex-shrink-0 bg-white rounded-xl border border-gray-200 p-2 lg:p-3 flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible gap-1 lg:space-y-1 no-scrollbar shadow-sm h-fit">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            
+            // Calculate count badges dynamically
+            let count = 0;
+            if (tab.id === "document-hub") {
+              count = protocols.length;
+            } else if (tab.id === "study-setup-wizard") {
+              count = pendingTasks;
+            } else if (tab.id === "team") {
+              count = trialTeamMembers.length;
+            } else if (tab.id === "patients") {
+              count = patientsQuery.data?.length ?? enrolledPatients;
+            } else if (tab.id === "notifications") {
+              count = contextSuggestions.length;
+            }
+
+            return (
+              <button
+                key={tab.id}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  logEvent({
+                    eventType: "feature_used",
+                    action: "switch_tab",
+                    entityType: "trial_tab",
+                    entityId: tab.id,
+                    payload: { trialId },
+                  });
+                }}
+                className={`flex items-center justify-between gap-3 px-3.5 py-2 text-xs lg:text-sm font-medium rounded-lg transition-all duration-200 cursor-pointer whitespace-nowrap lg:whitespace-normal group ${
+                  isActive 
+                    ? "text-blue-700 bg-blue-50/70 border-b-2 border-blue-600 lg:border-b-0 lg:border-l-2 lg:border-blue-700 lg:rounded-l-none lg:pl-3" 
+                    : "text-gray-500 hover:text-gray-800 hover:bg-gray-50"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Icon className={`h-4 w-4 transition-transform group-hover:scale-110 ${isActive ? "text-blue-700" : "text-gray-400 group-hover:text-gray-600"}`} />
+                  <span>{tab.label}</span>
+                </div>
+                {count > 0 && (
+                  <span className={`inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold min-w-[18px] h-[18px] transition-colors ${
+                    isActive 
+                      ? "bg-blue-600 text-white" 
+                      : tab.id === "notifications" 
+                        ? "bg-red-50 text-red-600 border border-red-100 animate-pulse" 
+                        : "bg-gray-100 text-gray-600"
+                  }`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Right Main Content Pane */}
+        <div className={`flex-1 min-w-0 ${
+          lockPageScrollToScaffold ? "h-full flex flex-col overflow-hidden" : ""
+        }`}>
+          {mainContent}
+        </div>
       </div>
 
       <Dialog
