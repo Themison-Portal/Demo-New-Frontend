@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
-import { invokeLLM } from "./_core/llm";
+import { callBackend } from "./_core/backendClient";
 import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
 import { type DemoMode } from "./_core/demoMode";
@@ -781,107 +781,40 @@ export const studySetupWizardRouter = router({
         protocolContent = protocolContent.substring(0, maxLength) + "\n\n[Content truncated due to length...]";
       }
 
-      const systemPrompt = `You are an expert clinical trial coordinator. Extract core trial details from the protocol.
-Preserve the protocol's exact wording for Phase (e.g., "Phase I/II").
-
-Return only JSON matching this schema:
-{
-  "protocolTitle": string | null,
-  "protocolNumber": string | null,
-  "sponsor": string | null,
-  "phase": string | null,
-  "investigationalProduct": string | null,
-  "indication": string | null,
-  "nctNumber": string | null,
-  "currentVersion": string | null,
-  "amendmentVersion": string | null,
-  "releaseDate": string | null,
-  "location": string | null,
-  "sampleSize": string | null,
-  "numberOfSites": string | null,
-  "studyDuration": string | null,
-  "studyDesignType": string | null,
-  "primaryObjective": string | null,
-  "primaryEndpoint": string | null
-}`;
-
-      const userPrompt = `Protocol filename: ${fileName}
-
-Protocol content:
-${protocolContent}`;
-
-      const response = await invokeLLM({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "protocol_details",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                protocolTitle: { type: ["string", "null"] },
-                protocolNumber: { type: ["string", "null"] },
-                sponsor: { type: ["string", "null"] },
-                phase: { type: ["string", "null"] },
-                investigationalProduct: { type: ["string", "null"] },
-                indication: { type: ["string", "null"] },
-                nctNumber: { type: ["string", "null"] },
-                currentVersion: { type: ["string", "null"] },
-                amendmentVersion: { type: ["string", "null"] },
-                releaseDate: { type: ["string", "null"] },
-                location: { type: ["string", "null"] },
-                sampleSize: { type: ["string", "null"] },
-                numberOfSites: { type: ["string", "null"] },
-                studyDuration: { type: ["string", "null"] },
-                studyDesignType: { type: ["string", "null"] },
-                primaryObjective: { type: ["string", "null"] },
-                primaryEndpoint: { type: ["string", "null"] },
-              },
-              required: [
-                "protocolTitle",
-                "protocolNumber",
-                "sponsor",
-                "phase",
-                "investigationalProduct",
-                "indication",
-                "nctNumber",
-                "currentVersion",
-                "amendmentVersion",
-                "releaseDate",
-                "location",
-                "sampleSize",
-                "numberOfSites",
-                "studyDuration",
-                "studyDesignType",
-                "primaryObjective",
-                "primaryEndpoint",
-              ],
-              additionalProperties: false,
-            },
-          },
+      // BE owns the prompt + JSON schema (Phase 2 of LLM consolidation).
+      // The FE just ships the protocol text; the BE calls the RAG service's
+      // Generate RPC and returns structured metadata.
+      const response = await callBackend<{
+        extracted: Record<string, string | null>;
+        model: string;
+        promptTokens: number;
+        completionTokens: number;
+      }>("/api/wizard/extract-metadata", {
+        method: "POST",
+        body: {
+          protocolFilename: fileName,
+          protocolContent,
         },
+        user: ctx.user,
       });
-
-      const content = response.choices[0]?.message?.content;
-      if (!content || typeof content !== "string") {
-        throw new Error("Failed to extract protocol details.");
-      }
 
       await logTelemetryEvent({
         eventType: "ai_response_generated",
         action: "generated",
         userId: String(ctx.user.id),
         entityType: "protocol",
-        payload: { demoMode: mode },
+        payload: {
+          demoMode: mode,
+          source: "core-backend.wizard",
+          model: response.model,
+          promptTokens: response.promptTokens,
+          completionTokens: response.completionTokens,
+        },
         aiInvolved: true,
       });
 
       return {
-        extracted: JSON.parse(content),
+        extracted: response.extracted,
         tempFile: uploaded,
       };
     }),
@@ -1034,69 +967,9 @@ ${protocolContent}`;
           aiInvolved: true,
         });
       } else {
-        // Use AI to analyze protocol and generate task scaffold
-        const systemPrompt = `You are an expert clinical trial operations planner.
-Analyze the protocol and generate a complete study setup scaffold with actionable tasks.
-
-Each task must be operationally specific and include:
-- name (must start with an action verb)
-- category
-- assignedRole
-- estimatedDuration (minutes)
-- priority
-- protocolReference.section + protocolReference.page
-- aiConfidence (0-1)
-- conditionalNote (if applicable)
-
-Return ONLY valid JSON in this shape:
-{
-  "protocolSections": [
-    {
-      "name": "Schedule of Events",
-      "dateReference": null,
-      "pageReference": "P.22",
-      "children": []
-    }
-  ],
-  "phases": [
-    {
-      "name": "Screening",
-      "color": "#3B82F6",
-      "tasks": [
-        {
-          "name": "Obtain written informed consent",
-          "suggestedDate": "2026-03-05",
-          "estimatedDuration": 45,
-          "category": "consent",
-          "assignedRole": "pi",
-          "priority": "critical",
-          "protocolReference": {
-            "section": "Schedule of Activities",
-            "page": 22,
-            "extractedText": "Informed Consent must be completed before screening procedures."
-          },
-          "aiConfidence": 0.95,
-          "conditionalNote": null,
-          "dependencies": []
-        }
-      ],
-      "transitions": [
-        { "toPhase": "Visit 1 - Baseline", "condition": "Passed" },
-        { "toPhase": "Screen Fail", "condition": "Failed" }
-      ]
-    }
-  ]
-}
-
-Rules:
-- Use realistic phase names from protocol schedule.
-- Use protocol sections for left-map navigation: Schedule of Events, Inclusion / Exclusion, Enrollment & Randomization, Dosing & Administration, Procedures & Assessments, Lab & Samples, Adverse Events & Safety, Concomitant Medications.
-- Tasks must be precise (no vague labels like "Lab work").
-- Every visit phase must include a data-entry task.
-- Screening must include consent + inclusion/exclusion checks.
-- Include Screen Fail and Early Termination phases with key closeout tasks.
-- If drug administration exists in a phase, include pre-dose checks and post-dose observation.
-- Keep dependencies as task names referencing prior tasks in same phase or previous phases.`;
+        // Use AI to analyze protocol and generate task scaffold.
+        // Prompt + JSON schema live on the BE (/api/wizard/generate-scaffold);
+        // the FE only ships the protocol content + optional context chunks.
 
       // Extract text from the PDF. Read bytes directly via storageReadBytes
       // instead of fetching protocol.fileUrl over HTTP — avoids the
@@ -1164,171 +1037,34 @@ ${chunk.chunkText.slice(0, 1400)}`;
         })
         .join("\n\n");
 
-      const userPrompt = `Protocol Document: ${protocol.filename}
-
-Priority Context Chunks:
-${contextBlock || "[No pre-processed context chunks available]"}
-
-Protocol Content:
-${protocolContent}
-
-Based on the protocol content above, generate a complete task scaffold for this clinical trial. Include all necessary phases, tasks, and dependencies.`;
-
-        const invokeScaffoldLLM = async (prompt: string) =>
-          invokeLLM({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: prompt },
-            ],
-            response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "task_scaffold",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  protocolSections: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        dateReference: { type: ["string", "null"] },
-                        pageReference: { type: ["string", "null"] },
-                        children: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              name: { type: "string" },
-                              dateReference: { type: ["string", "null"] },
-                              pageReference: { type: ["string", "null"] },
-                            },
-                            required: ["name"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["name"],
-                      additionalProperties: false,
-                    },
-                  },
-                  phases: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        color: { type: "string" },
-                        tasks: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              name: { type: "string" },
-                              suggestedDate: { type: ["string", "null"] },
-                              estimatedDuration: { type: ["number", "null"] },
-                              category: {
-                                type: "string",
-                                enum: [
-                                  "consent",
-                                  "eligibility",
-                                  "lab_sample",
-                                  "vital_signs",
-                                  "imaging",
-                                  "drug_administration",
-                                  "assessment",
-                                  "questionnaire",
-                                  "data_entry",
-                                  "coordination",
-                                  "documentation",
-                                  "follow_up",
-                                  "safety_reporting",
-                                  "regulatory",
-                                  "custom",
-                                ],
-                              },
-                              assignedRole: {
-                                type: ["string", "null"],
-                                enum: [
-                                  "pi",
-                                  "sub_i",
-                                  "crc",
-                                  "nurse",
-                                  "pharmacist",
-                                  "lab_tech",
-                                  "data_manager",
-                                  "regulatory_coordinator",
-                                  "custom",
-                                  null,
-                                ],
-                              },
-                              priority: {
-                                type: "string",
-                                enum: ["critical", "high", "medium", "low"],
-                              },
-                              protocolReference: {
-                                type: "object",
-                                properties: {
-                                  section: { type: "string" },
-                                  page: { type: ["number", "null"] },
-                                  extractedText: { type: ["string", "null"] },
-                                },
-                                required: ["section", "page", "extractedText"],
-                                additionalProperties: false,
-                              },
-                              aiConfidence: { type: ["number", "null"] },
-                              conditionalNote: { type: ["string", "null"] },
-                              dependencies: {
-                                type: "array",
-                                items: { type: "string" },
-                              },
-                            },
-                            required: [
-                              "name",
-                              "suggestedDate",
-                              "estimatedDuration",
-                              "category",
-                              "assignedRole",
-                              "priority",
-                              "protocolReference",
-                              "aiConfidence",
-                              "conditionalNote",
-                              "dependencies",
-                            ],
-                            additionalProperties: false,
-                          },
-                        },
-                        transitions: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              toPhase: { type: "string" },
-                              condition: { type: ["string", "null"] },
-                            },
-                            required: ["toPhase"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["name", "color", "tasks"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["protocolSections", "phases"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
         const structuredSchedule = await getStructuredScheduleOfActivities(protocolId).catch(() => null);
-        let response;
+
+        // BE owns the system prompt + JSON schema; FE just ships the protocol
+        // content + the optional context block we built above.
+        type ScaffoldBackendResponse = {
+          scaffold: any;
+          model: string;
+          promptTokens: number;
+          completionTokens: number;
+        };
+
+        const callScaffoldBackend = (
+          content: string,
+          contextText: string,
+        ): Promise<ScaffoldBackendResponse> =>
+          callBackend<ScaffoldBackendResponse>("/api/wizard/generate-scaffold", {
+            method: "POST",
+            body: {
+              protocolFilename: protocol.filename,
+              protocolContent: content,
+              contextChunksText: contextText || null,
+            },
+            user: ctx.user,
+          });
+
+        let response: ScaffoldBackendResponse | undefined;
         try {
-          response = await invokeScaffoldLLM(userPrompt);
+          response = await callScaffoldBackend(protocolContent, contextBlock);
         } catch (error) {
           const compactContextBlock = contextChunks
             .slice(0, 3)
@@ -1338,16 +1074,6 @@ Based on the protocol content above, generate a complete task scaffold for this 
 ${chunk.chunkText.slice(0, 700)}`;
             })
             .join("\n\n");
-
-          const compactPrompt = `Protocol Document: ${protocol.filename}
-
-Priority Context Chunks:
-${compactContextBlock || "[No pre-processed context chunks available]"}
-
-Protocol Content (compact fallback):
-${protocolContent.slice(0, 9000)}
-
-Generate the same JSON scaffold format, but prioritize correctness over completeness if content is limited.`;
 
           await logTelemetryEvent({
             eventType: "execution_plan_generation_retried",
@@ -1365,7 +1091,10 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
           });
 
           try {
-            response = await invokeScaffoldLLM(compactPrompt);
+            response = await callScaffoldBackend(
+              protocolContent.slice(0, 9000),
+              compactContextBlock,
+            );
           } catch (compactError) {
             await logTelemetryEvent({
               eventType: "execution_plan_generation_retried",
@@ -1387,15 +1116,10 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
         }
 
         if (!scaffoldData) {
-          const content = response?.choices?.[0]?.message?.content;
-          if (!content || typeof content !== "string") {
+          if (!response || !response.scaffold) {
             scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
           } else {
-            try {
-              scaffoldData = JSON.parse(content);
-            } catch {
-              scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
-            }
+            scaffoldData = response.scaffold;
           }
         }
         scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);

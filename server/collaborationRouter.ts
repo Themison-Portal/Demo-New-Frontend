@@ -18,7 +18,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { getProtocolContextChunks, type ProtocolContextChunk } from "./_core/protocolContext";
-import { invokeLLM } from "./_core/llm";
+import { callBackend } from "./_core/backendClient";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
 
@@ -253,31 +253,31 @@ async function generateAIResponse(options: {
   const chunks = await getProtocolChunksForTrial(db, trialId, question);
   const sourceContext = formatSourceCitations(chunks);
 
-  const systemPrompt = [
-    `You are Themison AI for trial ${trial?.name || trialId} (${trial?.protocolNumber || "N/A"}).`,
-    "Agents that prepare, humans approve: never imply autonomous execution.",
-    "Use concise and practical language.",
-    "Always include citations in format: [Source: Document, Section].",
-    "If patient safety or clinical judgment is required, direct to PI/medical monitor.",
-    `Layer: ${layer}.`,
-    `User: ${user?.name || `User ${userId}`} (${user?.role || "user"}).`,
-  ].join("\n");
-
-  const contextMessage = sourceContext
-    ? `Retrieved protocol sources:\n${sourceContext}`
-    : "No protocol chunks were retrieved; be explicit about uncertainty.";
-
-  const response = await invokeLLM({
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...recentMessages,
-      { role: "user", content: `${contextMessage}\n\nQuestion: ${question}` },
-    ],
-    max_tokens: 800,
+  // Prompt + system instructions live on BE (/api/collaboration/ai/respond).
+  // FE ships the trial/user metadata + pre-formatted source citations; BE
+  // assembles the prompt and calls the RAG service.
+  const response = await callBackend<{
+    text: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+  }>("/api/collaboration/ai/respond", {
+    method: "POST",
+    body: {
+      trialId,
+      trialName: trial?.name ?? null,
+      trialProtocolNumber: trial?.protocolNumber ?? null,
+      userName: user?.name ?? `User ${userId}`,
+      userRole: user?.role ?? "user",
+      layer,
+      question,
+      sourceContext: sourceContext || null,
+      recentMessages,
+    },
   });
 
   const text =
-    String(response.choices?.[0]?.message?.content || "").trim() ||
+    response.text.trim() ||
     "I am not certain from the available context. Please verify with the protocol team or PI.";
 
   const usedCitations = /\[Source:/.test(text);
@@ -573,66 +573,43 @@ async function draftEmailWithAI(
     `${chainWithTrial.subject} ${options.instructions || ""}`
   );
 
-  const draftPrompt = [
-    `Draft a professional reply email for clinical trial correspondence.`,
-    `Incoming subject: ${chainWithTrial.subject}`,
-    `From: ${chainWithTrial.fromName || "Unknown"} <${chainWithTrial.fromAddress || ""}>`,
-    chainWithTrial.aiSummary ? `AI Summary: ${chainWithTrial.aiSummary}` : "",
-    options.instructions ? `User instructions: ${options.instructions}` : "",
-    "Use concise language. Include protocol section references if used.",
-    "Do not claim actions are completed unless explicitly stated.",
-    "Return JSON with keys: subject, body, protocol_refs.",
-  ]
-    .filter(Boolean)
+  const recentMessagesFormatted = recentMessages
+    .reverse()
+    .map((row) => `${row.senderType === "ai" ? "Themison AI" : row.senderName || "Sender"}: ${row.content}`)
     .join("\n");
 
-  const llm = await invokeLLM({
-    messages: [
-      {
-        role: "system",
-        content: draftPrompt,
-      },
-      {
-        role: "user",
-        content: [
-          `Recent chain messages:\n${recentMessages
-            .reverse()
-            .map((row) => `${row.senderType === "ai" ? "Themison AI" : row.senderName || "Sender"}: ${row.content}`)
-            .join("\n")}`,
-          `Protocol context:\n${chunks
-            .slice(0, 3)
-            .map(
-              (chunk) =>
-                `[${chunk.citation.filename}, ${chunk.sectionTitle || chunk.sectionType}] ${chunk.chunkText.slice(0, 300)}`
-            )
-            .join("\n\n")}`,
-        ].join("\n\n"),
-      },
-    ],
-    response_format: { type: "json_object" },
-    max_tokens: 900,
+  const protocolContextFormatted = chunks
+    .slice(0, 3)
+    .map(
+      (chunk) =>
+        `[${chunk.citation.filename}, ${chunk.sectionTitle || chunk.sectionType}] ${chunk.chunkText.slice(0, 300)}`
+    )
+    .join("\n\n");
+
+  // BE assembles the prompt + JSON schema; FE just ships pre-formatted
+  // chain history + protocol context.
+  const response = await callBackend<{
+    draft: { subject: string; body: string; protocol_refs: Array<{ section?: string; quoted_text?: string }> };
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+  }>("/api/collaboration/ai/draft-email", {
+    method: "POST",
+    body: {
+      subject: chainWithTrial.subject,
+      fromName: chainWithTrial.fromName || null,
+      fromAddress: chainWithTrial.fromAddress || null,
+      aiSummary: chainWithTrial.aiSummary || null,
+      instructions: options.instructions || null,
+      recentMessagesFormatted,
+      protocolContextFormatted: protocolContextFormatted || null,
+    },
   });
 
-  const raw = String(llm.choices?.[0]?.message?.content || "").trim();
-  let parsed: {
-    subject?: string;
-    body?: string;
-    protocol_refs?: Array<{ section?: string; quoted_text?: string }>;
-  } = {};
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    parsed = {
-      subject: `Re: ${chainWithTrial.subject}`,
-      body: raw || "[VERIFY] Draft could not be generated.",
-      protocol_refs: [],
-    };
-  }
-
   const result = {
-    subject: parsed.subject || `Re: ${chainWithTrial.subject}`,
-    body: parsed.body || "[VERIFY] Draft content unavailable.",
-    protocol_refs: Array.isArray(parsed.protocol_refs) ? parsed.protocol_refs : [],
+    subject: response.draft.subject || `Re: ${chainWithTrial.subject}`,
+    body: response.draft.body || "[VERIFY] Draft content unavailable.",
+    protocol_refs: Array.isArray(response.draft.protocol_refs) ? response.draft.protocol_refs : [],
   };
 
   await logCollabEvent(db, {
@@ -1205,23 +1182,22 @@ export const collaborationRouter = router({
             .orderBy(asc(messages.createdAt))
             .limit(40);
 
-          const prompt = rows
+          const messagesFormatted = rows
             .map((row) => `${row.senderType === "ai" ? "Themison AI" : row.senderName || "Team"}: ${row.content}`)
             .join("\n");
 
-          const llm = await invokeLLM({
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Draft a concise 2-4 sentence thread resolution summary for clinical trial operations. Do not invent facts.",
-              },
-              { role: "user", content: prompt || "No messages available." },
-            ],
-            max_tokens: 260,
+          const summarizeResponse = await callBackend<{
+            summary: string;
+            model: string;
+            promptTokens: number;
+            completionTokens: number;
+          }>("/api/collaboration/ai/summarize-thread", {
+            method: "POST",
+            body: { messagesFormatted },
+            user: ctx.user,
           });
 
-          const drafted = String(llm.choices?.[0]?.message?.content || "").trim();
+          const drafted = summarizeResponse.summary.trim();
           if (drafted) summary = drafted;
         }
 
@@ -2039,39 +2015,27 @@ export const collaborationRouter = router({
 
         const bodyText = lastMessage[0]?.content || "";
 
-        const triage = await invokeLLM({
-          messages: [
-            {
-              role: "system",
-              content:
-                "Classify trial email into JSON {labels:string[],priority:'high'|'medium'|'low',summary:string}. Use labels from: urgent,action_required,fyi,sponsor_query,system_notification,irb_correspondence,lab_alert,enrollment_update,safety_report,administrative.",
-            },
-            {
-              role: "user",
-              content: `From: ${chainWithTrial.fromName || "Unknown"} <${chainWithTrial.fromAddress || ""}>\nSubject: ${chainWithTrial.subject}\nBody: ${bodyText}`,
-            },
-          ],
-          response_format: { type: "json_object" },
-          max_tokens: 340,
+        const triageResponse = await callBackend<{
+          triage: { labels: string[]; priority: "high" | "medium" | "low"; summary: string };
+          model: string;
+          promptTokens: number;
+          completionTokens: number;
+        }>("/api/collaboration/ai/triage-email", {
+          method: "POST",
+          body: {
+            subject: chainWithTrial.subject,
+            fromName: chainWithTrial.fromName || null,
+            fromAddress: chainWithTrial.fromAddress || null,
+            body: bodyText,
+          },
+          user: ctx.user,
         });
 
-        let parsed: { labels?: string[]; priority?: "high" | "medium" | "low"; summary?: string } = {};
-        try {
-          parsed = JSON.parse(String(triage.choices?.[0]?.message?.content || "{}"));
-        } catch {
-          parsed = {};
-        }
-
-        const labels = (parsed.labels || []).map((label) => normalizeText(label)).filter(Boolean);
-        const priority = parsed.priority && ["high", "medium", "low"].includes(parsed.priority)
-          ? parsed.priority
-          : labels.includes("urgent") || labels.includes("action_required")
-          ? "high"
-          : labels.includes("fyi")
-          ? "low"
-          : "medium";
-
-        const summary = parsed.summary || "Triage summary unavailable.";
+        const labels = (triageResponse.triage.labels || [])
+          .map((label) => normalizeText(label))
+          .filter(Boolean);
+        const priority = triageResponse.triage.priority;
+        const summary = triageResponse.triage.summary || "Triage summary unavailable.";
 
         await db
           .update(emailChains)
@@ -2197,24 +2161,22 @@ export const collaborationRouter = router({
           .orderBy(asc(messages.createdAt))
           .limit(60);
 
-        const llm = await invokeLLM({
-          messages: [
-            {
-              role: "system",
-              content:
-                "Draft a resolution summary for a clinical trial thread. Keep it concise, factual, and approval-ready.",
-            },
-            {
-              role: "user",
-              content: rows
-                .map((row) => `${row.senderType === "ai" ? "Themison AI" : row.senderName || "Team"}: ${row.content}`)
-                .join("\n"),
-            },
-          ],
-          max_tokens: 260,
+        const messagesFormatted = rows
+          .map((row) => `${row.senderType === "ai" ? "Themison AI" : row.senderName || "Team"}: ${row.content}`)
+          .join("\n");
+
+        const suggestion = await callBackend<{
+          summary: string;
+          model: string;
+          promptTokens: number;
+          completionTokens: number;
+        }>("/api/collaboration/ai/suggest-resolution", {
+          method: "POST",
+          body: { messagesFormatted },
+          user: ctx.user,
         });
 
-        const summary = String(llm.choices?.[0]?.message?.content || "").trim();
+        const summary = suggestion.summary.trim();
 
         await db
           .update(threads)

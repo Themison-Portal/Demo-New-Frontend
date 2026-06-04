@@ -305,159 +305,34 @@ function looksLikeQuotaError(status: number, body: string) {
   );
 }
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+// ─────────────────────────────────────────
+// Phase 6 (LLM consolidation): FE no longer talks to OpenAI/Anthropic
+// directly. All LLM calls go through BE endpoints under /api/wizard,
+// /api/document-ai, /api/collaboration/ai which delegate to the RAG
+// service. The helpers below remain as exports so the surviving legacy
+// fallback files (protocolContext.ts, unifiedQuery.ts, the residual
+// invokeLLM sites in documentAIRouter.ts) still compile, but they
+// throw at call time so any code path that reaches them surfaces
+// loudly rather than silently calling api.openai.com.
+// ─────────────────────────────────────────
 
-  const usingForge = shouldUseForgeProvider();
-  const modelName = String(ENV.openaiModel || "").toLowerCase();
-  const isGpt5Model = modelName.startsWith("gpt-5");
-  if (process.env.NODE_ENV === "development" && !loggedProviderMode) {
-    loggedProviderMode = true;
-    console.log(`[llm] provider=${usingForge ? "forge" : "openai"} model=${ENV.openaiModel}`);
-  }
-  const {
-    messages,
-    tools,
-    toolChoice,
-    tool_choice,
-    outputSchema,
-    output_schema,
-    responseFormat,
-    response_format,
-    maxTokens,
-    max_tokens,
-  } = params;
+const _DEPRECATION_MESSAGE =
+  "[FE LLM deprecated] invokeLLM() was called but the FE no longer holds an LLM key. " +
+  "Route this prompt through a /api/* BE endpoint (wizard, document-ai, collaboration/ai). " +
+  "See plan: Phase 6 of LLM consolidation.";
 
-  const payload: Record<string, unknown> = {
-    model: ENV.openaiModel,
-    messages: messages.map(normalizeMessage),
-  };
-
-  if (tools && tools.length > 0) {
-    payload.tools = tools;
-  }
-
-  const normalizedToolChoice = normalizeToolChoice(
-    toolChoice || tool_choice,
-    tools
-  );
-  if (normalizedToolChoice) {
-    payload.tool_choice = normalizedToolChoice;
-  }
-
-  const requestedMaxTokens =
-    (typeof maxTokens === "number" ? maxTokens : undefined) ??
-    (typeof max_tokens === "number" ? max_tokens : undefined) ??
-    (usingForge ? 32768 : 2048);
-
-  // OpenAI GPT-5 models require `max_completion_tokens` instead of `max_tokens`.
-  if (!usingForge && isGpt5Model) {
-    payload.max_completion_tokens = requestedMaxTokens;
-  } else {
-    payload.max_tokens = requestedMaxTokens;
-  }
-  if (usingForge) {
-    payload.thinking = {
-      budget_tokens: 128,
-    };
-  }
-
-  const normalizedResponseFormat = normalizeResponseFormat({
-    responseFormat,
-    response_format,
-    outputSchema,
-    output_schema,
-  });
-
-  if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
-  }
-
-  const maxAttempts = 3;
-  let attempt = 0;
-  let lastError: unknown = null;
-
-  while (attempt < maxAttempts) {
-    attempt += 1;
-    try {
-      const response = await fetch(resolveApiUrl(), {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${resolveApiKey()}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        if (looksLikeQuotaError(response.status, errorText)) {
-          throw new Error(
-            "Themison AI is temporarily unavailable because the configured LLM account has reached its usage limit. Update billing/quota or switch API key."
-          );
-        }
-        const error = new Error(
-          `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-        );
-        const isRetriable = response.status >= 500;
-        if (isRetriable && attempt < maxAttempts) {
-          await sleep(250 * attempt);
-          continue;
-        }
-        throw error;
-      }
-
-      return (await response.json()) as InvokeResult;
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      const isRetriable =
-        /(?:\b5\d\d\b|timeout|network|temporar|upstream|bad response)/i.test(message);
-      if (isRetriable && attempt < maxAttempts) {
-        await sleep(250 * attempt);
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw lastError instanceof Error ? lastError : new Error("LLM invoke failed");
+export async function invokeLLM(_params: InvokeParams): Promise<InvokeResult> {
+  // Phase 6: original 120-line implementation removed; FE no longer calls
+  // OpenAI directly. Use the BE endpoints under /api/wizard, /api/document-ai,
+  // /api/collaboration/ai instead.
+  throw new Error(_DEPRECATION_MESSAGE);
 }
 
-export async function invokeEmbeddings(input: string[], model = "text-embedding-3-small"): Promise<number[][]> {
-  assertApiKey();
-  if (!Array.isArray(input) || input.length === 0) return [];
-  if (embeddingsEndpointUnsupported) return [];
-
-  const response = await fetch(resolveEmbeddingsApiUrl(), {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${resolveApiKey()}`,
-    },
-    body: JSON.stringify({
-      model,
-      input,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    if (response.status === 404) {
-      embeddingsEndpointUnsupported = true;
-      console.warn(
-        "[llm] Embeddings endpoint unavailable on configured provider; continuing without semantic embeddings."
-      );
-      return [];
-    }
-    throw new Error(
-      `Embeddings invoke failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
-  }
-
-  const payload = (await response.json()) as EmbeddingResult;
-  if (!payload?.data || !Array.isArray(payload.data)) return [];
-
-  const sorted = [...payload.data].sort((a, b) => a.index - b.index);
-  return sorted.map((item) => (Array.isArray(item.embedding) ? item.embedding : []));
+export async function invokeEmbeddings(_input: string[], _model = "text-embedding-3-small"): Promise<number[][]> {
+  // Phase 6: original implementation removed. Embeddings are produced
+  // by the RAG service during /api/trial-documents/upload ingestion.
+  throw new Error(
+    "[FE embeddings deprecated] invokeEmbeddings() was called but the FE no longer holds an OpenAI key. " +
+      "Embeddings are produced by the RAG service during /api/trial-documents/upload ingestion."
+  );
 }

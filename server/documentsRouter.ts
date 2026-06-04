@@ -3,8 +3,6 @@ import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import {
   protocols,
-  fileSearchStores,
-  fileSearchDocuments,
   documentCategories,
   trials,
   users,
@@ -14,7 +12,7 @@ import {
 import { eq, like, notLike, inArray, and, or, desc } from "drizzle-orm";
 import { storagePut } from "./storage";
 import { nanoid } from "nanoid";
-import { createVectorStore, uploadToVectorStore } from "./_core/openaiAssistant";
+import { callBackend } from "./_core/backendClient";
 import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
@@ -195,23 +193,16 @@ export const documentsRouter = router({
             }
           }
 
-          const fileSearchDoc = await db
-            .select()
-            .from(fileSearchDocuments)
-            .where(eq(fileSearchDocuments.protocolId, doc.id))
-            .limit(1);
-
           const latestVectorEvent = latestVectorIndexEventByProtocol.get(String(doc.id));
           const hasContextIndex = (chunkCountByProtocol[doc.id] ?? 0) > 0;
-          const hasFileSearchIndex = fileSearchDoc.length > 0;
-          // When core-backend owns this doc, its status drives the
-          // badge — local-pipeline indexing isn't relevant.
+          // Phase 5: OpenAI Vector Store indexing is deprecated. The
+          // core-backend ingestion status is now the source of truth for
+          // "is indexed"; legacy local context chunks remain a fallback
+          // signal until Phase 6 removes protocolChunks.
           const usesCoreBackend = !!doc.coreBackendDocumentId;
           const hasEffectiveIndex = usesCoreBackend
             ? coreStatus === "complete" || coreStatus === "ready"
-            : USES_EXTERNAL_RAG
-              ? hasContextIndex
-              : hasFileSearchIndex;
+            : hasContextIndex;
           let indexStatus: "indexed" | "processing" | "failed" = hasEffectiveIndex
             ? "indexed"
             : "processing";
@@ -223,8 +214,8 @@ export const documentsRouter = router({
                 "core-backend ingestion failed. Retry processing.";
             }
           } else if (
-            !USES_EXTERNAL_RAG &&
-            !hasFileSearchIndex &&
+            !usesCoreBackend &&
+            !hasContextIndex &&
             latestVectorEvent?.eventType === "document_vector_index_failed"
           ) {
             indexStatus = "failed";
@@ -602,120 +593,24 @@ export const documentsRouter = router({
             });
           }
 
-          if (USES_EXTERNAL_RAG) {
-            await logTelemetryEvent({
-              eventType: "document_vector_index_skipped",
-              action: "skipped",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                reason: "external_rag_provider",
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
-            return;
-          }
-
-          try {
-            await logTelemetryEvent({
-              eventType: "document_vector_index_started",
-              action: "started",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
-
-            // Get or create File Search Store for this trial
-            let store = await db
-              .select()
-              .from(fileSearchStores)
-              .where(eq(fileSearchStores.trialId, resolvedTrialId))
-              .limit(1);
-
-            let storeName: string;
-            let storeId: number;
-
-            if (store.length === 0) {
-              // Create new File Search Store
-              storeName = await createVectorStore(`Trial ${resolvedTrialId} Documents`);
-              
-              await db.insert(fileSearchStores).values({
-                trialId: resolvedTrialId,
-                storeName,
-                displayName: `Trial ${resolvedTrialId} Documents`,
-              });
-              
-              const createdStore = await db
-                .select()
-                .from(fileSearchStores)
-                .where(eq(fileSearchStores.storeName, storeName))
-                .limit(1);
-              
-              storeId = createdStore[0].id;
-            } else {
-              storeName = store[0].storeName;
-              storeId = store[0].id;
-            }
-
-            // Upload to File Search Store
-            const documentName = await uploadToVectorStore(
-              buffer,
-              input.filename,
-              storeName
-            );
-
-            // Track the uploaded document
-            await db.insert(fileSearchDocuments).values({
-              storeId,
-              protocolId,
-              documentName,
-              displayName: input.filename,
-            });
-
-            await logTelemetryEvent({
-              eventType: "document_vector_index_completed",
-              action: "completed",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                storeId,
-                documentName,
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
-
-            console.log(`✅ Document ${input.filename} automatically uploaded to File Search Store`);
-          } catch (error) {
-            console.error(`❌ Failed to auto-upload ${input.filename} to File Search:`, error);
-            await logTelemetryEvent({
-              eventType: "document_vector_index_failed",
-              action: "failed",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                reason: error instanceof Error ? error.message : String(error),
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
-          }
+          // Phase 5: OpenAI Vector Store auto-upload is deprecated. When a
+          // protocol is not routed through core-backend, the local context
+          // chunks computed above are the only auxiliary index; the
+          // Vector Store branch that used to sit here is gone.
+          await logTelemetryEvent({
+            eventType: "document_vector_index_skipped",
+            action: "skipped",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocolId),
+            payload: {
+              trialId: resolvedTrialId,
+              filename: input.filename,
+              reason: "vector_store_deprecated_phase5",
+              demoMode: mode,
+            },
+            aiInvolved: true,
+          });
         })();
       }
 
@@ -745,21 +640,10 @@ export const documentsRouter = router({
         throw new Error("Document not found");
       }
 
-      // Delete from File Search Store (if exists)
-      const fileSearchDoc = await db
-        .select()
-        .from(fileSearchDocuments)
-        .where(eq(fileSearchDocuments.protocolId, input.id))
-        .limit(1);
-
-      if (fileSearchDoc.length > 0) {
-        // Delete from fileSearchDocuments table
-        await db
-          .delete(fileSearchDocuments)
-          .where(eq(fileSearchDocuments.protocolId, input.id));
-      }
-
-      // Delete from database
+      // Phase 5: Vector Store rows are vestigial; nothing populates
+      // fileSearchDocuments anymore, so there's nothing to clean up here.
+      // The core-backend trial_documents row (if any) is left to the BE
+      // to manage.
       await db.delete(protocols).where(eq(protocols.id, input.id));
 
       await logTelemetryEvent({
@@ -917,65 +801,53 @@ export const documentsRouter = router({
         ? "full"
         : "sample";
 
-      if (USES_EXTERNAL_RAG) {
-        await logTelemetryEvent({
-          eventType: "document_context_index_started",
-          action: "started",
-          userId: String(ctx.user.id),
-          entityType: "protocol",
-          entityId: String(protocol.id),
-          payload: {
-            trialId: protocol.trialId,
-            filename: protocol.filename,
-            demoMode: normalizedMode,
-          },
-          aiInvolved: true,
+      // Phase 4: when the protocol is mapped to a core-backend trial_documents
+      // row, route the retry through BE -> RAG service. The legacy OpenAI
+      // Vector Store path on this branch is deprecated and is being removed
+      // in Phase 5 along with openaiAssistant.ts.
+      if (!protocol.coreBackendDocumentId) {
+        return {
+          success: false,
+          message:
+            "This document is not registered with the RAG service. Re-upload to get a coreBackendDocumentId before retrying.",
+        };
+      }
+
+      await logTelemetryEvent({
+        eventType: "document_context_index_started",
+        action: "started",
+        userId: String(ctx.user.id),
+        entityType: "protocol",
+        entityId: String(protocol.id),
+        payload: {
+          trialId: protocol.trialId,
+          filename: protocol.filename,
+          demoMode: normalizedMode,
+          source: "core-backend.document-ai.retry-ingestion",
+        },
+        aiInvolved: true,
+      });
+
+      try {
+        const retry = await callBackend<{
+          jobId: string;
+          documentId: string;
+          status: string;
+          message: string;
+        }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(protocol.coreBackendDocumentId)}`, {
+          method: "POST",
+          user: ctx.user,
         });
 
-        try {
-          const chunkResult = await ingestProtocolContextChunks({
-            protocolId: protocol.id,
-            forceRefresh: true,
-          });
-          await logTelemetryEvent({
-            eventType: "document_context_index_completed",
-            action: "completed",
-            userId: String(ctx.user.id),
-            entityType: "protocol",
-            entityId: String(protocol.id),
-            payload: {
-              trialId: protocol.trialId,
-              filename: protocol.filename,
-              chunksCreated: chunkResult.created,
-              reused: chunkResult.reused,
-              pageCount: chunkResult.pageCount,
-              wordCount: chunkResult.wordCount,
-              hasStructuredSchedule: chunkResult.hasStructuredSchedule,
-              hasStructuredCriteria: chunkResult.hasStructuredCriteria,
-              langExtractFactCount: chunkResult.langExtractFactCount ?? 0,
-              langExtractModel: chunkResult.langExtractModel ?? null,
-              embeddingCount: chunkResult.embeddingCount,
-              demoMode: normalizedMode,
-            },
-            aiInvolved: true,
-          });
-        } catch (error) {
-          await logTelemetryEvent({
-            eventType: "document_context_index_failed",
-            action: "failed",
-            userId: String(ctx.user.id),
-            entityType: "protocol",
-            entityId: String(protocol.id),
-            payload: {
-              trialId: protocol.trialId,
-              filename: protocol.filename,
-              reason: error instanceof Error ? error.message : String(error),
-              demoMode: normalizedMode,
-            },
-            aiInvolved: true,
-          });
-          throw error;
-        }
+        // Stamp the new job id on the FE protocol row so the UI poller picks
+        // it up under coreBackendJobId, same as a fresh upload.
+        await db
+          .update(protocols)
+          .set({
+            coreBackendJobId: retry.jobId,
+            coreBackendIngestStatus: retry.status || "queued",
+          })
+          .where(eq(protocols.id, protocol.id));
 
         await logTelemetryEvent({
           eventType: "document_processing_retried",
@@ -985,107 +857,15 @@ export const documentsRouter = router({
           entityId: String(protocol.id),
           payload: {
             trialId: protocol.trialId,
-            mode: "context_only",
+            jobId: retry.jobId,
+            source: "core-backend.document-ai.retry-ingestion",
           },
         });
 
-        return { success: true, message: "Document context reprocessed successfully" };
-      }
-
-      // Check if already indexed
-      const existingFileSearchDoc = await db
-        .select()
-        .from(fileSearchDocuments)
-        .where(eq(fileSearchDocuments.protocolId, input.id))
-        .limit(1);
-
-      if (existingFileSearchDoc.length > 0) {
-        return { success: true, message: "Document already indexed" };
-      }
-
-      // Get or create File Search Store for this trial
-      let store = await db
-        .select()
-        .from(fileSearchStores)
-        .where(eq(fileSearchStores.trialId, protocol.trialId))
-        .limit(1);
-
-      let storeName: string;
-      let storeId: number;
-
-      if (store.length === 0) {
-        // Create new File Search Store
-        storeName = await createVectorStore(`Trial ${protocol.trialId} Documents`);
-        
-        await db.insert(fileSearchStores).values({
-          trialId: protocol.trialId,
-          storeName,
-          displayName: `Trial ${protocol.trialId} Documents`,
-        });
-        
-        const createdStore = await db
-          .select()
-          .from(fileSearchStores)
-          .where(eq(fileSearchStores.storeName, storeName))
-          .limit(1);
-        
-        storeId = createdStore[0].id;
-      } else {
-        storeName = store[0].storeName;
-        storeId = store[0].id;
-      }
-
-      // Download file from S3 and upload to File Search Store
-      await logTelemetryEvent({
-        eventType: "document_vector_index_started",
-        action: "started",
-        userId: String(ctx.user.id),
-        entityType: "protocol",
-        entityId: String(protocol.id),
-        payload: {
-          trialId: protocol.trialId,
-          filename: protocol.filename,
-          demoMode: normalizedMode,
-        },
-        aiInvolved: true,
-      });
-
-      try {
-        const response = await fetch(protocol.fileUrl);
-        const buffer = Buffer.from(await response.arrayBuffer());
-
-        const documentName = await uploadToVectorStore(
-          buffer,
-          protocol.filename,
-          storeName
-        );
-
-        // Track the uploaded document
-        await db.insert(fileSearchDocuments).values({
-          storeId,
-          protocolId: protocol.id,
-          documentName,
-          displayName: protocol.filename,
-        });
-
-        await logTelemetryEvent({
-          eventType: "document_vector_index_completed",
-          action: "completed",
-          userId: String(ctx.user.id),
-          entityType: "protocol",
-          entityId: String(protocol.id),
-          payload: {
-            trialId: protocol.trialId,
-            filename: protocol.filename,
-            storeId,
-            documentName,
-            demoMode: normalizedMode,
-          },
-          aiInvolved: true,
-        });
+        return { success: true, message: retry.message || "Reingestion queued" };
       } catch (error) {
         await logTelemetryEvent({
-          eventType: "document_vector_index_failed",
+          eventType: "document_context_index_failed",
           action: "failed",
           userId: String(ctx.user.id),
           entityType: "protocol",
@@ -1094,53 +874,15 @@ export const documentsRouter = router({
             trialId: protocol.trialId,
             filename: protocol.filename,
             reason: error instanceof Error ? error.message : String(error),
-            demoMode: normalizedMode,
+            source: "core-backend.document-ai.retry-ingestion",
           },
           aiInvolved: true,
         });
-        throw error;
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : "Failed to queue reingestion",
+        };
       }
-
-      try {
-        const chunkResult = await ingestProtocolContextChunks({
-          protocolId: protocol.id,
-          forceRefresh: false,
-        });
-        await logTelemetryEvent({
-          eventType: "document_context_index_completed",
-          action: "completed",
-          userId: String(ctx.user.id),
-          entityType: "protocol",
-          entityId: String(protocol.id),
-          payload: {
-            trialId: protocol.trialId,
-            filename: protocol.filename,
-            chunksCreated: chunkResult.created,
-            reused: chunkResult.reused,
-            pageCount: chunkResult.pageCount,
-            wordCount: chunkResult.wordCount,
-            hasStructuredSchedule: chunkResult.hasStructuredSchedule,
-            hasStructuredCriteria: chunkResult.hasStructuredCriteria,
-            langExtractFactCount: chunkResult.langExtractFactCount ?? 0,
-            langExtractModel: chunkResult.langExtractModel ?? null,
-            embeddingCount: chunkResult.embeddingCount,
-          },
-          aiInvolved: true,
-        });
-      } catch (error) {
-        console.error(`❌ Failed to refresh local context for ${protocol.filename}:`, error);
-      }
-
-      await logTelemetryEvent({
-        eventType: "document_processing_retried",
-        action: "retry_processing",
-        userId: String(ctx.user.id),
-        entityType: "protocol",
-        entityId: String(protocol.id),
-        payload: { trialId: protocol.trialId },
-      });
-
-      return { success: true, message: "Document processed successfully" };
     }),
 
   getCategories: publicProcedure.query(async () => {
@@ -1305,29 +1047,21 @@ export const documentsRouter = router({
         .select()
         .from(protocols);
 
-      // Filter by trial IDs and check File Search status
+      // Phase 5: `isIndexed` was previously derived from the deprecated
+      // OpenAI Vector Store table. It now reflects core-backend ingestion
+      // status (`complete` or `ready` means indexed and queryable).
       const docsByTrial: Record<string, any[]> = {};
-      
+
       for (const trialId of input.trialIds) {
         const resolvedTrialId = await resolveTrialId(db, mode, trialId, mode !== "building");
         const trialDocs = allDocs.filter(doc => doc.trialId === resolvedTrialId);
-        
-        const docsWithStatus = await Promise.all(
-          trialDocs.map(async (doc) => {
-            const fileSearchDoc = await db
-              .select()
-              .from(fileSearchDocuments)
-              .where(eq(fileSearchDocuments.protocolId, doc.id))
-              .limit(1);
 
-            return {
-              ...doc,
-              isIndexed: fileSearchDoc.length > 0,
-            };
-          })
-        );
-
-        docsByTrial[trialId] = docsWithStatus;
+        docsByTrial[trialId] = trialDocs.map((doc) => ({
+          ...doc,
+          isIndexed:
+            doc.coreBackendIngestStatus === "complete" ||
+            doc.coreBackendIngestStatus === "ready",
+        }));
       }
 
       return docsByTrial;

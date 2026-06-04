@@ -1,9 +1,8 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { protocols, fileSearchStores, fileSearchDocuments } from "../drizzle/schema";
+import { protocols } from "../drizzle/schema";
 import { eq, inArray } from "drizzle-orm";
-import { queryWithAssistant, uploadToVectorStore, createVectorStore } from "./_core/openaiAssistant";
 import { resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { invokeLLM } from "./_core/llm";
@@ -14,6 +13,7 @@ import {
 } from "./_core/protocolContext";
 import { runUnifiedQuery } from "./_core/unifiedQuery";
 import { ENV } from "./_core/env";
+import { callBackend } from "./_core/backendClient";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
@@ -513,75 +513,87 @@ ${conversationHistory}`;
         ? await db.select().from(protocols).where(inArray(protocols.id, documentIds))
         : [];
 
-      // Phase 4: when the selected docs are mapped to core-backend's
-      // `trial_documents`, route the query through core-backend's
-      // /query endpoint instead of the local pipeline. Each call uses
-      // the X-API-Key auth mode and returns a cited answer. We fire
-      // queries in parallel and pick the first that yields an answer
-      // (multi-doc fan-in across answers is a future improvement).
+      // Phase 4: when any selected docs are mapped to core-backend
+      // `trial_documents`, route the query through the BE's /api/document-ai/chat
+      // endpoint. The BE fans out across documents, picks the BEST response
+      // (most sources / non-"do not contain") rather than `successes[0]`, and
+      // returns a unified answer + flattened citations. Falls back to the
+      // legacy local pipeline if the BE call fails.
       const coreBackendDocs = selectedProtocols.filter(
         (p): p is typeof p & { coreBackendDocumentId: string } =>
           !!p.coreBackendDocumentId
       );
       if (coreBackendDocs.length > 0 && ENV.coreBackendApiUrl) {
         try {
-          const client = getCoreBackendClient();
-          const results = await Promise.allSettled(
-            coreBackendDocs.map((doc) =>
-              client.query({
-                query: latestUserMessage.content,
-                document_id: doc.coreBackendDocumentId,
-                document_name: doc.filename,
-              }).then((res) => ({ doc, res }))
-            )
-          );
-          const successes = results.flatMap((r) =>
-            r.status === "fulfilled" ? [r.value] : []
-          );
-          if (successes.length > 0) {
-            const primary = successes[0];
-            const sources: DocumentAISource[] = successes.flatMap(({ doc, res }) =>
-              (res.sources ?? []).map((src) => ({
-                fileId: doc.coreBackendDocumentId,
-                filename: doc.filename,
-                fileUrl: doc.fileUrl,
-                protocolId: doc.id,
-                category: doc.category ?? null,
-                excerpt: src.exactText,
-                section: src.section,
-                page: typeof src.page === "number" ? src.page : null,
-              }))
-            );
+          const beResponse = await callBackend<{
+            message: string;
+            sources: Array<{
+              fileId: string;
+              filename: string;
+              section?: string | null;
+              page?: number | null;
+              excerpt: string;
+              relevance?: string | null;
+            }>;
+            route: string;
+            documentsQueried: number;
+            documentsWithSources: number;
+            model?: string | null;
+          }>("/api/document-ai/chat", {
+            method: "POST",
+            body: {
+              messages: input.messages,
+              documentIds: coreBackendDocs.map((d) => d.coreBackendDocumentId),
+              trialId: resolvedTrialId ?? null,
+              sessionId: input.sessionId ?? null,
+            },
+            user: ctx.user,
+          });
 
-            await logTelemetryEvent({
-              eventType: "ai_response_generated",
-              action: "generated",
-              sessionId: input.sessionId,
-              entityType: "response",
-              payload: {
-                route: "core_backend_query",
-                docCount: coreBackendDocs.length,
-                successCount: successes.length,
-                citationCount: sources.length,
-                questionType,
-              },
-              aiInvolved: true,
-              aiOutput: primary.res.response,
-              aiSources: sources,
-            });
-
+          // Map BE sources back to the FE source shape (joins with the FE
+          // protocol row so the UI keeps protocolId, fileUrl, category, etc).
+          const docByBeId = new Map(coreBackendDocs.map((d) => [d.coreBackendDocumentId, d]));
+          const sources: DocumentAISource[] = beResponse.sources.map((src) => {
+            const doc = docByBeId.get(src.fileId);
             return {
-              message: primary.res.response,
-              thinking: `Queried core-backend RAG across ${successes.length} of ${coreBackendDocs.length} selected document(s).`,
-              sources,
+              fileId: src.fileId,
+              filename: src.filename || doc?.filename,
+              fileUrl: doc?.fileUrl,
+              protocolId: doc?.id,
+              category: doc?.category ?? null,
+              excerpt: src.excerpt,
+              section: src.section ?? undefined,
+              page: typeof src.page === "number" ? src.page : null,
             };
-          }
-          console.warn(
-            "[Document AI] core-backend /query returned no successful results; falling back to local pipeline."
-          );
+          });
+
+          await logTelemetryEvent({
+            eventType: "ai_response_generated",
+            action: "generated",
+            sessionId: input.sessionId,
+            entityType: "response",
+            payload: {
+              route: "core_backend_document_ai",
+              backendRoute: beResponse.route,
+              docCount: coreBackendDocs.length,
+              docsWithSources: beResponse.documentsWithSources,
+              citationCount: sources.length,
+              questionType,
+              model: beResponse.model ?? null,
+            },
+            aiInvolved: true,
+            aiOutput: beResponse.message,
+            aiSources: sources,
+          });
+
+          return {
+            message: beResponse.message,
+            thinking: `Queried BE document-AI across ${beResponse.documentsQueried} document(s); ${beResponse.documentsWithSources} returned citations.`,
+            sources,
+          };
         } catch (error) {
           console.warn(
-            "[Document AI] core-backend /query path failed; falling back to local pipeline.",
+            "[Document AI] BE /api/document-ai/chat failed; falling back to local pipeline.",
             error
           );
         }
@@ -797,102 +809,29 @@ If the retrieved context is insufficient, clearly state what is missing instead 
         console.warn("[Document AI] Local protocol-context answer path failed; falling back to assistant retrieval.", error);
       }
 
-      try {
-        if (USES_EXTERNAL_RAG) {
-          return {
-            message:
-              "Fallback assistant retrieval is disabled in external RAG mode. Retry your question to use local protocol context retrieval.",
-          };
-        }
+      // Phase 5: OpenAI Vector Stores fallback is deprecated. If neither
+      // BE-forwarding (Phase 4) nor unifiedQuery succeeded, surface a
+      // clear error rather than calling OpenAI's Assistants API directly.
+      // The Vector Store schema (fileSearchStores/fileSearchDocuments) and
+      // any populated rows are vestigial — they get dropped in Phase 6.
+      await logTelemetryEvent({
+        eventType: "ai_response_generated",
+        action: "generated",
+        sessionId: input.sessionId,
+        entityType: "response",
+        payload: {
+          route: "no_results",
+          docCount: selectedProtocols.length,
+          questionType,
+        },
+        aiInvolved: true,
+      });
 
-        const docs = await db
-          .select()
-          .from(fileSearchDocuments)
-          .where(inArray(fileSearchDocuments.protocolId, documentIds));
-
-        if (docs.length === 0) {
-          return {
-            message: "The selected documents have not been processed yet. Please wait for processing to complete.",
-          };
-        }
-
-        const storeIds = Array.from(new Set(docs.map((doc) => doc.storeId)));
-        const stores = await db.select().from(fileSearchStores).where(inArray(fileSearchStores.id, storeIds));
-        const storeNames = stores.map((store) => store.storeName);
-
-        const { answer, citations } = await queryWithAssistant(latestUserMessage.content, storeNames);
-
-        let sources: DocumentAISource[] = [];
-        if (citations && citations.length > 0) {
-          const fileIds = Array.from(
-            new Set(
-              citations
-                .map((citation: any) => citation.file_id)
-                .filter((id: string | undefined): id is string => Boolean(id))
-            )
-          );
-
-          if (fileIds.length > 0) {
-            const fileDocs = await db
-              .select()
-              .from(fileSearchDocuments)
-              .where(inArray(fileSearchDocuments.documentName, fileIds));
-
-            const protocolIds = Array.from(new Set(fileDocs.map((doc) => doc.protocolId)));
-            const protocolRows = protocolIds.length
-              ? await db.select().from(protocols).where(inArray(protocols.id, protocolIds))
-              : [];
-
-            const fileDocById = new Map(fileDocs.map((doc) => [doc.documentName, doc]));
-            const protocolLookup = new Map(protocolRows.map((protocol) => [protocol.id, protocol]));
-
-            sources = citations.map((citation: any) => {
-              const fileId = citation.file_id;
-              const fileDoc = fileId ? fileDocById.get(fileId) : undefined;
-              const protocol = fileDoc ? protocolLookup.get(fileDoc.protocolId) : undefined;
-
-              return {
-                fileId,
-                filename: protocol?.filename || fileDoc?.displayName || citation.file_name || fileId,
-                fileUrl: protocol?.fileUrl,
-                protocolId: fileDoc?.protocolId,
-                category: protocol?.category ?? null,
-                excerpt: citation.text,
-                section: citation.section,
-                page: citation.page_number ?? null,
-              };
-            });
-          }
-        }
-
-        await logTelemetryEvent({
-          eventType: "ai_response_generated",
-          action: "generated",
-          sessionId: input.sessionId,
-          entityType: "response",
-          payload: {
-            route: "selected_docs_assistant_retrieval",
-            storeCount: storeNames.length,
-            citationCount: Array.isArray(citations) ? citations.length : 0,
-            questionType,
-          },
-          aiInvolved: true,
-          aiOutput: answer,
-          aiSources: sources,
-        });
-
-        return {
-          message: answer,
-          thinking: `Using assistant retrieval across ${storeNames.length} indexed document store(s).`,
-          citations,
-          sources,
-        };
-      } catch (error: any) {
-        console.error("Error querying with File Search:", error);
-        return {
-          message: "Sorry, I encountered an error while searching the documents. Please try again.",
-        };
-      }
+      return {
+        message:
+          "I couldn't find an answer for that question in the selected documents. " +
+          "Try rephrasing, expanding the selection, or re-uploading the document if processing has failed.",
+      };
     }),
 
   generateWorksheet: publicProcedure
@@ -1081,8 +1020,9 @@ ${contextText}
         throw new Error("Database not available");
       }
 
+      // Phase 5: OpenAI Vector Stores deprecated. This mutation now routes
+      // through BE -> RAG service when the protocol is mapped to core-backend.
       try {
-        // Get the protocol
         const protocol = await db
           .select()
           .from(protocols)
@@ -1095,63 +1035,34 @@ ${contextText}
 
         const doc = protocol[0];
 
-        if (USES_EXTERNAL_RAG) {
-          await ingestProtocolContextChunks({
-            protocolId: doc.id,
-            forceRefresh: true,
-          });
+        if (!doc.coreBackendDocumentId) {
           return {
-            success: true,
-            message: "Document context indexed successfully",
+            success: false,
+            message:
+              "This document is not registered with the RAG service. Re-upload to get a coreBackendDocumentId before indexing.",
           };
         }
 
-        // Get or create File Search Store for this trial
-        let store = await db
-          .select()
-          .from(fileSearchStores)
-          .where(eq(fileSearchStores.trialId, doc.trialId))
-          .limit(1);
-
-        let storeName: string;
-
-        if (store.length === 0) {
-          // Create new Vector Store
-          storeName = await createVectorStore(`Trial ${doc.trialId} Documents`);
-          
-          // Save to database
-          await db.insert(fileSearchStores).values({
-            trialId: doc.trialId,
-            storeName,
-            displayName: `Trial ${doc.trialId} Documents`,
-          });
-        } else {
-          storeName = store[0].storeName;
-        }
-
-        // Download the PDF from S3
-        const response = await fetch(doc.fileUrl);
-        const arrayBuffer = await response.arrayBuffer();
-        const fileBuffer = Buffer.from(arrayBuffer);
-
-        // Upload to OpenAI Vector Store
-        const documentName = await uploadToVectorStore(
-          fileBuffer,
-          doc.filename,
-          storeName
-        );
-
-        // Track the uploaded document
-        await db.insert(fileSearchDocuments).values({
-          storeId: store.length > 0 ? store[0].id : (await db.select().from(fileSearchStores).where(eq(fileSearchStores.storeName, storeName)))[0].id,
-          protocolId: doc.id,
-          documentName,
-          displayName: doc.filename,
+        const retry = await callBackend<{
+          jobId: string;
+          documentId: string;
+          status: string;
+          message: string;
+        }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(doc.coreBackendDocumentId)}`, {
+          method: "POST",
         });
+
+        await db
+          .update(protocols)
+          .set({
+            coreBackendJobId: retry.jobId,
+            coreBackendIngestStatus: retry.status || "queued",
+          })
+          .where(eq(protocols.id, doc.id));
 
         return {
           success: true,
-          message: "Document uploaded and processed successfully",
+          message: retry.message || "Ingestion queued via core-backend",
         };
       } catch (error: any) {
         console.error('Error uploading document:', error);
@@ -1180,8 +1091,10 @@ ${contextText}
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
 
+      // Phase 5: Vector Stores deprecated. Bulk indexing now routes each
+      // protocol with a coreBackendDocumentId through the BE retry endpoint
+      // (which delegates to the RAG service via gRPC).
       try {
-        // Get all protocols for this trial
         const docs = await db
           .select()
           .from(protocols)
@@ -1194,113 +1107,45 @@ ${contextText}
           };
         }
 
-        if (USES_EXTERNAL_RAG) {
-          let successCount = 0;
-          let errorCount = 0;
-          for (const doc of docs) {
-            try {
-              await ingestProtocolContextChunks({
-                protocolId: doc.id,
-                forceRefresh: true,
-              });
-              successCount++;
-            } catch (error) {
-              console.error(`Error indexing local context for ${doc.filename}:`, error);
-              errorCount++;
-            }
-          }
-
-          return {
-            success: errorCount === 0,
-            message: `Processed local context for ${successCount} documents successfully${
-              errorCount > 0 ? `, ${errorCount} failed` : ""
-            }`,
-          };
-        }
-
-        // Get or create File Search Store
-        let store = await db
-          .select()
-          .from(fileSearchStores)
-          .where(eq(fileSearchStores.trialId, resolvedTrialId))
-          .limit(1);
-
-        let storeName: string;
-        let storeId: number;
-
-        if (store.length === 0) {
-          // Create new Vector Store
-          storeName = await createVectorStore(`Trial ${resolvedTrialId} Documents`);
-          
-          // Save to database
-          await db.insert(fileSearchStores).values({
-            trialId: resolvedTrialId,
-            storeName,
-            displayName: `Trial ${resolvedTrialId} Documents`,
-          });
-          
-          // Fetch the created store to get its ID
-          const createdStore = await db
-            .select()
-            .from(fileSearchStores)
-            .where(eq(fileSearchStores.storeName, storeName))
-            .limit(1);
-          
-          storeId = createdStore[0].id;
-        } else {
-          storeName = store[0].storeName;
-          storeId = store[0].id;
-        }
-
-        // Upload each document
         let successCount = 0;
         let errorCount = 0;
-
+        let skippedCount = 0;
         for (const doc of docs) {
+          if (!doc.coreBackendDocumentId) {
+            skippedCount++;
+            continue;
+          }
           try {
-            // Check if already uploaded
-            const existing = await db
-              .select()
-              .from(fileSearchDocuments)
-              .where(eq(fileSearchDocuments.protocolId, doc.id))
-              .limit(1);
-
-            if (existing.length > 0) {
-              console.log(`Document ${doc.filename} already uploaded, skipping`);
-              successCount++;
-              continue;
-            }
-
-            // Download from S3
-            const response = await fetch(doc.fileUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            const fileBuffer = Buffer.from(arrayBuffer);
-
-            // Upload to OpenAI Vector Store
-            const documentName = await uploadToVectorStore(
-              fileBuffer,
-              doc.filename,
-              storeName
-            );
-
-            // Track the uploaded document
-            await db.insert(fileSearchDocuments).values({
-              storeId,
-              protocolId: doc.id,
-              documentName,
-              displayName: doc.filename,
+            const retry = await callBackend<{
+              jobId: string;
+              documentId: string;
+              status: string;
+              message: string;
+            }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(doc.coreBackendDocumentId)}`, {
+              method: "POST",
             });
-
+            await db
+              .update(protocols)
+              .set({
+                coreBackendJobId: retry.jobId,
+                coreBackendIngestStatus: retry.status || "queued",
+              })
+              .where(eq(protocols.id, doc.id));
             successCount++;
           } catch (error) {
-            console.error(`Error uploading ${doc.filename}:`, error);
+            console.error(`Error queuing reingestion for ${doc.filename}:`, error);
             errorCount++;
           }
         }
 
+        const parts = [`Queued reingestion for ${successCount} document(s)`];
+        if (errorCount > 0) parts.push(`${errorCount} failed`);
+        if (skippedCount > 0)
+          parts.push(`${skippedCount} skipped (no coreBackendDocumentId)`);
+
         return {
           success: errorCount === 0,
-          message: `Processed ${successCount} documents successfully${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+          message: parts.join("; "),
         };
       } catch (error: any) {
         console.error('Error processing trial documents:', error);
