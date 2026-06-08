@@ -4,9 +4,10 @@
  * direct FastAPI BE calls.
  *
  * UUID guards prevent sending demo/fake IDs to BE.
+ * Field mappers convert BE snake_case to FE camelCase.
  */
 
-import type { CreateThreadInput, DraftResult, ThreadFilters } from "@/types/collaboration";
+import type { CreateThreadInput, DraftResult, ThreadFilters, Conversation, CollaborationMessage } from "@/types/collaboration";
 
 // ─────────────────────────────────────────
 // Config
@@ -24,35 +25,141 @@ function isValidUUID(str: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 }
 
-// Returns UUID string if valid, undefined otherwise
 function safeUUID(str: string | undefined | null): string | undefined {
     if (!str) return undefined;
     return isValidUUID(str) ? str : undefined;
 }
 
 // ─────────────────────────────────────────
-// Core fetch wrapper
+// Field mappers — BE snake_case → FE camelCase
 // ─────────────────────────────────────────
 
-async function getAuthToken(): Promise<string | null> {
-    try {
-        const res = await fetch("/api/auth/token");
-        if (!res.ok) return null;
-        const data = await res.json();
-        return data.accessToken ?? null;
-    } catch {
-        return null;
-    }
+function mapInboxMessage(raw: any) {
+    return {
+        id: raw.id,
+        inboxId: raw.organization_id ?? raw.id,
+        subject: raw.subject,
+        folder: raw.folder,
+        aiLabels: raw.labels ?? [],
+        aiPriority: null,
+        aiSummary: raw.ai_summary ?? null,
+        aiSuggestedThreadId: null,
+        linkedThreadId: raw.related_thread_id ?? null,
+        fromAddress: raw.sender_email ?? null,
+        fromName: raw.sender_name ?? null,
+        toAddresses: raw.to_addresses ?? [],
+        ccAddresses: raw.cc_addresses ?? [],
+        messageCount: 1,
+        isRead: raw.is_read ?? false,
+        isStarred: raw.is_starred ?? false,
+        createdAt: raw.created_at,
+        updatedAt: raw.updated_at ?? raw.created_at,
+        messages: raw.messages ?? undefined,
+    };
 }
+
+function mapThread(raw: any) {
+    return {
+        id: raw.id,
+        trialId: raw.trial_id ?? null,
+        title: raw.title,
+        category: raw.thread_type ?? "general",
+        status: raw.is_resolved ? "resolved" : "open",
+        resolvedBy: raw.resolved_by ?? null,
+        resolvedAt: raw.resolved_at ?? null,
+        resolutionSummary: raw.resolution_summary ?? null,
+        aiContributed: false,
+        aiResolutionSuggested: false,
+        createdBy: raw.created_by ?? null,
+        createdAt: raw.created_at,
+        updatedAt: raw.updated_at,
+        anchors: (raw.anchors ?? []).map((a: any) => ({
+            id: a.id ?? a.type,
+            threadId: raw.id,
+            anchorType: a.type,
+            anchorLabel: a.label,
+            anchorRefId: a.id ?? null,
+            anchorRefType: null,
+            createdAt: raw.created_at,
+        })),
+        replyCount: raw.reply_count ?? 0,
+        messages: (raw.messages ?? []).map((m: any) => mapThreadMessage(m)),
+    };
+}
+
+function mapThreadMessage(raw: any) {
+    return {
+        id: raw.id,
+        conversationId: null,
+        threadId: raw.thread_id,
+        emailChainId: null,
+        senderId: raw.sender_id ?? null,
+        senderType: raw.role === "ai" ? "ai" : "user",
+        senderName: raw.sender_name ?? (raw.role === "ai" ? "Themison AI" : null),
+        senderEmail: null,
+        content: raw.content,
+        contentType: "text",
+        embeddedContent: null,
+        isAiGenerated: raw.role === "ai",
+        aiModel: null,
+        aiLatencyMs: null,
+        editedAt: null,
+        createdAt: raw.created_at,
+    };
+}
+
+function mapConversation(raw: any) {
+    return {
+        id: raw.partner_id ?? raw.id,
+        trialId: null,
+        type: "direct",
+        name: raw.partner_name ?? null,
+        createdBy: null,
+        createdAt: raw.last_message_at ?? new Date().toISOString(),
+        updatedAt: raw.last_message_at ?? new Date().toISOString(),
+        participants: [],
+        lastMessage: raw.last_message ? {
+            id: null,
+            content: raw.last_message,
+            contentType: "text",
+            senderType: "user",
+            senderName: null,
+            createdAt: raw.last_message_at,
+        } : null,
+        unreadCount: raw.unread_count ?? 0,
+    };
+}
+
+function mapDirectMessage(raw: any) {
+    return {
+        id: raw.id,
+        conversationId: raw.sender_id,
+        threadId: null,
+        emailChainId: null,
+        senderId: raw.sender_id,
+        senderType: "user",
+        senderName: raw.sender_name ?? null,
+        senderEmail: null,
+        content: raw.content,
+        contentType: "text",
+        embeddedContent: null,
+        isAiGenerated: false,
+        aiModel: null,
+        aiLatencyMs: null,
+        editedAt: null,
+        createdAt: raw.sent_at ?? raw.created_at,
+    };
+}
+
+// ─────────────────────────────────────────
+// Core fetch wrapper
+// ─────────────────────────────────────────
 
 async function apiFetch<T>(
     path: string,
     options: RequestInit = {}
 ): Promise<T> {
-    // Skip auth token fetch for local dev (AUTH_DISABLED=true on BE)
-    // When AUTH_DISABLED=false, uncomment getAuthToken() below
-    // const token = await getAuthToken();
-    const token = null;
+    const token = null; // AUTH_DISABLED=true — no token needed for demo
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -86,11 +193,12 @@ export const collabApi = {
 
     // ─── Direct Messages ──────────────────────────────────────────────
 
-    listConversations: (trialId: string) => {
+    listConversations: async (trialId: string) => {
         const params = new URLSearchParams();
-        const safe = safeUUID(trialId);
-        if (safe) params.append("trial_id", safe);
-        return apiFetch(`/api/direct-messages/conversations?${params.toString()}`);
+        // const safe = safeUUID(trialId);
+        // if (safe) params.append("trial_id", safe);
+        const rows = await apiFetch<any[]>(`/api/direct-messages/conversations?${params.toString()}`);
+        return (rows ?? []).map(mapConversation) as unknown as Conversation[];
     },
 
     createConversation: (input: {
@@ -111,9 +219,10 @@ export const collabApi = {
         });
     },
 
-    getConversationMessages: (conversationId: string, _limit = 80) => {
+    getConversationMessages: async (conversationId: string, _limit = 80) => {
         if (!isValidUUID(conversationId)) return Promise.resolve([]);
-        return apiFetch(`/api/direct-messages/conversations/${conversationId}`);
+        const rows = await apiFetch<any[]>(`/api/direct-messages/conversations/${conversationId}`);
+        return (rows ?? []).map(mapDirectMessage) as unknown as CollaborationMessage[];
     },
 
     sendConversationMessage: (input: {
@@ -141,20 +250,21 @@ export const collabApi = {
 
     // ─── Threads ──────────────────────────────────────────────────────
 
-    listThreads: (trialId: string, filters?: ThreadFilters) => {
+    listThreads: async (trialId: string, filters?: ThreadFilters) => {
         const params = new URLSearchParams();
-        const safe = safeUUID(trialId);
-        if (safe) params.append("trial_id", safe);
+        // const safe = safeUUID(trialId);
+        // if (safe) params.append("trial_id", safe);
         if (filters?.category) params.append("thread_type", filters.category);
         if (filters?.status) params.append("is_resolved", String(filters.status === "resolved"));
-        return apiFetch(`/api/collaboration-threads/?${params.toString()}`);
+        const rows = await apiFetch<any[]>(`/api/collaboration-threads/?${params.toString()}`);
+        return (rows ?? []).map(mapThread);
     },
 
-    createThread: (input: CreateThreadInput & {
+    createThread: async (input: CreateThreadInput & {
         participantUserIds?: number[];
         initialMessage?: string;
-    }) =>
-        apiFetch(`/api/collaboration-threads/`, {
+    }) => {
+        const raw = await apiFetch<any>(`/api/collaboration-threads/`, {
             method: "POST",
             body: JSON.stringify({
                 trial_id: safeUUID(input.trialId),
@@ -162,27 +272,31 @@ export const collabApi = {
                 thread_type: input.category,
                 anchors: input.anchors ?? [],
             }),
-        }),
-
-    getThread: (threadId: string) => {
-        if (!isValidUUID(threadId)) return Promise.resolve(null);
-        return apiFetch(`/api/collaboration-threads/${threadId}`);
+        });
+        return mapThread(raw);
     },
 
-    addThreadMessage: (input: {
+    getThread: async (threadId: string) => {
+        if (!isValidUUID(threadId)) return Promise.resolve(null);
+        const raw = await apiFetch<any>(`/api/collaboration-threads/${threadId}`);
+        return raw ? mapThread(raw) : null;
+    },
+
+    addThreadMessage: async (input: {
         threadId: string;
         content: string;
         contentType?: string;
         embeddedContent?: Record<string, unknown>;
     }) => {
         if (!isValidUUID(input.threadId)) return Promise.resolve(null);
-        return apiFetch(`/api/collaboration-threads/${input.threadId}/messages`, {
+        const raw = await apiFetch<any>(`/api/collaboration-threads/${input.threadId}/messages`, {
             method: "POST",
             body: JSON.stringify({
                 content: input.content,
                 role: "user",
             }),
         });
+        return raw ? mapThreadMessage(raw) : null;
     },
 
     resolveThread: (threadId: string, summary?: string, _useAiSummary = false) => {
@@ -226,40 +340,51 @@ export const collabApi = {
 
     getInboxConfig: (trialId: string) => {
         const params = new URLSearchParams();
-        const safe = safeUUID(trialId);
-        if (safe) params.append("trial_id", safe);
+        // const safe = safeUUID(trialId);
+        // if (safe) params.append("trial_id", safe);
         return apiFetch(`/api/inbox/config?${params.toString()}`);
     },
 
-    listEmailChains: (input: {
+    getInboxCounts: async () => {
+        const data = await apiFetch<any>(`/api/inbox/counts`);
+        return data;
+    },
+
+    listEmailChains: async (input: {
         trialId: string;
         folder?: "inbox" | "sent" | "drafts" | "archived";
         label?: string;
         priority?: "high" | "medium" | "low";
     }) => {
         const params = new URLSearchParams();
-        const safe = safeUUID(input.trialId);
-        if (safe) params.append("trial_id", safe);
+        // don't send trial_id — messages are org-scoped, not trial-scoped
+        // const safe = safeUUID(input.trialId);
+        // if (safe) params.append("trial_id", safe);
         if (input.folder) params.append("folder", input.folder);
-        return apiFetch(`/api/inbox/?${params.toString()}`);
+        const rows = await apiFetch<any[]>(`/api/inbox/?${params.toString()}`);
+        return (rows ?? []).map(mapInboxMessage);
     },
 
-    getEmailChain: (chainId: string) => {
+    getEmailChain: async (chainId: string) => {
         if (!isValidUUID(chainId)) return Promise.resolve(null);
-        return apiFetch(`/api/inbox/${chainId}`);
+        const raw = await apiFetch<any>(`/api/inbox/${chainId}`);
+        return raw ? mapInboxMessage(raw) : null;
     },
 
-    composeEmail: (input: {
+    composeEmail: async (input: {
         trialId: string;
         to: string[];
         cc?: string[];
         subject: string;
         body: string;
-    }) =>
-        apiFetch(`/api/inbox/`, {
+    }) => {
+        console.log("composeEmail called with:", input);
+        console.log("API_URL:", API_URL);
+        const result = await apiFetch<Record<string, unknown>>(`/api/inbox/`, {
             method: "POST",
             body: JSON.stringify({
-                trial_id: safeUUID(input.trialId),
+                // remove trial_id — let BE scope to org only
+                // trial_id: safeUUID(input.trialId),
                 sender_name: "Me",
                 to_addresses: input.to,
                 cc_addresses: input.cc ?? [],
@@ -267,7 +392,10 @@ export const collabApi = {
                 body: input.body,
                 folder: "sent",
             }),
-        }),
+        });
+        console.log("composeEmail result:", result);
+        return result;
+    },
 
     replyEmail: (input: {
         chainId: string;
@@ -408,12 +536,13 @@ export const collabApi = {
         return apiFetch(`/api/collaboration-threads/${threadId}/ai-draft`, { method: "POST" });
     },
 
-    findRelatedThreads: (trialId: string, query: string) => {
+    findRelatedThreads: async (trialId: string, query: string) => {
         const params = new URLSearchParams();
-        const safe = safeUUID(trialId);
-        if (safe) params.append("trial_id", safe);
+        // const safe = safeUUID(trialId);
+        // if (safe) params.append("trial_id", safe);
         if (query) params.append("search", encodeURIComponent(query));
-        return apiFetch(`/api/collaboration-threads/?${params.toString()}`);
+        const rows = await apiFetch<any[]>(`/api/collaboration-threads/?${params.toString()}`);
+        return (rows ?? []).map(mapThread);
     },
 
     // ─── Telemetry ────────────────────────────────────────────────────

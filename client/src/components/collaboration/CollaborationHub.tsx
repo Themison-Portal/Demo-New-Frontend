@@ -358,6 +358,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     const emailMessagesMap = useCollaborationStore((store) => store.emailMessages);
     const loadEmailMessages = useCollaborationStore((store) => store.loadEmailMessages);
     const activeFolder = useCollaborationStore((store) => store.activeFolder);
+    const folderCounts = useCollaborationStore((store) => store.folderCounts);
     const setActiveFolder = useCollaborationStore((store) => store.setActiveFolder);
     const dismissAILabel = useCollaborationStore((store) => store.dismissAILabel);
     const inboxTriageSettings = useCollaborationStore((store) => store.inboxTriageSettings);
@@ -902,7 +903,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     };
 
     const sortedEmailChains = useMemo(
-        () => (dataMode === "building" ? [] : [...emailChains].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))),
+        () => [...emailChains].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)),
         [dataMode, emailChains]
     );
 
@@ -1033,10 +1034,11 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     );
 
     const inboxCounts = useMemo(() => {
-        const unread = emailChains.filter((chain) => !chain.isRead).length;
-        const sent = emailChains.filter((chain) => chain.folder === "sent").length;
-        const drafts = emailChains.filter((chain) => chain.folder === "drafts").length;
-        const inbox = emailChains.filter((chain) => chain.folder === "inbox").length;
+        const inbox = folderCounts?.inbox ?? 0;
+        const unread = folderCounts?.unread ?? 0;
+        const sent = folderCounts?.sent ?? 0;
+        const drafts = folderCounts?.draft ?? 0;
+
         return { unread, sent, drafts, inbox };
     }, [emailChains]);
 
@@ -1110,6 +1112,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
         setDetailMode("email");
         setActiveLayer("inbox");
         setActiveFolder("sent");
+        await new Promise(resolve => setTimeout(resolve, 500)); // wait for BE
         await loadEmailChains("sent");
     };
 

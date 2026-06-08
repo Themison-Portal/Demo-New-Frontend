@@ -200,6 +200,6 @@ export default defineConfig({
                 rewrite: (path) => path.replace(/^\/api\/be/, ''),
                 changeOrigin: true,
             }
-        },
+        }
     },
 });

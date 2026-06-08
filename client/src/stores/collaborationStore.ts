@@ -36,6 +36,7 @@ type CollaborationStore = {
     dataMode: DemoDataMode;
     setDataMode: (mode: DemoDataMode) => void;
     activeLayer: CollaborationLayer;
+    folderCounts: { inbox: number; unread: number; sent: number; draft: number };
     setActiveLayer: (layer: CollaborationLayer) => void;
 
     conversations: Conversation[];
@@ -45,6 +46,7 @@ type CollaborationStore = {
     setActiveConversation: (conversationId: string | null) => void;
     loadConversations: (trialId: string) => Promise<void>;
     loadMessages: (conversationId: string) => Promise<void>;
+    loadFolderCounts: () => Promise<void>;
     sendMessage: (
         conversationId: string,
         content: string,
@@ -53,7 +55,8 @@ type CollaborationStore = {
     ) => Promise<void>;
     createDirectConversationWithMember: (
         trialId: string,
-        member: { id: string; name: string; email: string }
+        member: { id: string; name: string; email: string },
+        folderCounts: { inbox: 0, unread: 0, sent: 0, draft: 0 },
     ) => Promise<Conversation | null>;
 
     threads: TrialThread[];
@@ -2686,13 +2689,13 @@ const state: CollaborationStore = {
         try {
             state.threadFilters = filters ?? state.threadFilters;
             let rows = (await collabApi.listThreads(trialId, state.threadFilters)) as TrialThread[];
-            if (!rows.length) {
+            if (!rows.length && state.dataMode !== "building") {
                 rows = loadOrInitThreadDataset(trialId).threads;
             }
             state.threads = rows;
             state.error = null;
         } catch (error) {
-            if (isLikelyDemoConversationError(error)) {
+            if (isLikelyDemoConversationError(error) && state.dataMode !== "building") {
                 state.threads = loadOrInitThreadDataset(trialId).threads;
                 state.error = null;
             } else {
@@ -2927,7 +2930,21 @@ const state: CollaborationStore = {
             emit();
         }
     },
+    async loadFolderCounts() {
+        if (!state.inboxConfig) return;
+        try {
+            const counts = await collabApi.getInboxCounts() as any;
+            state.folderCounts = {
+                inbox: counts.inbox ?? 0,
+                unread: counts.unread ?? 0,
+                sent: counts.sent ?? 0,
+                draft: counts.draft ?? 0,
+            };
+            emit();
+        } catch { /* noop */ }
+    },
     async loadEmailChains(folder) {
+        console.log("loadEmailChains called, folder:", folder, "dataMode:", state.dataMode, "inboxConfig:", state.inboxConfig);
         const selected = folder ?? state.activeFolder;
         state.activeFolder = selected;
         // if (state.dataMode === "building") {
@@ -2947,13 +2964,16 @@ const state: CollaborationStore = {
                     ? folderFilter
                     : undefined,
             })) as EmailChain[];
+            console.log("loadEmailChains rows from BE:", rows.length, rows);
 
-            if (rows.length === 0) {
+            // only fall back to demo data in sample/full mode
+            if (rows.length === 0 && state.dataMode !== "building") {
                 const demo = loadOrInitDemoDataset(state.inboxConfig.trialId, state.inboxConfig.emailAddress);
                 rows = getChainsForFolder(demo.chains, selected);
             }
 
             state.emailChains = selected === "unread" ? rows.filter((row) => !row.isRead) : rows;
+            console.log("state.emailChains set to:", state.emailChains.length);
             state.error = null;
             emit();
         } catch (error) {
@@ -3068,6 +3088,7 @@ const state: CollaborationStore = {
                     state.loadConversations(subscribedTrialId),
                     state.loadThreads(subscribedTrialId, state.threadFilters),
                     state.loadInbox(subscribedTrialId),
+                    state.loadFolderCounts(),
                 ]);
 
                 await state.loadEmailChains(state.activeFolder);
@@ -3082,7 +3103,7 @@ const state: CollaborationStore = {
             }
         };
 
-        pollTimer = window.setInterval(tick, 3500);
+        pollTimer = window.setInterval(tick, 15000);
         void tick();
     },
     unsubscribe() {
