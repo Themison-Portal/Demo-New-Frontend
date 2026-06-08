@@ -1102,6 +1102,8 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     };
 
     const sendComposedEmail = async (input: { to: string[]; cc: string[]; subject: string; body: string }) => {
+        console.log("inboxConfig:", inboxConfig);
+        console.log("input:", input);
         if (!inboxConfig) return;
         await collabApi.composeEmail({ trialId: inboxConfig.trialId, ...input });
         setShowCompose(false);

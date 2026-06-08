@@ -12,7 +12,9 @@ import type { CreateThreadInput, DraftResult, ThreadFilters } from "@/types/coll
 // Config
 // ─────────────────────────────────────────
 
-const API_URL = import.meta.env.VITE_API_URL ?? "";
+const API_URL = import.meta.env.DEV
+    ? "/api/be"
+    : (import.meta.env.VITE_API_URL ?? "");
 
 // ─────────────────────────────────────────
 // UUID helpers
@@ -47,7 +49,10 @@ async function apiFetch<T>(
     path: string,
     options: RequestInit = {}
 ): Promise<T> {
-    const token = await getAuthToken();
+    // Skip auth token fetch for local dev (AUTH_DISABLED=true on BE)
+    // When AUTH_DISABLED=false, uncomment getAuthToken() below
+    // const token = await getAuthToken();
+    const token = null;
 
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -223,7 +228,7 @@ export const collabApi = {
         const params = new URLSearchParams();
         const safe = safeUUID(trialId);
         if (safe) params.append("trial_id", safe);
-        return apiFetch(`/api/inbox/counts?${params.toString()}`);
+        return apiFetch(`/api/inbox/config?${params.toString()}`);
     },
 
     listEmailChains: (input: {

@@ -2909,6 +2909,7 @@ const state: CollaborationStore = {
         try {
             state.inboxConfig = (await collabApi.getInboxConfig(trialId)) as TrialInbox;
         } catch (error) {
+            console.error("loadInbox error:", error);
             if (isLikelyDemoInboxError(error)) {
                 state.inboxConfig = {
                     id: `demo-inbox-${trialId}`,
