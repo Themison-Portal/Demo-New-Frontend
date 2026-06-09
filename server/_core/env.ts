@@ -59,7 +59,7 @@ export const ENV = {
     forgeApiUrl: process.env.BUILT_IN_FORGE_API_URL ?? "",
     forgeApiKey: process.env.BUILT_IN_FORGE_API_KEY ?? "",
     geminiApiKey: process.env.GEMINI_API_KEY ?? "",
-    fastapiBackendUrl: process.env.FASTAPI_BACKEND_URL ?? "http://localhost:8080",
+    apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080",
     openaiApiKey,
     openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
     forceOpenAIDirect: /^(1|true|yes)$/i.test(process.env.FORCE_OPENAI_DIRECT ?? ""),

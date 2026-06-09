@@ -13,7 +13,7 @@ export async function callBackend<T = any>(
   options: RequestOptions = {}
 ): Promise<T> {
   const method = options.method ?? "GET";
-  const baseUrl = ENV.fastapiBackendUrl.replace(/\/$/, "");
+  const baseUrl = ENV.apiUrl.replace(/\/$/, "");
   const cleanPath = path.replace(/^\//, "");
   
   // Format query parameters
