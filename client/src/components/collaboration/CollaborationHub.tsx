@@ -16,6 +16,7 @@ import {
     Settings2,
     Users2,
 } from "lucide-react";
+import { DemoControlsPanel } from "@/components/collaboration/DemoControlsPanel";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { collabApi } from "@/lib/apiClient";
@@ -488,7 +489,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     }, [activeEmailChainId, loadEmailMessages]);
 
     useEffect(() => {
-        if (dataMode === "building") return;
+        // if (dataMode === "building") return;
         if (detailMode === "conversation" && !activeConversationId && activeThreadId && !isNewConversationDraft) {
             setDetailMode("thread");
             return;
@@ -508,7 +509,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     );
 
     const activeThread = useMemo<TrialThread | null>(
-        () => (dataMode === "building" ? null : threads.find((thread) => thread.id === activeThreadId) || null),
+        () => threads.find((thread) => thread.id === activeThreadId) || null,
         [activeThreadId, dataMode, threads]
     );
     const activeThreadTrialId = activeThread?.trialId || selectedThreadTrialId || trialId;
@@ -652,9 +653,9 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
 
     const visibleConversations = useMemo(() => {
         return conversations.filter((conversation) => {
-            if (dataMode === "building" && !isLocalConversationId(conversation.id)) {
-                return false;
-            }
+            // if (dataMode === "building" && !isLocalConversationId(conversation.id)) {
+            //     return false;
+            // }
             if (conversation.type !== "direct") return true;
             const otherParticipant = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
             if (!otherParticipant) return false;
@@ -784,7 +785,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
         const targetEmail = normalizeLookupKey(targetMember.email);
         const targetName = normalizeLookupKey(targetMember.name);
         const existingConversation = conversations.find((conversation) => {
-            if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
+            // if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
             if (conversation.type !== "direct") return false;
             const other = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
             if (!other) return false;
@@ -867,7 +868,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
             const selectedEmail = normalizeLookupKey(selectedNewConversationMember.email);
             const selectedName = normalizeLookupKey(selectedNewConversationMember.name);
             const existing = conversations.find((conversation) => {
-                if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
+                // if (dataMode === "building" && !isLocalConversationId(conversation.id)) return false;
                 if (conversation.type !== "direct") return false;
                 const other = getOtherConversationParticipant(conversation, currentUserId, runtimeUser);
                 if (!other) return false;
@@ -908,7 +909,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     );
 
     const sortedThreads = useMemo(
-        () => (dataMode === "building" ? [] : [...threads].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))),
+        () => [...threads].sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt)),
         [dataMode, threads]
     );
 
@@ -1851,6 +1852,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                 editingMemberId={memberPanelMemberId}
                 initialValues={memberPanelValues}
             />
+            <DemoControlsPanel onEmailSimulated={() => loadEmailChains("inbox")} />
         </div>
     );
 }

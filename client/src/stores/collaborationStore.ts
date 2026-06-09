@@ -2689,6 +2689,7 @@ const state: CollaborationStore = {
         try {
             state.threadFilters = filters ?? state.threadFilters;
             let rows = (await collabApi.listThreads(trialId, state.threadFilters)) as TrialThread[];
+            console.log("loadThreads rows:", rows.length, rows);
             if (!rows.length && state.dataMode !== "building") {
                 rows = loadOrInitThreadDataset(trialId).threads;
             }
@@ -2707,12 +2708,12 @@ const state: CollaborationStore = {
         }
     },
     async loadThreadMessages(threadId) {
-        if (state.dataMode === "building") {
-            state.threadMessages[threadId] = [];
-            state.error = null;
-            emit();
-            return;
-        }
+        // if (state.dataMode === "building") {
+        //     state.threadMessages[threadId] = [];
+        //     state.error = null;
+        //     emit();
+        //     return;
+        // }
         if (state.dataMode === "sample") {
             const trialId = state.threads.find((thread) => thread.id === threadId)?.trialId || subscribedTrialId;
             if (trialId) {
