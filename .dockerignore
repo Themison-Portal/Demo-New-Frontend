@@ -1,0 +1,67 @@
+# Keep the docker build context small and fast.
+# Mirror .gitignore where it makes sense; add Docker-specific exclusions.
+
+# Dependencies (re-installed inside the image)
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build outputs (regenerated inside the image)
+dist
+build
+*.dist
+client/dist
+
+# Local env files — secrets stay outside the image
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs and runtime state
+.manus-logs
+*.log
+runs.json
+.cache
+
+# Editor / IDE
+.vscode
+.idea
+.claude
+.codex
+.manus
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# VCS
+.git
+.gitignore
+.gitkeep
+
+# Docs / large reference assets we don't need at runtime
+*.docx
+*.png
+*.jpg
+*.jpeg
+*.html
+*.zip
+*.sql
+*.tgz
+docs/_build
+site
+
+# Existing Docker artifacts (don't recursively pull a previous build)
+Dockerfile.dev
+docker-compose.yml
+
+# Backup folders that ship demo content
+backup-next-root
+reference
+vision-ui-dashboard-pro-react-main
+Loader_10
+themison-prototype.zip

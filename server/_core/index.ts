@@ -5,7 +5,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
-import { serveStatic, setupVite } from "./vite";
+import { serveStatic } from "./serveStatic";
 import {
   getLocalStorageRoot,
   getLocalStorageRoute,
@@ -57,9 +57,15 @@ async function startServer() {
       createContext,
     })
   );
-  // development mode uses Vite, production mode uses static files
+  // development mode uses Vite (HMR + middleware), production mode serves
+  // the prebuilt static client bundle. The vite import path is a runtime
+  // variable so esbuild (which we use to bundle the prod server) does NOT
+  // statically resolve it — vite.ts and vite.config.ts stay out of the
+  // production bundle, and the prod runtime never needs the vite package.
   if (process.env.NODE_ENV === "development") {
-    await setupVite(app, server);
+    const devModulePath = "./vite";
+    const devModule = await import(/* @vite-ignore */ devModulePath);
+    await devModule.setupVite(app, server);
   } else {
     serveStatic(app);
   }
