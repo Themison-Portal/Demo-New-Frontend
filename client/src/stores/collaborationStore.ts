@@ -55,8 +55,7 @@ type CollaborationStore = {
     ) => Promise<void>;
     createDirectConversationWithMember: (
         trialId: string,
-        member: { id: string; name: string; email: string },
-        folderCounts: { inbox: 0, unread: 0, sent: 0, draft: 0 },
+        member: { id: string; name: string; email: string }
     ) => Promise<Conversation | null>;
 
     threads: TrialThread[];
@@ -2362,6 +2361,7 @@ function emit() {
 
 const state: CollaborationStore = {
     dataMode: "sample",
+    folderCounts: { inbox: 0, unread: 0, sent: 0, draft: 0 },
     setDataMode(mode) {
         state.dataMode = mode;
         if (mode === "building") {
@@ -2888,7 +2888,7 @@ const state: CollaborationStore = {
             return `Resolved by aligning ${thread.title.toLowerCase()} with protocol requirements, assigning owners, and confirming site-level follow-up.`;
         }
         try {
-            const result = await collabApi.suggestResolution(threadId);
+            const result = (await collabApi.suggestResolution(threadId)) as any;
             return String(result.summary || "");
         } catch (error) {
             state.error = error instanceof Error ? error.message : "Failed to generate AI summary";
@@ -3085,7 +3085,7 @@ const state: CollaborationStore = {
 
     async spawnThreadFromMessage(messageId, threadData) {
         try {
-            const created = await collabApi.startThreadFromMessage(messageId, threadData.title, threadData.category);
+            const created = (await collabApi.startThreadFromMessage(messageId, threadData.title, threadData.category)) as any;
             await state.loadThreads(threadData.trialId, state.threadFilters);
             if (!created?.threadId) return null;
             return (await collabApi.getThread(created.threadId)) as TrialThread | null;
@@ -3106,7 +3106,7 @@ const state: CollaborationStore = {
     },
     async createThreadFromEmail(emailChainId, threadData) {
         try {
-            const created = await collabApi.createThreadFromEmail(emailChainId, threadData.title, threadData.category);
+            const created = (await collabApi.createThreadFromEmail(emailChainId, threadData.title, threadData.category)) as any;
             await Promise.all([
                 state.loadThreads(threadData.trialId, state.threadFilters),
                 state.loadEmailChains(state.activeFolder),

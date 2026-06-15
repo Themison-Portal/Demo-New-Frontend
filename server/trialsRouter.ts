@@ -2,6 +2,8 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
+import { trialsRouterLocal } from "./trialsRouter.local";
+import { isConnectionError } from "./_core/fallbackHelper";
 
 // BE accepts only: planning | active | completed | paused | cancelled
 // (trials_status_check). Map FE UI statuses to the nearest BE value.
@@ -51,13 +53,21 @@ function mapBackendTrialToClient(backendTrial: any) {
   };
 }
 
+function normalizeDemoMode(mode: any): "sample" | "full" | "building" | undefined {
+  if (mode === "sample" || mode === "full" || mode === "building") {
+    return mode;
+  }
+  return undefined;
+}
+
 export const trialsRouter = router({
   getById: publicProcedure
     .input(z.object({
       id: z.string(),
       demoMode: z.any().optional(),
     }))
-    .query(async ({ input, ctx }) => {
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
         const t = await callBackend<any>(`/api/trials/${input.id}`, { user: ctx.user });
         if (!t) return null;
@@ -78,6 +88,14 @@ export const trialsRouter = router({
           enrolledPatients: enrolledCount,
         };
       } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for getById.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.getById({
+            id: input.id,
+            demoMode: normalizeDemoMode(input.demoMode),
+          });
+        }
         console.error(`Error getting trial ${input.id}:`, err);
         return null;
       }
@@ -91,7 +109,8 @@ export const trialsRouter = router({
       pageContext: z.string().optional(),
       emitTelemetry: z.boolean().optional(),
     }))
-    .query(async ({ input, ctx }) => {
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
         const t = await callBackend<any>(`/api/trials/${input.id}`, { user: ctx.user });
         if (!t) return null;
@@ -118,6 +137,17 @@ export const trialsRouter = router({
           insights: [],
         };
       } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for getContext.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.getContext({
+            id: input.id,
+            demoMode: normalizeDemoMode(input.demoMode),
+            include: Array.isArray(input.include) ? input.include : undefined,
+            pageContext: input.pageContext,
+            emitTelemetry: input.emitTelemetry,
+          });
+        }
         console.error("Error in getContext proxy:", err);
         return null;
       }
@@ -127,7 +157,8 @@ export const trialsRouter = router({
     .input(z.object({
       demoMode: z.any().optional(),
     }).optional())
-    .query(async ({ ctx }) => {
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
         const trials = await callBackend<any[]>(`/api/trials`, { user: ctx.user });
         
@@ -151,6 +182,13 @@ export const trialsRouter = router({
         
         return enriched;
       } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for list.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.list({
+            demoMode: normalizeDemoMode(input?.demoMode),
+          });
+        }
         console.error("Error listing trials:", err);
         return [];
       }
@@ -186,7 +224,8 @@ export const trialsRouter = router({
       completionPercentage: z.number().optional(),
       demoMode: z.any().optional(),
     }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       const body = {
         name: input.title,
         sponsor: input.sponsor || "",
@@ -210,6 +249,15 @@ export const trialsRouter = router({
         });
         return mapBackendTrialToClient(created);
       } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for create.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.create({
+            ...input,
+            id: input.id || `trial-${Math.random().toString(36).substring(7)}`,
+            demoMode: normalizeDemoMode(input.demoMode) ?? "sample",
+          } as any);
+        }
         console.error("Error creating trial:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -248,7 +296,8 @@ export const trialsRouter = router({
       completionPercentage: z.number().optional(),
       demoMode: z.any().optional(),
     }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       const body: any = {};
       if (input.title !== undefined) body.name = input.title;
       if (input.sponsor !== undefined) body.sponsor = input.sponsor;
@@ -269,6 +318,14 @@ export const trialsRouter = router({
         });
         return mapBackendTrialToClient(updated);
       } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for update.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.update({
+            ...input,
+            demoMode: normalizeDemoMode(input.demoMode),
+          } as any);
+        }
         console.error("Error updating trial:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -282,7 +339,28 @@ export const trialsRouter = router({
       id: z.string(),
       demoMode: z.any().optional(),
     }))
-    .mutation(async () => {
-      return { success: true };
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
+      // In proxy mode, delete was a mock success, but in fallback mode we should invoke local delete
+      // so it cascades cleanly in MySQL.
+      try {
+        // Try calling delete on backend if it supports it
+        await callBackend(`/api/trials/${input.id}`, {
+          method: "DELETE",
+          user: ctx.user,
+        });
+        return { success: true };
+      } catch (err) {
+        if (isConnectionError(err)) {
+          console.warn("[trialsRouter] Backend offline. Falling back to local database for delete.");
+          const caller = trialsRouterLocal.createCaller(ctx);
+          return caller.delete({
+            id: input.id,
+            demoMode: normalizeDemoMode(input.demoMode) ?? "sample",
+          });
+        }
+        // If it was another error, just return mock success like the original proxy did
+        return { success: true };
+      }
     }),
 });
