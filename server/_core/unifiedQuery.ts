@@ -25,7 +25,8 @@ import {
   getStructuredScheduleOfActivities,
   type ProtocolContextChunk,
 } from "./protocolContext";
-import { extractPdfPages } from "../pdfExtractor";
+import { extractPdfPages, extractPdfPagesFromBuffer } from "../pdfExtractor";
+import { storageReadBytes } from "../storage";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
@@ -4421,9 +4422,12 @@ export async function runUnifiedQueryDiagnostics(params: {
 
   const primaryProtocol = protocolRows[0];
   let parserPages: Array<{ pageNumber: number; textSnippet: string }> = [];
-  if (primaryProtocol?.fileUrl) {
+  if (primaryProtocol?.fileKey) {
     try {
-      const pages = await extractPdfPages(primaryProtocol.fileUrl);
+      // Read bytes by key (authenticated/disk) rather than fetching the
+      // raw fileUrl, which fails on cloud (Render) with "fetch failed".
+      const pdfBuffer = await storageReadBytes(primaryProtocol.fileKey);
+      const pages = await extractPdfPagesFromBuffer(pdfBuffer);
       const preferred = new Set<number>();
       for (const chunk of docResult.chunks.slice(0, 24)) {
         if (chunk.pageStart) preferred.add(chunk.pageStart);
