@@ -117,7 +117,20 @@ function mapConversation(raw: any) {
         createdBy: null,
         createdAt: raw.last_message_at ?? new Date().toISOString(),
         updatedAt: raw.last_message_at ?? new Date().toISOString(),
-        participants: [],
+        participants: raw.partner_id ? [
+            {
+                id: `participant-${raw.partner_id}`,
+                conversationId: raw.partner_id,
+                userId: raw.partner_id,
+                joinedAt: raw.last_message_at ?? new Date().toISOString(),
+                lastReadAt: null,
+                user: {
+                    id: raw.partner_id,
+                    name: raw.partner_name ?? null,
+                    email: null,
+                },
+            }
+        ] : [],
         lastMessage: raw.last_message ? {
             id: null,
             content: raw.last_message,
@@ -195,10 +208,11 @@ export const collabApi = {
 
     listConversations: async (trialId: string) => {
         const params = new URLSearchParams();
-        // const safe = safeUUID(trialId);
-        // if (safe) params.append("trial_id", safe);
         const rows = await apiFetch<any[]>(`/api/direct-messages/conversations?${params.toString()}`);
-        return (rows ?? []).map(mapConversation) as unknown as Conversation[];
+        console.log("listConversations raw:", rows);
+        const mapped = (rows ?? []).map(mapConversation);
+        console.log("listConversations mapped:", mapped);
+        return mapped as unknown as Conversation[];
     },
 
     createConversation: (input: {

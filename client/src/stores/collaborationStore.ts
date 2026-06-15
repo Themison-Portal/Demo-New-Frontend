@@ -160,6 +160,23 @@ function readCurrentConversationDatasetMode(): DemoDataMode {
     return readActiveDemoModeFromStorage();
 }
 
+// Demo team profile IDs — match DB seed data
+const DEMO_PROFILE_MAP: Record<string, string> = {
+    "ava patel": "11111111-1111-1111-1111-111111111111",
+    "liam chen": "22222222-2222-2222-2222-222222222222",
+    "jordan de boer": "33333333-3333-3333-3333-333333333333",
+    "daniel van dijk": "44444444-4444-4444-4444-444444444444",
+    "isabelle laurent": "55555555-5555-5555-5555-555555555555",
+    "noah brooks": "66666666-6666-6666-6666-666666666666",
+    "maya rodriguez": "77777777-7777-7777-7777-777777777777",
+    "olivia hart": "88888888-8888-8888-8888-888888888888",
+    "sofia alvarez": "99999999-9999-9999-9999-999999999999",
+};
+
+function getDemoProfileId(name: string): string | null {
+    return DEMO_PROFILE_MAP[name.toLowerCase().trim()] ?? null;
+}
+
 type DemoTeamMemberSeed = {
     id: string;
     name: string;
@@ -2421,14 +2438,19 @@ const state: CollaborationStore = {
             const localOnlyRows = loadOrInitConversationDataset(trialId, state.dataMode).conversations.filter((conversation) =>
                 isLocalConversationId(String(conversation.id || ""))
             );
-            if (localOnlyRows.length) {
-                const byId = new Map(rows.map((conversation) => [conversation.id, conversation] as const));
-                localOnlyRows.forEach((conversation) => {
-                    if (!byId.has(conversation.id)) {
-                        byId.set(conversation.id, conversation);
-                    }
-                });
-                rows = Array.from(byId.values()).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+            if (state.dataMode !== "building") {
+                const localOnlyRows = loadOrInitConversationDataset(trialId, state.dataMode).conversations.filter((conversation) =>
+                    isLocalConversationId(String(conversation.id || ""))
+                );
+                if (localOnlyRows.length) {
+                    const byId = new Map(rows.map((conversation) => [conversation.id, conversation] as const));
+                    localOnlyRows.forEach((conversation) => {
+                        if (!byId.has(conversation.id)) {
+                            byId.set(conversation.id, conversation);
+                        }
+                    });
+                    rows = Array.from(byId.values()).sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt));
+                }
             }
             state.conversations = rows;
             if (
@@ -2451,20 +2473,20 @@ const state: CollaborationStore = {
         }
     },
     async loadMessages(conversationId) {
-        if (state.dataMode === "building") {
-            const localConversation = state.conversations.find(
-                (conversation) => conversation.id === conversationId && isLocalConversationId(conversation.id)
-            );
-            if (localConversation) {
-                const dataset = loadOrInitConversationDataset(localConversation.trialId, state.dataMode);
-                state.messages[conversationId] = dataset.messagesByConversation[conversationId] || [];
-            } else {
-                state.messages[conversationId] = [];
-            }
-            state.error = null;
-            emit();
-            return;
-        }
+        // if (state.dataMode === "building") {
+        //     const localConversation = state.conversations.find(
+        //         (conversation) => conversation.id === conversationId && isLocalConversationId(conversation.id)
+        //     );
+        //     if (localConversation) {
+        //         const dataset = loadOrInitConversationDataset(localConversation.trialId, state.dataMode);
+        //         state.messages[conversationId] = dataset.messagesByConversation[conversationId] || [];
+        //     } else {
+        //         state.messages[conversationId] = [];
+        //     }
+        //     state.error = null;
+        //     emit();
+        //     return;
+        // }
         if (state.dataMode === "sample" || state.dataMode === "full") {
             const trialId =
                 state.conversations.find((conversation) => conversation.id === conversationId)?.trialId ||
@@ -2518,6 +2540,7 @@ const state: CollaborationStore = {
         }
     },
     async sendMessage(conversationId, content, embeddedContent, contentType = "text") {
+        console.log("sendMessage called:", conversationId, "dataMode:", state.dataMode);
         if (!content.trim()) return;
         const runtimeUser = getRuntimeUserIdentity();
         const selfId = runtimeUser.id;
@@ -2606,9 +2629,13 @@ const state: CollaborationStore = {
                 embeddedContent,
             });
             await state.loadMessages(conversationId);
+            state.activeConversationId = conversationId;
+            emit();
             if (subscribedTrialId) {
                 await state.loadConversations(subscribedTrialId);
             }
+            state.activeConversationId = conversationId;
+            emit();
         } catch (error) {
             const trialId =
                 state.conversations.find((conversation) => conversation.id === conversationId)?.trialId ||
@@ -2634,6 +2661,24 @@ const state: CollaborationStore = {
         }
     },
     async createDirectConversationWithMember(trialId, member) {
+        // check if this member has a real profile ID
+        const realProfileId = getDemoProfileId(member.name);
+
+        if (realProfileId && state.dataMode === "building") {
+            try {
+                // create conversation by sending initial empty-ish message
+                await collabApi.sendConversationMessage({
+                    conversationId: realProfileId,
+                    content: "👋",
+                });
+                await state.loadConversations(trialId);
+                return state.conversations.find(c => c.id === realProfileId) || null;
+            } catch {
+                // fall through to demo
+            }
+        }
+
+        // fallback to local demo conversation
         try {
             const created = createOrGetLocalDirectConversation(trialId, member, state.dataMode);
             await state.loadConversations(trialId);

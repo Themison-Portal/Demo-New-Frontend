@@ -370,7 +370,8 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     const linkEmailToThread = useCollaborationStore((store) => store.linkEmailToThread);
 
     const [showCompose, setShowCompose] = useState(false);
-    const [detailMode, setDetailMode] = useState<DetailMode>("email");
+    // const [detailMode, setDetailMode] = useState<DetailMode>("email");
+    const [detailMode, setDetailMode] = useState<DetailMode>("conversation");
     const [dmSearch, setDmSearch] = useState("");
     const [triageSettingsOpen, setTriageSettingsOpen] = useState(false);
     const [isNewConversationDraft, setIsNewConversationDraft] = useState(false);
@@ -489,7 +490,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
     }, [activeEmailChainId, loadEmailMessages]);
 
     useEffect(() => {
-        // if (dataMode === "building") return;
+        if (dataMode === "building") return;
         if (detailMode === "conversation" && !activeConversationId && activeThreadId && !isNewConversationDraft) {
             setDetailMode("thread");
             return;
