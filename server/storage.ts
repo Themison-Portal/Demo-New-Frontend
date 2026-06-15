@@ -75,10 +75,11 @@ async function buildDownloadUrl(
     ensureTrailingSlash(baseUrl)
   );
   downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "GET",
-    headers: buildAuthHeaders(apiKey),
-  });
+  const response = await fetchOrThrow(
+    downloadApiUrl,
+    { method: "GET", headers: buildAuthHeaders(apiKey) },
+    "storage downloadUrl"
+  );
   return (await response.json()).url;
 }
 
@@ -106,6 +107,25 @@ function toFormData(
 
 function buildAuthHeaders(apiKey: string): HeadersInit {
   return { Authorization: `Bearer ${apiKey}` };
+}
+
+/**
+ * fetch() that rethrows network-level failures (DNS, connection refused,
+ * unreachable host) with the target URL attached. A bare "fetch failed"
+ * with no context makes a misconfigured BUILT_IN_FORGE_API_URL hard to
+ * diagnose; this names the host instead.
+ */
+async function fetchOrThrow(
+  url: string | URL,
+  init: RequestInit | undefined,
+  label: string
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: could not reach ${String(url)} (${message})`);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -151,11 +171,11 @@ export async function storagePut(
   const key = normalizeKey(relKey);
   const uploadUrl = buildUploadUrl(baseUrl, key);
   const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const response = await fetchOrThrow(
+    uploadUrl,
+    { method: "POST", headers: buildAuthHeaders(apiKey), body: formData },
+    "storage upload"
+  );
 
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
@@ -196,7 +216,7 @@ export async function storageReadBytes(relKey: string): Promise<Buffer> {
   }
   const { baseUrl, apiKey } = getStorageConfig();
   const downloadUrl = await buildDownloadUrl(baseUrl, key, apiKey);
-  const response = await fetch(downloadUrl);
+  const response = await fetchOrThrow(downloadUrl, undefined, "storage download");
   if (!response.ok) {
     throw new Error(
       `storageReadBytes: failed to fetch ${key} (${response.status} ${response.statusText})`

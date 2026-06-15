@@ -53,7 +53,19 @@ export async function callBackend<T = any>(
     fetchOptions.body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(url, fetchOptions);
+  let response: Response;
+  try {
+    response = await fetch(url, fetchOptions);
+  } catch (error) {
+    // A network-level failure (DNS, connection refused, unreachable host)
+    // throws a bare "fetch failed" with no URL. Surface the target so a
+    // misconfigured backend URL is obvious instead of cryptic.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not reach core-backend at ${url} (${message}). ` +
+        `Check NEXT_PUBLIC_API_URL points at a reachable backend.`
+    );
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
