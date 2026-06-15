@@ -511,17 +511,22 @@ export const documentsRouter = router({
       // Resolve — and for demo/building trials, lazily provision — the
       // core-backend trial id this upload should attach to:
       // - An explicit mapping (`coreBackendTrialId`) always wins.
-      // - Real trials aren't in FE MySQL (`trialMeta` undefined); their
-      //   `resolvedTrialId` already IS the core-backend trial UUID.
-      // - Demo/building trials live in FE MySQL with no BE counterpart — register
-      //   one with the core-backend now and persist the mapping so this and
-      //   later uploads route to the BE (durable storage + RAG-grounded chat).
+      // - Real trials aren't in FE MySQL (`trialMeta` undefined) and are NOT
+      //   demo mode; their `resolvedTrialId` already IS the core-backend UUID.
+      // - Everything else (sample/full/building) registers a core-backend trial
+      //   now. Wizard "building" trials are ephemeral and have no FE `trials`
+      //   row (`trialMeta` undefined), so we fall back to a filename-derived
+      //   name. `ensureCoreBackendTrialId` persists the mapping when an FE row
+      //   exists (a no-op update otherwise).
       let beTrialId: string | null = trialMeta?.coreBackendTrialId ?? null;
       if (!beTrialId && canUseBackend) {
         if (!trialMeta && mode !== "building") {
           beTrialId = resolvedTrialId;
-        } else if (trialMeta) {
-          beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, trialMeta, ctx.user);
+        } else {
+          const meta = trialMeta ?? {
+            title: input.filename.replace(/\.[^./\\]+$/, "") || input.filename,
+          };
+          beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, meta, ctx.user);
         }
       }
       const useCoreBackend = canUseBackend && !!beTrialId;
