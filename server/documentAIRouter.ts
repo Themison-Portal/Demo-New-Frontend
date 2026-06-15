@@ -615,6 +615,24 @@ ${conversationHistory}`;
         }
       }
 
+      // When the BE/RAG integration is configured but none of the selected
+      // documents are registered with the core-backend (no coreBackendDocumentId),
+      // the only remaining path is the decommissioned FE-local RAG (no OpenAI
+      // key in the cloud deploy), which abstains with a cryptic embeddings
+      // error. Return an actionable message instead of falling into that dead
+      // path so the user knows to re-upload and wait for indexing.
+      if (
+        ENV.coreBackendApiUrl &&
+        selectedProtocols.length > 0 &&
+        coreBackendDocs.length === 0
+      ) {
+        return {
+          message:
+            "These documents aren't indexed in the AI knowledge base yet, so I can't answer from them. Please re-upload the document(s); once indexing finishes you'll be able to ask questions about them.",
+          sources: [],
+        };
+      }
+
       if (selectedProtocols.length === 0) {
         return {
           message: "The selected documents have not been processed yet. Please wait for processing to complete.",

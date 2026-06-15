@@ -557,107 +557,128 @@ export const documentsRouter = router({
           ? "protocol"
           : input.category.toLowerCase();
 
-        (async () => {
-          const client = getCoreBackendClient();
-          try {
-            const created = await client.uploadTrialDocumentMultipart(
-              {
-                file: buffer,
-                filename: input.filename,
-                trial_id: beTrialId!,
-                document_name: documentName,
-                document_type: docCategory,
-              },
-              authToken
-            );
+        // Await the BE forward (multipart upload + ingestion trigger) so the
+        // protocol row gets its coreBackendDocumentId BEFORE the client's first
+        // doc-list poll, and so a registration failure is surfaced to the caller
+        // instead of being silently swallowed. A swallowed failure would leave
+        // the document on the decommissioned FE-local RAG path, where Q&A fails
+        // later with a cryptic embeddings error. RAG ingestion itself stays
+        // async on the BE (tracked by job_id; polled via coreBackendIngestStatus).
+        const client = getCoreBackendClient();
+        try {
+          const created = await client.uploadTrialDocumentMultipart(
+            {
+              file: buffer,
+              filename: input.filename,
+              trial_id: beTrialId!,
+              document_name: documentName,
+              document_type: docCategory,
+            },
+            authToken
+          );
 
-            const job = await client.uploadPdf({
-              document_url: created.document_url,
-              document_id: created.id,
-              chunk_size: 750,
-            });
+          const job = await client.uploadPdf({
+            document_url: created.document_url,
+            document_id: created.id,
+            chunk_size: 750,
+          });
 
-            // Point the FE record's openable URL at the BE's durable document
-            // URL so "Open document" resolves to the backend instead of the
-            // local-storage (localhost) URL written by storagePut above. For
-            // local BE storage this is a full /local-files URL; a GCS blob path
-            // (no scheme) is left as-is and resolved on demand later.
-            const beFileUrl =
-              typeof created.document_url === "string" &&
-              /^https?:\/\//.test(created.document_url)
-                ? created.document_url
-                : null;
+          // Point the FE record's openable URL at the BE's durable document
+          // URL so "Open document" resolves to the backend instead of the
+          // local-storage (localhost) URL written by storagePut above. For
+          // local BE storage this is a full /local-files URL; a GCS blob path
+          // (no scheme) is left as-is and resolved on demand later.
+          const beFileUrl =
+            typeof created.document_url === "string" &&
+            /^https?:\/\//.test(created.document_url)
+              ? created.document_url
+              : null;
 
-            await db
-              .update(protocols)
-              .set({
-                coreBackendDocumentId: created.id,
-                coreBackendJobId: job.job_id,
-                coreBackendIngestStatus: job.status ?? "queued",
-                ...(beFileUrl ? { fileUrl: beFileUrl } : {}),
-              })
-              .where(eq(protocols.id, protocolId));
+          await db
+            .update(protocols)
+            .set({
+              coreBackendDocumentId: created.id,
+              coreBackendJobId: job.job_id,
+              coreBackendIngestStatus: job.status ?? "queued",
+              ...(beFileUrl ? { fileUrl: beFileUrl } : {}),
+            })
+            .where(eq(protocols.id, protocolId));
 
-            console.log(
-              `[documents.upload] core-backend ingest started: doc=${created.id} job=${job.job_id} url=${beFileUrl ?? created.document_url}`
-            );
+          console.log(
+            `[documents.upload] core-backend ingest started: doc=${created.id} job=${job.job_id} url=${beFileUrl ?? created.document_url}`
+          );
 
-            // The core-backend now durably stores this document and the FE
-            // record points at the BE URL (beFileUrl), so drop the transient
-            // FE-local copy — the FE is no longer the store of record. Only
-            // delete when the BE URL is directly openable; if it's a GCS blob
-            // path (beFileUrl null) the FE copy is still referenced, so keep it.
-            if (beFileUrl) {
-              await storageDelete(fileKey);
-            }
-
-            await logTelemetryEvent({
-              eventType: "document_context_index_started",
-              action: "started",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                coreBackendDocumentId: created.id,
-                coreBackendJobId: job.job_id,
-                source: "core-backend",
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
-          } catch (error) {
-            const reason =
-              error instanceof CoreBackendError
-                ? `${error.path} ${error.status}: ${error.message}`
-                : error instanceof Error
-                  ? error.message
-                  : String(error);
-            console.error(
-              `❌ core-backend upload failed for ${input.filename}: ${reason}`
-            );
-            await db
-              .update(protocols)
-              .set({ coreBackendIngestStatus: "failed" })
-              .where(eq(protocols.id, protocolId));
-            await logTelemetryEvent({
-              eventType: "document_context_index_failed",
-              action: "failed",
-              userId: String(ctx.user.id),
-              entityType: "protocol",
-              entityId: String(protocolId),
-              payload: {
-                trialId: resolvedTrialId,
-                filename: input.filename,
-                reason,
-                source: "core-backend",
-                demoMode: mode,
-              },
-              aiInvolved: true,
-            });
+          // The core-backend now durably stores this document and the FE
+          // record points at the BE URL (beFileUrl), so drop the transient
+          // FE-local copy — the FE is no longer the store of record. Only
+          // delete when the BE URL is directly openable; if it's a GCS blob
+          // path (beFileUrl null) the FE copy is still referenced, so keep it.
+          if (beFileUrl) {
+            await storageDelete(fileKey);
           }
-        })();
+
+          await logTelemetryEvent({
+            eventType: "document_context_index_started",
+            action: "started",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocolId),
+            payload: {
+              trialId: resolvedTrialId,
+              filename: input.filename,
+              coreBackendDocumentId: created.id,
+              coreBackendJobId: job.job_id,
+              source: "core-backend",
+              demoMode: mode,
+            },
+            aiInvolved: true,
+          });
+
+          // Registration succeeded — return the BE-backed result now. The
+          // local-ingestion fallback further below only runs when
+          // useCoreBackend is false, so there is nothing more to do here.
+          return {
+            success: true,
+            url: beFileUrl ?? url,
+            coreBackendDocumentId: created.id,
+          };
+        } catch (error) {
+          const reason =
+            error instanceof CoreBackendError
+              ? `${error.path} ${error.status}: ${error.message}`
+              : error instanceof Error
+                ? error.message
+                : String(error);
+          console.error(
+            `❌ core-backend upload failed for ${input.filename}: ${reason}`
+          );
+          await db
+            .update(protocols)
+            .set({ coreBackendIngestStatus: "failed" })
+            .where(eq(protocols.id, protocolId));
+          await logTelemetryEvent({
+            eventType: "document_context_index_failed",
+            action: "failed",
+            userId: String(ctx.user.id),
+            entityType: "protocol",
+            entityId: String(protocolId),
+            payload: {
+              trialId: resolvedTrialId,
+              filename: input.filename,
+              reason,
+              source: "core-backend",
+              demoMode: mode,
+            },
+            aiInvolved: true,
+          });
+          // Surface the failure instead of swallowing it: the document is saved
+          // locally but is NOT indexed in the RAG service, so document Q&A would
+          // silently fall back to the dead FE-local path. Make the upload fail
+          // loudly so the user knows to retry.
+          throw new Error(
+            `Document saved but could not be registered with the RAG service: ${reason}`
+          );
+        }
       }
 
       // Automatically upload to Google File Search Store (async, don't block response)
