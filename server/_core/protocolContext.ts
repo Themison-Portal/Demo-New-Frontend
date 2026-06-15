@@ -8,7 +8,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { protocolChunks, protocols } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeEmbeddings, invokeLLM } from "./llm";
-import { extractPdfPages, type PdfPageText } from "../pdfExtractor";
+import { extractPdfPagesFromBuffer, type PdfPageText } from "../pdfExtractor";
+import { storageReadBytes } from "../storage";
 
 type SectionAccumulator = {
   title: string;
@@ -2940,7 +2941,15 @@ export async function ingestProtocolContextChunks(options: {
     );
   }
 
-  const pages: PdfPageText[] = await extractPdfPages(protocol.fileUrl);
+  // Read the PDF bytes directly from storage instead of fetching
+  // protocol.fileUrl over HTTP. The bare URL fetch carries no auth and
+  // breaks on cloud (e.g. Render) — Forge signed URLs or a misconfigured
+  // PUBLIC_BASE_URL make it fail with "fetch failed". storageReadBytes
+  // resolves a fresh authenticated download in Forge mode and reads from
+  // disk in the local-storage fallback, matching how studySetupWizardRouter
+  // already extracts protocol text.
+  const pdfBuffer = await storageReadBytes(protocol.fileKey);
+  const pages: PdfPageText[] = await extractPdfPagesFromBuffer(pdfBuffer);
   const mergedText = pages
     .map((page) => `Page ${page.pageNumber}\n${page.text}`)
     .join("\n\n");
