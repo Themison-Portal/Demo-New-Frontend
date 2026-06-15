@@ -467,12 +467,28 @@ Be professional, accurate, and helpful. Use clear clinical terminology when appr
 Previous conversation:
 ${conversationHistory}`;
 
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: latestUserMessage.content },
-          ],
-        });
+        let response: Awaited<ReturnType<typeof invokeLLM>>;
+        try {
+          response = await invokeLLM({
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: latestUserMessage.content },
+            ],
+          });
+        } catch (error) {
+          // Phase 6: the FE-local basic-assistant fallback has no LLM key and
+          // throws "[FE LLM deprecated]". Degrade gracefully instead of 500ing.
+          if (error instanceof Error && error.message.includes("[FE LLM deprecated]")) {
+            console.warn(
+              "[Document AI] Basic-assistant fallback unavailable (Phase 6); returning graceful message."
+            );
+            return {
+              message:
+                "I can't synthesize an answer for this scope yet. Upload protocol documents under a real trial so the backend can index them for retrieval. (Sandbox/building-mode trials don't support cloud AI chat.)",
+            };
+          }
+          throw error;
+        }
 
         const rawContent = response.choices[0]?.message?.content;
         let answer = "I apologize, but I'm unable to generate a response at the moment.";

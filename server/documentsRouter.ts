@@ -433,7 +433,15 @@ export const documentsRouter = router({
       // two-step flow (multipart create → upload-pdf trigger). Falls
       // back to the legacy in-FE pipeline below when preconditions
       // aren't met, so existing trials keep working unchanged.
-      const coreBackendTrialId = trialMeta?.coreBackendTrialId ?? null;
+      // Resolve the core-backend trial id. Real trials are NOT persisted to
+      // the FE MySQL `trials` table (they live only in the BE), so `trialMeta`
+      // is undefined and `resolvedTrialId` already IS the core-backend trial
+      // UUID. Demo/sample trials DO live in FE MySQL and only forward when an
+      // explicit coreBackendTrialId mapping is present. `building:` trials have
+      // no core-backend counterpart and stay on the local pipeline.
+      const beTrialId =
+        trialMeta?.coreBackendTrialId ??
+        (!trialMeta && mode !== "building" ? resolvedTrialId : null);
       // When AUTH_DISABLED=true the FastAPI backend mocks the user, so an
       // Auth0 JWT is not actually required. Allow the BE forward to fire
       // with a placeholder token in that case (BE never inspects it).
@@ -441,7 +449,7 @@ export const documentsRouter = router({
       const useCoreBackend =
         !!protocolId &&
         (!!ctx.authToken || authBypass) &&
-        !!coreBackendTrialId &&
+        !!beTrialId &&
         !!ENV.coreBackendApiUrl;
 
       if (useCoreBackend && protocolId) {
@@ -458,7 +466,7 @@ export const documentsRouter = router({
               {
                 file: buffer,
                 filename: input.filename,
-                trial_id: coreBackendTrialId!,
+                trial_id: beTrialId!,
                 document_name: documentName,
                 document_type: docCategory,
               },

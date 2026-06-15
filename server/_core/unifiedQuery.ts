@@ -4145,7 +4145,15 @@ export async function runUnifiedQuery(params: {
       extractTextContent(llmResponse.choices[0]?.message?.content) ||
       "I don't have enough evidence to answer that safely from the current trial context.";
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "LLM generation failed.";
+    // Phase 6: when the FE-local LLM is unreachable (no key), don't leak the
+    // raw "[FE LLM deprecated] invokeLLM()…" internals to users — show a clean
+    // note. The verbatim evidence below is still returned.
+    const reason =
+      error instanceof Error
+        ? error.message.includes("[FE LLM deprecated]")
+          ? "AI synthesis isn't available for this scope in the cloud — showing the closest matching evidence instead."
+          : error.message
+        : "LLM generation failed.";
     const fallbackLines: string[] = [
       "Themison AI could not generate a full synthesis right now.",
       `Reason: ${reason}`,
