@@ -64,8 +64,14 @@ async function ensureCoreBackendTrialId(
         .update(trials)
         .set({ coreBackendTrialId: created.id })
         .where(eq(trials.id, localTrialId));
+      console.log(
+        `[documents] Registered local trial ${localTrialId} with core-backend trial ${created.id}`
+      );
       return created.id;
     }
+    console.warn(
+      `[documents] core-backend trial create returned no id for ${localTrialId}; staying local.`
+    );
   } catch (error) {
     console.warn(
       `[documents] Failed to register local trial ${localTrialId} with core-backend; staying local.`,
@@ -520,6 +526,25 @@ export const documentsRouter = router({
       }
       const useCoreBackend = canUseBackend && !!beTrialId;
 
+      // Diagnostic: surface exactly why an upload does / doesn't route to the BE.
+      console.log(
+        "[documents.upload] core-backend routing decision:",
+        JSON.stringify({
+          filename: input.filename,
+          mode,
+          resolvedTrialId,
+          hasProtocolId: !!protocolId,
+          hasAuthToken: !!ctx.authToken,
+          authBypass,
+          coreBackendApiUrl: ENV.coreBackendApiUrl,
+          hasTrialMeta: !!trialMeta,
+          existingCoreBackendTrialId: trialMeta?.coreBackendTrialId ?? null,
+          resolvedBeTrialId: beTrialId,
+          canUseBackend,
+          useCoreBackend,
+        })
+      );
+
       if (useCoreBackend && protocolId) {
         const documentName = input.filename;
         const authToken = ctx.authToken ?? "auth-disabled-bypass";
@@ -547,14 +572,30 @@ export const documentsRouter = router({
               chunk_size: 750,
             });
 
+            // Point the FE record's openable URL at the BE's durable document
+            // URL so "Open document" resolves to the backend instead of the
+            // local-storage (localhost) URL written by storagePut above. For
+            // local BE storage this is a full /local-files URL; a GCS blob path
+            // (no scheme) is left as-is and resolved on demand later.
+            const beFileUrl =
+              typeof created.document_url === "string" &&
+              /^https?:\/\//.test(created.document_url)
+                ? created.document_url
+                : null;
+
             await db
               .update(protocols)
               .set({
                 coreBackendDocumentId: created.id,
                 coreBackendJobId: job.job_id,
                 coreBackendIngestStatus: job.status ?? "queued",
+                ...(beFileUrl ? { fileUrl: beFileUrl } : {}),
               })
               .where(eq(protocols.id, protocolId));
+
+            console.log(
+              `[documents.upload] core-backend ingest started: doc=${created.id} job=${job.job_id} url=${beFileUrl ?? created.document_url}`
+            );
 
             await logTelemetryEvent({
               eventType: "document_context_index_started",
