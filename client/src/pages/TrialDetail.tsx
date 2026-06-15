@@ -2394,6 +2394,14 @@ export default function TrialDetail() {
                     <p className="text-gray-700 bg-gray-50 p-2 rounded-lg leading-relaxed">{selectedPatient.notes}</p>
                   </div>
                 )}
+                <div className="pt-4 border-t border-gray-100 mt-3">
+                  <Button
+                    className="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg flex items-center justify-center gap-1.5 py-2 px-3 font-semibold text-xs shadow-sm transition-colors border border-indigo-100"
+                    onClick={() => navigate(`/trial/${trialId}/patient/${selectedPatient.patient_id}`)}
+                  >
+                    <User className="h-3.5 w-3.5" /> Open Full Patient Profile
+                  </Button>
+                </div>
               </div>
 
               {/* Visit Schedule Section */}
