@@ -19,6 +19,61 @@ import { ingestProtocolContextChunks } from "./_core/protocolContext";
 import { ENV } from "./_core/env";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
 import { CoreBackendError } from "@shared/coreBackendTypes";
+import { normalizeStatusForBackend } from "./trialsRouter";
+
+/**
+ * Demo/building trials are local sandbox rows in the FE MySQL `trials` table
+ * with no core-backend counterpart, so their documents can't use the BE's
+ * durable storage + RAG chat. This lazily creates a core-backend trial for
+ * such a local trial (on first upload) and persists the mapping in
+ * `trials.coreBackendTrialId`, so this and subsequent uploads route to the BE.
+ * Returns the core-backend trial UUID, or null if registration fails (caller
+ * then falls back to the local pipeline).
+ */
+async function ensureCoreBackendTrialId(
+  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
+  localTrialId: string,
+  meta: {
+    title?: string | null;
+    sponsor?: string | null;
+    phase?: string | null;
+    location?: string | null;
+    status?: string | null;
+    description?: string | null;
+    indication?: string | null;
+  },
+  user: unknown
+): Promise<string | null> {
+  try {
+    const created = await callBackend<{ id?: string }>(`/api/trials/with-assignments`, {
+      method: "POST",
+      body: {
+        name: meta.title || "Untitled Trial",
+        sponsor: meta.sponsor || "",
+        phase: meta.phase || "Phase I",
+        location: meta.location || "",
+        status: normalizeStatusForBackend(meta.status),
+        description: meta.description || meta.indication || "",
+        members: [],
+        pending_members: [],
+      },
+      user: user as any,
+    });
+    if (created?.id) {
+      await db
+        .update(trials)
+        .set({ coreBackendTrialId: created.id })
+        .where(eq(trials.id, localTrialId));
+      return created.id;
+    }
+  } catch (error) {
+    console.warn(
+      `[documents] Failed to register local trial ${localTrialId} with core-backend; staying local.`,
+      error
+    );
+  }
+  return null;
+}
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
@@ -309,6 +364,13 @@ export const documentsRouter = router({
           amendmentVersion: trials.amendmentVersion,
           releaseDate: trials.releaseDate,
           coreBackendTrialId: trials.coreBackendTrialId,
+          title: trials.title,
+          sponsor: trials.sponsor,
+          phase: trials.phase,
+          location: trials.location,
+          status: trials.status,
+          description: trials.description,
+          indication: trials.indication,
         })
         .from(trials)
         .where(eq(trials.id, resolvedTrialId))
@@ -433,24 +495,30 @@ export const documentsRouter = router({
       // two-step flow (multipart create → upload-pdf trigger). Falls
       // back to the legacy in-FE pipeline below when preconditions
       // aren't met, so existing trials keep working unchanged.
-      // Resolve the core-backend trial id. Real trials are NOT persisted to
-      // the FE MySQL `trials` table (they live only in the BE), so `trialMeta`
-      // is undefined and `resolvedTrialId` already IS the core-backend trial
-      // UUID. Demo/sample trials DO live in FE MySQL and only forward when an
-      // explicit coreBackendTrialId mapping is present. `building:` trials have
-      // no core-backend counterpart and stay on the local pipeline.
-      const beTrialId =
-        trialMeta?.coreBackendTrialId ??
-        (!trialMeta && mode !== "building" ? resolvedTrialId : null);
       // When AUTH_DISABLED=true the FastAPI backend mocks the user, so an
       // Auth0 JWT is not actually required. Allow the BE forward to fire
       // with a placeholder token in that case (BE never inspects it).
       const authBypass = process.env.AUTH_DISABLED === "true";
-      const useCoreBackend =
-        !!protocolId &&
-        (!!ctx.authToken || authBypass) &&
-        !!beTrialId &&
-        !!ENV.coreBackendApiUrl;
+      const canUseBackend =
+        !!protocolId && (!!ctx.authToken || authBypass) && !!ENV.coreBackendApiUrl;
+
+      // Resolve — and for demo/building trials, lazily provision — the
+      // core-backend trial id this upload should attach to:
+      // - An explicit mapping (`coreBackendTrialId`) always wins.
+      // - Real trials aren't in FE MySQL (`trialMeta` undefined); their
+      //   `resolvedTrialId` already IS the core-backend trial UUID.
+      // - Demo/building trials live in FE MySQL with no BE counterpart — register
+      //   one with the core-backend now and persist the mapping so this and
+      //   later uploads route to the BE (durable storage + RAG-grounded chat).
+      let beTrialId: string | null = trialMeta?.coreBackendTrialId ?? null;
+      if (!beTrialId && canUseBackend) {
+        if (!trialMeta && mode !== "building") {
+          beTrialId = resolvedTrialId;
+        } else if (trialMeta) {
+          beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, trialMeta, ctx.user);
+        }
+      }
+      const useCoreBackend = canUseBackend && !!beTrialId;
 
       if (useCoreBackend && protocolId) {
         const documentName = input.filename;

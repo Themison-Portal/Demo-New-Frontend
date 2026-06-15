@@ -12,7 +12,7 @@ const FE_TO_BE_STATUS: Record<string, string> = {
   recruiting: "active",
   "on-hold": "paused",
 };
-function normalizeStatusForBackend(s: string | undefined | null): string {
+export function normalizeStatusForBackend(s: string | undefined | null): string {
   if (!s) return "planning";
   return FE_TO_BE_STATUS[s] ?? s;
 }
