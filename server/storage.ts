@@ -224,3 +224,22 @@ export async function storageReadBytes(relKey: string): Promise<Buffer> {
   }
   return Buffer.from(await response.arrayBuffer());
 }
+
+/**
+ * Best-effort delete of a stored object. Used to drop the transient FE copy
+ * after a document has been forwarded to (and is durably stored by) the
+ * core-backend, so the FE is not the store of record. Non-fatal on error.
+ */
+export async function storageDelete(relKey: string): Promise<void> {
+  const key = normalizeKey(relKey);
+  try {
+    if (isUsingLocalStorage()) {
+      await fs.rm(path.join(LOCAL_STORAGE_ROOT, key), { force: true });
+      return;
+    }
+    // Forge proxy mode: no delete API wired here (no-op). The BE is the
+    // store of record once the document is forwarded.
+  } catch (error) {
+    console.warn(`[storage] delete failed for ${key} (non-fatal):`, error);
+  }
+}

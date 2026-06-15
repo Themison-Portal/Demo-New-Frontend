@@ -10,7 +10,7 @@ import {
   telemetryEvents,
 } from "../drizzle/schema";
 import { eq, like, notLike, inArray, and, or, desc } from "drizzle-orm";
-import { storagePut } from "./storage";
+import { storagePut, storageDelete } from "./storage";
 import { nanoid } from "nanoid";
 import { callBackend } from "./_core/backendClient";
 import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
@@ -596,6 +596,15 @@ export const documentsRouter = router({
             console.log(
               `[documents.upload] core-backend ingest started: doc=${created.id} job=${job.job_id} url=${beFileUrl ?? created.document_url}`
             );
+
+            // The core-backend now durably stores this document and the FE
+            // record points at the BE URL (beFileUrl), so drop the transient
+            // FE-local copy — the FE is no longer the store of record. Only
+            // delete when the BE URL is directly openable; if it's a GCS blob
+            // path (beFileUrl null) the FE copy is still referenced, so keep it.
+            if (beFileUrl) {
+              await storageDelete(fileKey);
+            }
 
             await logTelemetryEvent({
               eventType: "document_context_index_started",
