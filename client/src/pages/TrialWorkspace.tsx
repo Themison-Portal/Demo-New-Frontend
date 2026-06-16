@@ -51,6 +51,9 @@ export function TrialWorkspace() {
   const [protocolFile, setProtocolFile] = useState<File | null>(null);
   const [protocolBase64, setProtocolBase64] = useState<string | null>(null);
   const [uploadState, setUploadState] = useState<"idle" | "indexing" | "indexed">("idle");
+  // Synchronous re-entry guard for handleSubmitTrial — blocks a double-click from
+  // creating two trials + two protocol uploads (concurrent RAG ingest → OOM).
+  const isSubmittingTrialRef = useRef(false);
   const [indexedAnimationInstance, setIndexedAnimationInstance] = useState(0);
   const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
@@ -445,6 +448,12 @@ export function TrialWorkspace() {
       toast.error("Protocol title is required");
       return;
     }
+    // Block re-entry synchronously: the disabled-button guard relies on the
+    // async `isPending` state, which only flips after a re-render, so a fast
+    // double-click would fire this twice and create two trials + two uploads.
+    if (isSubmittingTrialRef.current) return;
+    isSubmittingTrialRef.current = true;
+    try {
     const selectedProtocolFile = protocolFile;
     const selectedProtocolBase64 = protocolBase64;
     const selectedMemberIds = [...selectedTeamMembers];
@@ -518,17 +527,20 @@ export function TrialWorkspace() {
     setCreateStep(6);
 
     if (selectedProtocolFile && selectedProtocolBase64) {
-      void uploadDocumentMutation
-        .mutateAsync({
+      try {
+        await uploadDocumentMutation.mutateAsync({
           trialId: createdTrialId,
           filename: selectedProtocolFile.name,
           fileData: selectedProtocolBase64,
           category: "Protocol",
           demoMode: currentDataMode,
-        })
-        .catch(() => {
-          toast.error("Trial created, but protocol upload failed. Please upload in Document Hub.");
         });
+      } catch {
+        toast.error("Trial created, but protocol upload failed. Please upload in Document Hub.");
+      }
+    }
+    } finally {
+      isSubmittingTrialRef.current = false;
     }
   };
 
