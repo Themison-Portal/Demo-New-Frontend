@@ -2,7 +2,7 @@ import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
 import { protocols } from "../drizzle/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, and, isNotNull, like, desc } from "drizzle-orm";
 import { resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { invokeLLM } from "./_core/llm";
@@ -359,6 +359,102 @@ function buildSourcesFromChunks(
   return Array.from(sourceMap.values()).slice(0, 16);
 }
 
+type IndexedProtocolRow = typeof protocols.$inferSelect & {
+  coreBackendDocumentId: string;
+};
+
+/**
+ * Query a set of core-backend-registered protocols via the BE's
+ * /api/document-ai/chat endpoint (→ RAG) and map the BE's sources back to the FE
+ * source shape. Returns null if the BE call fails so the caller can fall back to
+ * the local pipeline. Shared by the selected-document path and the
+ * "All Documents" path.
+ */
+async function queryViaCoreBackend(params: {
+  coreBackendDocs: IndexedProtocolRow[];
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  resolvedTrialId: string | undefined;
+  sessionId: string | undefined;
+  user: unknown;
+  questionType: string;
+}): Promise<{ message: string; thinking?: string; sources: DocumentAISource[] } | null> {
+  const { coreBackendDocs, messages, resolvedTrialId, sessionId, user, questionType } = params;
+  try {
+    const beResponse = await callBackend<{
+      message: string;
+      sources: Array<{
+        fileId: string;
+        filename: string;
+        section?: string | null;
+        page?: number | null;
+        excerpt: string;
+        relevance?: string | null;
+      }>;
+      route: string;
+      documentsQueried: number;
+      documentsWithSources: number;
+      model?: string | null;
+    }>("/api/document-ai/chat", {
+      method: "POST",
+      body: {
+        messages,
+        documentIds: coreBackendDocs.map((d) => d.coreBackendDocumentId),
+        trialId: resolvedTrialId ?? null,
+        sessionId: sessionId ?? null,
+      },
+      user: user as any,
+    });
+
+    // Map BE sources back to the FE source shape (joins with the FE protocol row
+    // so the UI keeps protocolId, fileUrl, category, etc).
+    const docByBeId = new Map(coreBackendDocs.map((d) => [d.coreBackendDocumentId, d]));
+    const sources: DocumentAISource[] = beResponse.sources.map((src) => {
+      const doc = docByBeId.get(src.fileId);
+      return {
+        fileId: src.fileId,
+        filename: src.filename || doc?.filename,
+        fileUrl: doc?.fileUrl,
+        protocolId: doc?.id,
+        category: doc?.category ?? null,
+        excerpt: src.excerpt,
+        section: src.section ?? undefined,
+        page: typeof src.page === "number" ? src.page : null,
+      };
+    });
+
+    await logTelemetryEvent({
+      eventType: "ai_response_generated",
+      action: "generated",
+      sessionId,
+      entityType: "response",
+      payload: {
+        route: "core_backend_document_ai",
+        backendRoute: beResponse.route,
+        docCount: coreBackendDocs.length,
+        docsWithSources: beResponse.documentsWithSources,
+        citationCount: sources.length,
+        questionType,
+        model: beResponse.model ?? null,
+      },
+      aiInvolved: true,
+      aiOutput: beResponse.message,
+      aiSources: sources,
+    });
+
+    return {
+      message: beResponse.message,
+      thinking: `Queried BE document-AI across ${beResponse.documentsQueried} document(s); ${beResponse.documentsWithSources} returned citations.`,
+      sources,
+    };
+  } catch (error) {
+    console.warn(
+      "[Document AI] BE /api/document-ai/chat failed; falling back to local pipeline.",
+      error
+    );
+    return null;
+  }
+}
+
 export const documentAIRouter = router({
   /**
    * RAG-powered chat with Themison AI using OpenAI Assistants API
@@ -419,6 +515,46 @@ export const documentAIRouter = router({
       // If no documents are explicitly selected, use unified retrieval for the active scope.
       // Fall back to basic LLM only if unified retrieval fails.
       if (!input.documentIds || input.documentIds.length === 0) {
+        // "All Documents" mode: the client sends no documentIds. Resolve the
+        // in-scope INDEXED protocols (registered with the core-backend) and query
+        // them via the BE/RAG, instead of falling straight into the decommissioned
+        // FE-local runUnifiedQuery (which abstains with "document evidence is
+        // missing"). Only short-circuits when indexed docs exist AND the BE
+        // answers; otherwise the existing unified path still runs, preserving
+        // operational/telemetry answers and the basic-assistant fallback.
+        if (ENV.coreBackendApiUrl) {
+          const ALL_DOCS_CAP = 10;
+          const indexedScope = resolvedTrialId
+            ? and(
+                eq(protocols.trialId, resolvedTrialId),
+                isNotNull(protocols.coreBackendDocumentId)
+              )
+            : and(
+                like(protocols.trialId, `${mode}:%`),
+                isNotNull(protocols.coreBackendDocumentId)
+              );
+          const indexedProtocols = await db
+            .select()
+            .from(protocols)
+            .where(indexedScope)
+            .orderBy(desc(protocols.createdAt))
+            .limit(ALL_DOCS_CAP);
+          const coreBackendDocs = indexedProtocols.filter(
+            (p): p is IndexedProtocolRow => !!p.coreBackendDocumentId
+          );
+          if (coreBackendDocs.length > 0) {
+            const beResult = await queryViaCoreBackend({
+              coreBackendDocs,
+              messages: input.messages,
+              resolvedTrialId,
+              sessionId: input.sessionId,
+              user: ctx.user,
+              questionType,
+            });
+            if (beResult) return beResult;
+          }
+        }
+
         try {
           const unified = await runUnifiedQuery({
             db,
@@ -540,79 +676,15 @@ ${conversationHistory}`;
           !!p.coreBackendDocumentId
       );
       if (coreBackendDocs.length > 0 && ENV.coreBackendApiUrl) {
-        try {
-          const beResponse = await callBackend<{
-            message: string;
-            sources: Array<{
-              fileId: string;
-              filename: string;
-              section?: string | null;
-              page?: number | null;
-              excerpt: string;
-              relevance?: string | null;
-            }>;
-            route: string;
-            documentsQueried: number;
-            documentsWithSources: number;
-            model?: string | null;
-          }>("/api/document-ai/chat", {
-            method: "POST",
-            body: {
-              messages: input.messages,
-              documentIds: coreBackendDocs.map((d) => d.coreBackendDocumentId),
-              trialId: resolvedTrialId ?? null,
-              sessionId: input.sessionId ?? null,
-            },
-            user: ctx.user,
-          });
-
-          // Map BE sources back to the FE source shape (joins with the FE
-          // protocol row so the UI keeps protocolId, fileUrl, category, etc).
-          const docByBeId = new Map(coreBackendDocs.map((d) => [d.coreBackendDocumentId, d]));
-          const sources: DocumentAISource[] = beResponse.sources.map((src) => {
-            const doc = docByBeId.get(src.fileId);
-            return {
-              fileId: src.fileId,
-              filename: src.filename || doc?.filename,
-              fileUrl: doc?.fileUrl,
-              protocolId: doc?.id,
-              category: doc?.category ?? null,
-              excerpt: src.excerpt,
-              section: src.section ?? undefined,
-              page: typeof src.page === "number" ? src.page : null,
-            };
-          });
-
-          await logTelemetryEvent({
-            eventType: "ai_response_generated",
-            action: "generated",
-            sessionId: input.sessionId,
-            entityType: "response",
-            payload: {
-              route: "core_backend_document_ai",
-              backendRoute: beResponse.route,
-              docCount: coreBackendDocs.length,
-              docsWithSources: beResponse.documentsWithSources,
-              citationCount: sources.length,
-              questionType,
-              model: beResponse.model ?? null,
-            },
-            aiInvolved: true,
-            aiOutput: beResponse.message,
-            aiSources: sources,
-          });
-
-          return {
-            message: beResponse.message,
-            thinking: `Queried BE document-AI across ${beResponse.documentsQueried} document(s); ${beResponse.documentsWithSources} returned citations.`,
-            sources,
-          };
-        } catch (error) {
-          console.warn(
-            "[Document AI] BE /api/document-ai/chat failed; falling back to local pipeline.",
-            error
-          );
-        }
+        const beResult = await queryViaCoreBackend({
+          coreBackendDocs,
+          messages: input.messages,
+          resolvedTrialId,
+          sessionId: input.sessionId,
+          user: ctx.user,
+          questionType,
+        });
+        if (beResult) return beResult;
       }
 
       // When the BE/RAG integration is configured but none of the selected
