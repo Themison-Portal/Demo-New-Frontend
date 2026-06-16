@@ -1034,7 +1034,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => retryMutation.mutate({ id: doc.id })}
-                                disabled={retryMutation.isPending}
+                                disabled={doc.indexStatus !== "failed" || retryMutation.isPending}
                                 className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                 title={doc.indexFailureReason || "Retry processing"}
                               >
@@ -1050,7 +1050,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => retryMutation.mutate({ id: doc.id })}
-                                disabled={retryMutation.isPending}
+                                disabled={doc.indexStatus !== "failed" || retryMutation.isPending}
                                 className="h-6 w-6 p-0 text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
                                 title="Retry processing"
                               >
