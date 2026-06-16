@@ -102,7 +102,7 @@ const SETUP_TASK_CATEGORY_OPTIONS: TaskCategory[] = [
     "regulatory",
     "custom",
 ];
-
+const PATIENT_TABS = ["Overview", "Visits", "Costs", "Medical", "Documents"] as const;
 const SETUP_ASSIGNED_ROLE_OPTIONS = [
     "pi",
     "sub_i",
@@ -239,6 +239,8 @@ export default function TrialDetail() {
     const [pendingOpenSetupTaskId, setPendingOpenSetupTaskId] = useState<string | null>(null);
     const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
     const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
+    const [patientStatusFilter, setPatientStatusFilter] = useState("all");
+    const [patientActiveTab, setPatientActiveTab] = useState<"Overview" | "Visits" | "Costs" | "Medical" | "Documents">("Overview");
 
     // Patient and Visit Management States
     const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -299,6 +301,10 @@ export default function TrialDetail() {
                 : "overview";
         setActiveTab(nextTab);
     }, [trialTabStorageKey]);
+
+    useEffect(() => {
+        setPatientActiveTab("Overview");
+    }, [selectedPatientId]);
 
     useEffect(() => {
         if (typeof window === "undefined" || !trialTabStorageKey) return;
@@ -400,6 +406,12 @@ export default function TrialDetail() {
             toast.error(`Enrollment failed: ${err.message}`);
         },
     });
+
+    const filteredPatients = useMemo(() => {
+        if (!patientsQuery.data) return [];
+        if (patientStatusFilter === "all") return patientsQuery.data;
+        return patientsQuery.data.filter(p => p.status === patientStatusFilter);
+    }, [patientsQuery.data, patientStatusFilter]);
 
     const selectedPatient = useMemo(() => {
         if (!selectedPatientId || !patientsQuery.data) return null;
@@ -2261,151 +2273,460 @@ export default function TrialDetail() {
                         <p className="text-xs text-amber-500 mt-1">pending enrollment</p>
                     </div>
                 </div>
-                <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+                {!selectedPatientId && (
+                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
 
-                    {/* Search + filter bar */}
-                    <div className="flex items-center gap-3 p-4 border-b border-gray-100">
-                        <div className="relative flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                            <input
-                                type="text"
-                                placeholder="Search patients by code or name..."
-                                className="w-full pl-9 pr-4 h-9 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-                            />
-                        </div>
-                        <select className="h-9 rounded-lg border border-gray-200 text-sm px-3 bg-white min-w-[130px]">
-                            <option>All statuses</option>
-                            <option>Enrolled</option>
-                            <option>Screening</option>
-                            <option>Completed</option>
-                        </select>
-                        <Button
-                            onClick={() => {
-                                void generateCodeQuery.refetch();
-                                setIsEnrollDialogOpen(true);
-                            }}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5 shadow-sm text-sm h-9 px-4 font-medium"
-                        >
-                            <Plus className="h-4 w-4" /> Assign Patient
-                        </Button>
-                    </div>
-
-                    {/* Patient rows */}
-                    {patientsQuery.isLoading ? (
-                        <div className="py-20 flex flex-col items-center justify-center text-sm text-gray-400">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-3" />
-                            Loading patients…
-                        </div>
-                    ) : !patientsQuery.data || patientsQuery.data.length === 0 ? (
-                        <div className="py-24 flex flex-col items-center justify-center text-center border-t border-gray-50">
-                            <div className="h-14 w-14 rounded-full bg-gray-100 flex items-center justify-center mb-4">
-                                <UserCheck className="h-6 w-6 text-gray-400" />
+                        {/* Search + filter bar */}
+                        <div className="flex items-center gap-3 p-4 border-b border-gray-100">
+                            <div className="relative flex-1">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Search patients by code or name..."
+                                    className="w-full pl-9 pr-4 h-9 rounded-lg border border-gray-200 text-sm bg-gray-50 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                />
                             </div>
-                            <p className="font-semibold text-gray-800 text-sm">No Patients Enrolled</p>
-                            <p className="text-xs text-gray-400 mt-1 max-w-xs">
-                                Start tracking the trial progress by enrolling your first clinical participant.
-                            </p>
+                            <select
+                                value={patientStatusFilter}
+                                onChange={(e) => setPatientStatusFilter(e.target.value)}
+                                className="h-9 rounded-lg border border-gray-200 text-sm px-3 bg-white min-w-[130px]"
+                            >
+                                <option value="all">All statuses</option>
+                                <option value="enrolled">Enrolled</option>
+                                <option value="screening">Screening</option>
+                                <option value="completed">Completed</option>
+                            </select>
+                            <Button
+                                onClick={() => {
+                                    void generateCodeQuery.refetch();
+                                    setIsEnrollDialogOpen(true);
+                                }}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg flex items-center gap-1.5 shadow-sm text-sm h-9 px-4 font-medium"
+                            >
+                                <Plus className="h-4 w-4" /> Assign Patient
+                            </Button>
                         </div>
-                    ) : (
-                        <div className="divide-y divide-gray-50">
-                            {patientsQuery.data.map((enrollment) => {
-                                const initials =
-                                    (enrollment.patient_first_name?.[0] ?? "") +
-                                    (enrollment.patient_last_name?.[0] ?? "");
-                                const isEnrolled = enrollment.status === "enrolled";
-                                const isScreening = enrollment.status === "screening";
 
-                                return (
-                                    <div
-                                        key={enrollment.id}
-                                        className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/60 transition-colors cursor-pointer"
-                                        onClick={() => setSelectedPatientId(enrollment.patient_id)}
-                                    >
-                                        {/* Avatar */}
-                                        <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm shrink-0">
-                                            {initials}
+                        {/* Patient rows */}
+                        {patientsQuery.isLoading ? (
+                            <div className="py-20 flex flex-col items-center justify-center text-sm text-gray-400">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mb-3" />
+                                Loading patients…
+                            </div>
+                        ) : filteredPatients.length === 0 ? (
+                            <div className="py-24 flex flex-col items-center justify-center text-center border-t border-gray-50">
+                                <div className="h-14 w-14 rounded-full bg-gray-100 flex items-center justify-center mb-4">
+                                    <UserCheck className="h-6 w-6 text-gray-400" />
+                                </div>
+                                <p className="font-semibold text-gray-800 text-sm">No Patients Enrolled</p>
+                                <p className="text-xs text-gray-400 mt-1 max-w-xs">
+                                    Start tracking the trial progress by enrolling your first clinical participant.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="divide-y divide-gray-50">
+                                {filteredPatients.map((enrollment) => {
+                                    const initials =
+                                        (enrollment.patient_first_name?.[0] ?? "") +
+                                        (enrollment.patient_last_name?.[0] ?? "");
+                                    const isEnrolled = enrollment.status === "enrolled";
+                                    const isScreening = enrollment.status === "screening";
+
+                                    return (
+                                        <div
+                                            key={enrollment.id}
+                                            className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/60 transition-colors cursor-pointer"
+                                            onClick={() => setSelectedPatientId(enrollment.patient_id)}
+                                        >
+                                            {/* Avatar */}
+                                            <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm shrink-0">
+                                                {initials}
+                                            </div>
+
+                                            {/* Name + meta */}
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="font-semibold text-sm text-gray-900">
+                                                        {enrollment.patient_first_name} {enrollment.patient_last_name}
+                                                    </span>
+                                                    <span
+                                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${isEnrolled
+                                                            ? "bg-green-50 text-green-700 border-green-200"
+                                                            : isScreening
+                                                                ? "bg-amber-50 text-amber-700 border-amber-200"
+                                                                : "bg-gray-100 text-gray-600 border-gray-200"
+                                                            }`}
+                                                    >
+                                                        {isEnrolled && <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />}
+                                                        {enrollment.status.charAt(0).toUpperCase() + enrollment.status.slice(1)}
+                                                    </span>
+                                                    <span className="text-xs text-gray-400 font-mono">
+                                                        #{enrollment.patient_code}
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-gray-400 mt-0.5">
+                                                    {enrollment.patient_data?.gender
+                                                        ? enrollment.patient_data.gender.charAt(0).toUpperCase() +
+                                                        enrollment.patient_data.gender.slice(1)
+                                                        : ""}
+                                                    {enrollment.patient_data?.date_of_birth &&
+                                                        ` · Age ${new Date().getFullYear() - new Date(enrollment.patient_data.date_of_birth).getFullYear()}`}
+                                                    {enrollment.enrollment_date &&
+                                                        ` · Enrolled: ${new Date(enrollment.enrollment_date).toLocaleDateString("en-GB", {
+                                                            day: "2-digit", month: "2-digit", year: "numeric",
+                                                        })}`}
+                                                </p>
+                                            </div>
+
+                                            {/* Progress bar area */}
+                                            <div className="hidden md:flex flex-col gap-1 min-w-[160px]">
+                                                <div className="flex items-center justify-between text-[11px] text-gray-400">
+                                                    <span>
+                                                        {isScreening ? "Screening Phase" : "Treatment Phase"}
+                                                    </span>
+                                                </div>
+                                                <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full ${isScreening ? "bg-amber-400" : "bg-green-500"}`}
+                                                        style={{ width: isEnrolled ? "45%" : "15%" }}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                                                    <span className="text-green-600 font-medium">✓ {isEnrolled ? 2 : 0}</span>
+                                                    <span className="text-amber-500">○ 1</span>
+                                                    <span>· 7 left</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Medication tag (if present in notes) */}
+                                            {enrollment.notes && (
+                                                <span className="hidden lg:inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-purple-50 text-purple-700 border border-purple-100 shrink-0">
+                                                    {enrollment.notes.slice(0, 20)}
+                                                </span>
+                                            )}
+
+                                            {/* View Details */}
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="shrink-0 text-xs border-gray-200 rounded-lg h-8 px-3"
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setSelectedPatientId(enrollment.patient_id);
+                                                }}
+                                            >
+                                                View Details →
+                                            </Button>
                                         </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+                {/* Inline patient detail */}
+                {selectedPatientId && selectedPatient && (
+                    <div className="bg-white rounded-xl border border-gray-200 shadow-sm animate-in fade-in duration-200">
+                        {/* Back to patients */}
+                        <div className="px-6 pt-5 pb-4 border-b border-gray-100 flex items-center justify-between">
+                            <button
+                                onClick={() => setSelectedPatientId(null)}
+                                className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                            >
+                                <ArrowLeft className="h-4 w-4" /> Back to patients
+                            </button>
+                            <Button
+                                onClick={() => setIsScheduleVisitDialogOpen(true)}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm px-4 h-9 font-medium"
+                            >
+                                <Plus className="h-4 w-4 mr-1.5" /> Schedule Visit
+                            </Button>
+                        </div>
 
-                                        {/* Name + meta */}
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <span className="font-semibold text-sm text-gray-900">
-                                                    {enrollment.patient_first_name} {enrollment.patient_last_name}
-                                                </span>
-                                                <span
-                                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${isEnrolled
-                                                        ? "bg-green-50 text-green-700 border-green-200"
-                                                        : isScreening
-                                                            ? "bg-amber-50 text-amber-700 border-amber-200"
-                                                            : "bg-gray-100 text-gray-600 border-gray-200"
-                                                        }`}
-                                                >
-                                                    {isEnrolled && <span className="h-1.5 w-1.5 rounded-full bg-green-500 inline-block" />}
-                                                    {enrollment.status.charAt(0).toUpperCase() + enrollment.status.slice(1)}
-                                                </span>
-                                                <span className="text-xs text-gray-400 font-mono">
-                                                    #{enrollment.patient_code}
-                                                </span>
-                                            </div>
-                                            <p className="text-xs text-gray-400 mt-0.5">
-                                                {enrollment.patient_data?.gender
-                                                    ? enrollment.patient_data.gender.charAt(0).toUpperCase() +
-                                                    enrollment.patient_data.gender.slice(1)
-                                                    : ""}
-                                                {enrollment.patient_data?.date_of_birth &&
-                                                    ` · Age ${new Date().getFullYear() - new Date(enrollment.patient_data.date_of_birth).getFullYear()}`}
-                                                {enrollment.enrollment_date &&
-                                                    ` · Enrolled: ${new Date(enrollment.enrollment_date).toLocaleDateString("en-GB", {
-                                                        day: "2-digit", month: "2-digit", year: "numeric",
-                                                    })}`}
-                                            </p>
-                                        </div>
+                        {/* Patient header card */}
+                        <div className="px-6 py-4 border-b border-gray-100 flex items-center gap-4">
+                            <div className="h-12 w-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-base shrink-0">
+                                {(selectedPatient.patient_first_name?.[0] ?? "")}
+                                {(selectedPatient.patient_last_name?.[0] ?? "")}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <h2 className="text-xl font-bold text-gray-900">
+                                        {selectedPatient.patient_first_name} {selectedPatient.patient_last_name}
+                                    </h2>
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200 capitalize">
+                                        <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                                        {selectedPatient.status}
+                                    </span>
+                                    <span className="text-xs font-mono text-gray-400">Patient #{selectedPatient.patient_code}</span>
+                                </div>
+                                <p className="text-xs text-gray-400 mt-0.5">
+                                    {selectedPatient.patient_data?.date_of_birth
+                                        ? `Age ${new Date().getFullYear() - new Date(selectedPatient.patient_data.date_of_birth).getFullYear()}`
+                                        : "Age —"} ·{" "}
+                                    {selectedPatient.patient_data?.gender ?? "—"} ·{" "}
+                                    {selectedPatient.patient_data?.screening_notes || "Clinical trial participant"} ·{" "}
+                                    Enrolled: {selectedPatient.enrollment_date
+                                        ? new Date(selectedPatient.enrollment_date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })
+                                        : "N/A"}
+                                </p>
+                            </div>
+                            {selectedPatient.notes && (
+                                <span className="hidden lg:inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100 shrink-0">
+                                    {selectedPatient.notes.slice(0, 25)}
+                                </span>
+                            )}
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="shrink-0 text-xs border-gray-200 rounded-lg"
+                                onClick={() => navigate(`/trial/${trialId}/patient/${selectedPatient.patient_id}`)}
+                            >
+                                View Details →
+                            </Button>
+                        </div>
 
-                                        {/* Progress bar area */}
-                                        <div className="hidden md:flex flex-col gap-1 min-w-[160px]">
-                                            <div className="flex items-center justify-between text-[11px] text-gray-400">
-                                                <span>
-                                                    {isScreening ? "Screening Phase" : "Treatment Phase"}
-                                                </span>
-                                            </div>
-                                            <div className="h-1.5 w-full rounded-full bg-gray-100 overflow-hidden">
-                                                <div
-                                                    className={`h-full rounded-full ${isScreening ? "bg-amber-400" : "bg-green-500"}`}
-                                                    style={{ width: isEnrolled ? "45%" : "15%" }}
-                                                />
-                                            </div>
-                                            <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                                                <span className="text-green-600 font-medium">✓ {isEnrolled ? 2 : 0}</span>
-                                                <span className="text-amber-500">○ 1</span>
-                                                <span>· 7 left</span>
-                                            </div>
-                                        </div>
+                        {/* Patient sub-tabs */}
+                        {(() => {
+                            const visitStats = {
+                                total: visitsQuery.data?.length ?? 0,
+                                scheduled: visitsQuery.data?.filter(v => v.status === "scheduled").length ?? 0,
+                                completed: visitsQuery.data?.filter(v => v.status === "completed" || v.status === "done").length ?? 0,
+                            };
 
-                                        {/* Medication tag (if present in notes) */}
-                                        {enrollment.notes && (
-                                            <span className="hidden lg:inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-purple-50 text-purple-700 border border-purple-100 shrink-0">
-                                                {enrollment.notes.slice(0, 20)}
-                                            </span>
+                            return (
+                                <div>
+                                    {/* Tab bar */}
+                                    <div className="flex items-center gap-2 px-6 pt-4 pb-2">
+                                        {PATIENT_TABS.map(tab => (
+                                            <button
+                                                key={tab}
+                                                onClick={() => setPatientActiveTab(tab)}
+                                                className={`px-4 py-2 text-sm font-medium rounded-full transition-colors ${patientActiveTab === tab
+                                                    ? "bg-indigo-600 text-white"
+                                                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                                                    }`}
+                                            >
+                                                {tab}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="p-6">
+                                        {patientActiveTab === "Overview" && (
+                                            <div className="space-y-4">
+                                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                                    {/* Current visit summary */}
+                                                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                                                        <h3 className="text-sm font-semibold text-green-600 mb-1">
+                                                            Visit {visitStats.completed + 1} – Week {visitStats.completed * 4}
+                                                        </h3>
+                                                        <p className="text-xs text-gray-400 mb-3">
+                                                            Today, {new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}
+                                                        </p>
+                                                        {[
+                                                            { label: "Laboratory", done: 10, total: 10 },
+                                                            { label: "Vital Signs", done: 4, total: 4 },
+                                                            { label: "Physical Exam", done: 1, total: 1 },
+                                                            { label: "Safety Assessment", done: 3, total: 3 },
+                                                        ].map(item => (
+                                                            <div key={item.label} className="flex items-center gap-3 mb-2">
+                                                                <div className="h-6 w-6 rounded-full bg-gray-100 flex items-center justify-center shrink-0">
+                                                                    <span className="text-[8px] font-bold text-gray-500">{item.label.slice(0, 2).toUpperCase()}</span>
+                                                                </div>
+                                                                <span className="text-xs text-gray-700 min-w-[100px]">{item.label}</span>
+                                                                <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                                                    <div className="h-full bg-green-500 rounded-full" style={{ width: `${(item.done / item.total) * 100}%` }} />
+                                                                </div>
+                                                                <span className="text-xs font-semibold text-gray-600 w-8 text-right">{item.done}/{item.total}</span>
+                                                            </div>
+                                                        ))}
+                                                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100 mt-2">
+                                                            ✓ Visit {visitStats.completed} Completed
+                                                        </span>
+                                                    </div>
+
+                                                    {/* Study Progress */}
+                                                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                                                        <h3 className="text-sm font-semibold text-gray-900 mb-2">Study Progress</h3>
+                                                        <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                                            <span>Treatment Phase</span>
+                                                            <span>{visitStats.completed}/{visitStats.total || 13} visits</span>
+                                                        </div>
+                                                        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-1">
+                                                            <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.round((visitStats.completed / (visitStats.total || 13)) * 100)}%` }} />
+                                                        </div>
+                                                        <p className="text-xs font-semibold text-green-600 mb-3">Week {visitStats.completed * 4}/53</p>
+                                                        <div className="grid grid-cols-3 gap-1 text-center text-xs">
+                                                            {[
+                                                                { label: "Completed", value: visitStats.completed, bg: "bg-gray-50" },
+                                                                { label: "Scheduled", value: visitStats.scheduled, bg: "bg-amber-50" },
+                                                                { label: "Remaining", value: Math.max(0, (visitStats.total || 13) - visitStats.completed - visitStats.scheduled), bg: "bg-gray-50" },
+                                                            ].map(item => (
+                                                                <div key={item.label} className={`${item.bg} rounded-lg p-1.5`}>
+                                                                    <p className="text-lg font-bold text-gray-900">{item.value}</p>
+                                                                    <p className="text-[10px] text-gray-400">{item.label}</p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Next Visit */}
+                                                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                                                        <h3 className="text-sm font-semibold text-gray-900 mb-2">Next Visit:</h3>
+                                                        <div className="bg-amber-50 border border-amber-100 rounded-lg p-2.5 mb-2">
+                                                            <p className="text-sm font-semibold text-gray-900">
+                                                                Visit {visitStats.completed + 1} – Week {(visitStats.completed + 1) * 4}
+                                                            </p>
+                                                            <p className="text-xs text-gray-500 mt-0.5">
+                                                                {new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })} at 9:00
+                                                            </p>
+                                                            <p className="text-xs text-gray-400">Main Clinical Site · 9 Activities</p>
+                                                        </div>
+                                                        <Button
+                                                            onClick={() => setIsScheduleVisitDialogOpen(true)}
+                                                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg h-8"
+                                                        >
+                                                            Send Reminder
+                                                        </Button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Bottom row: Safety + Quick Actions */}
+                                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                                                        <h3 className="text-sm font-semibold text-gray-900 mb-2">Safety Status</h3>
+                                                        <div className="flex items-center gap-2 mb-2 text-sm">
+                                                            <span className="text-gray-500">Flagged:</span>
+                                                            <span className="h-5 w-5 rounded-full bg-amber-100 text-amber-700 text-xs font-bold flex items-center justify-center">0</span>
+                                                        </div>
+                                                        <div className="text-xs text-gray-500 space-y-1">
+                                                            <div>Serious AEs: <span className="font-semibold text-green-600">None</span></div>
+                                                            <div>Protocol Deviations: <span className="font-semibold text-green-600">None</span></div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                                                        <h3 className="text-sm font-semibold text-gray-900 mb-2">Quick Actions</h3>
+                                                        <div className="grid grid-cols-2 gap-1.5">
+                                                            {[
+                                                                { label: "Flag Issue", icon: "🚩" },
+                                                                { label: "Contact", icon: "💬" },
+                                                                { label: "Schedule Visit", icon: "📅", onClick: () => setIsScheduleVisitDialogOpen(true) },
+                                                                { label: "Lab Results", icon: "🧪" },
+                                                            ].map(action => (
+                                                                <button
+                                                                    key={action.label}
+                                                                    onClick={action.onClick}
+                                                                    className="flex items-center gap-1.5 px-2 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-xs text-gray-700 font-medium"
+                                                                >
+                                                                    <span>{action.icon}</span> {action.label}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         )}
 
-                                        {/* View Details */}
-                                        <Button
-                                            variant="outline"
-                                            size="sm"
-                                            className="shrink-0 text-xs border-gray-200 rounded-lg h-8 px-3"
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                navigate(`/trial/${trialId}/patient/${enrollment.patient_id}`);
-                                            }}
-                                        >
-                                            View Details →
+                                        {patientActiveTab === "Visits" && (
+                                            <div>
+                                                <div className="flex items-center justify-between mb-4">
+                                                    <div>
+                                                        <h3 className="text-sm font-semibold text-gray-900">Visit Progress</h3>
+                                                        <p className="text-xs text-gray-400">{visitStats.completed} out of {visitStats.total} visits completed</p>
+                                                    </div>
+                                                </div>
+                                                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mb-5">
+                                                    <div className="h-full bg-green-500 rounded-full" style={{ width: `${visitStats.total > 0 ? Math.round((visitStats.completed / visitStats.total) * 100) : 0}%` }} />
+                                                </div>
+                                                {visitsQuery.isLoading ? (
+                                                    <div className="py-10 text-center text-sm text-gray-400">Loading visits...</div>
+                                                ) : !visitsQuery.data || visitsQuery.data.length === 0 ? (
+                                                    <div className="py-10 text-center text-sm text-gray-400">No visits scheduled yet.</div>
+                                                ) : (
+                                                    <div className="divide-y divide-gray-50 border border-gray-100 rounded-xl overflow-hidden">
+                                                        {visitsQuery.data.map((visit, index) => {
+                                                            const isCompleted = visit.status === "completed" || visit.status === "done";
+                                                            return (
+                                                                <div key={visit.id} className={`flex items-center gap-4 px-4 py-3 text-sm ${isCompleted ? "" : "bg-blue-50/30"}`}>
+                                                                    <div className="min-w-[100px]">
+                                                                        <p className="font-semibold text-gray-900 text-xs">Visit {index + 1}</p>
+                                                                        <p className="text-xs text-gray-400 capitalize">{visit.visit_type.replace(/_/g, " ")}</p>
+                                                                    </div>
+                                                                    <div className="w-8 text-xs text-gray-400 font-mono text-center">{index * 4}</div>
+                                                                    <div className="min-w-[80px] text-xs text-gray-600">
+                                                                        {new Date(visit.visit_date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" })}
+                                                                    </div>
+                                                                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold ${isCompleted ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>
+                                                                        {isCompleted ? "✓ Completed" : "Scheduled"}
+                                                                    </span>
+                                                                    <div className="flex-1 text-xs text-gray-400 truncate">{visit.notes || "—"}</div>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {(patientActiveTab === "Costs" || patientActiveTab === "Medical" || patientActiveTab === "Documents") && (
+                                            <div className="py-12 text-center text-sm text-gray-400">
+                                                {patientActiveTab} data will appear here once configured.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })()}
+
+                        {/* Schedule visit dialog */}
+                        <Dialog open={isScheduleVisitDialogOpen} onOpenChange={setIsScheduleVisitDialogOpen}>
+                            <DialogContent className="sm:max-w-[480px] rounded-2xl bg-white p-6 shadow-2xl">
+                                <DialogHeader className="pb-4 border-b border-gray-100">
+                                    <DialogTitle className="text-lg font-bold text-gray-950">Schedule Patient Visit</DialogTitle>
+                                </DialogHeader>
+                                <form onSubmit={(e) => { e.preventDefault(); createVisitMutation.mutate({ patientId: selectedPatientId || "", trialId, visitDate: visitForm.visitDate, visitTime: visitForm.visitTime, visitType: visitForm.visitType, notes: visitForm.notes, location: visitForm.location }); }} className="space-y-4 pt-4 text-xs">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1.5">
+                                            <label className="font-semibold text-gray-900">Visit Date</label>
+                                            <Input type="date" required value={visitForm.visitDate} onChange={(e) => setVisitForm({ ...visitForm, visitDate: e.target.value })} className="rounded-lg border-gray-200 text-xs" />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="font-semibold text-gray-900">Visit Time</label>
+                                            <Input type="time" required value={visitForm.visitTime} onChange={(e) => setVisitForm({ ...visitForm, visitTime: e.target.value })} className="rounded-lg border-gray-200 text-xs" />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1.5">
+                                            <label className="font-semibold text-gray-900">Visit Type</label>
+                                            <select value={visitForm.visitType} onChange={(e) => setVisitForm({ ...visitForm, visitType: e.target.value })} className="w-full rounded-lg border border-gray-200 bg-white text-xs py-2 px-3">
+                                                <option value="screening">Screening</option>
+                                                <option value="baseline">Baseline</option>
+                                                <option value="follow_up">Follow-up</option>
+                                                <option value="safety_check">Safety Check</option>
+                                                <option value="end_of_treatment">End of Treatment</option>
+                                            </select>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="font-semibold text-gray-900">Location</label>
+                                            <Input type="text" required value={visitForm.location} onChange={(e) => setVisitForm({ ...visitForm, location: e.target.value })} className="rounded-lg border-gray-200 text-xs" placeholder="Main Clinic" />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="font-semibold text-gray-900">Notes</label>
+                                        <Textarea value={visitForm.notes} onChange={(e) => setVisitForm({ ...visitForm, notes: e.target.value })} className="rounded-lg border-gray-200 text-xs min-h-[80px]" placeholder="Visit instructions..." />
+                                    </div>
+                                    <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+                                        <Button type="button" variant="outline" onClick={() => setIsScheduleVisitDialogOpen(false)} className="text-xs rounded-lg">Cancel</Button>
+                                        <Button type="submit" disabled={createVisitMutation.isPending} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg">
+                                            {createVisitMutation.isPending ? "Scheduling..." : "Schedule Visit"}
                                         </Button>
                                     </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
+                                </form>
+                            </DialogContent>
+                        </Dialog>
+                    </div>
+                )}
                 <Dialog open={isEnrollDialogOpen} onOpenChange={setIsEnrollDialogOpen}>
                     <DialogContent className="sm:max-w-lg bg-white rounded-xl shadow-lg border border-gray-100 p-6">
                         <DialogHeader>
