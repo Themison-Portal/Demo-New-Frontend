@@ -341,6 +341,10 @@ export default function TrialDetail() {
         }
     );
 
+    // "Ask Themison AI" needs at least one INDEXED document to retrieve from;
+    // disable it while docs are still processing or failed (or none uploaded).
+    const hasIndexedDocument = protocols.some((p: any) => !!p?.isIndexed);
+
     const protocolId = protocols?.[0]?.id;
     const { data: existingScaffold } = trpc.studySetupWizard.getScaffold.useQuery(
         { protocolId: protocolId || 0, demoMode: currentDataMode },
@@ -2047,7 +2051,12 @@ export default function TrialDetail() {
                                 Open Task Manager
                                 <ArrowRight className="h-4 w-4 ml-2" />
                             </Button>
-                            <Button variant="outline" onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+                            <Button
+                                variant="outline"
+                                onClick={() => navigate(`/trial/${trialId}/assistant`)}
+                                disabled={!hasIndexedDocument}
+                                title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
+                            >
                                 Ask Themison AI
                             </Button>
                         </div>
@@ -3199,6 +3208,8 @@ export default function TrialDetail() {
                                 size="sm"
                                 className="h-9 w-full justify-center"
                                 onClick={() => navigate(`/trial/${trialId}/assistant`)}
+                                disabled={!hasIndexedDocument}
+                                title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
                             >
                                 <Brain className="h-4 w-4 mr-2" />
                                 Ask Themison AI

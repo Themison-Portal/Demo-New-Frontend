@@ -461,6 +461,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const indexedDocumentCount =
     contextDocuments?.indexed ??
     (documents ? documents.filter((doc: any) => !!doc.isIndexed).length : 0);
+  // "Ask Themison AI" needs at least one INDEXED document to retrieve from; while
+  // docs are still processing or failed (or none uploaded), it should be disabled.
+  // Use the per-document list status (matches the row "Indexed" badge), not the
+  // trial-context aggregate which can be stale.
+  const hasIndexedDocument = (documents ?? []).some((doc: any) => !!doc.isIndexed);
   const activeDocumentCount =
     contextDocuments?.active ??
     (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);
@@ -535,7 +540,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+            <Button
+              onClick={() => navigate(`/trial/${trialId}/assistant`)}
+              disabled={!hasIndexedDocument}
+              title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
+            >
               <Brain className="h-4 w-4 mr-2" />
               Ask Themison AI
             </Button>
@@ -1185,6 +1194,8 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
               variant="outline"
               className="mt-4"
               onClick={() => navigate(`/trial/${trialId}/assistant`)}
+              disabled={!hasIndexedDocument}
+              title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
             >
               <Brain className="h-4 w-4 mr-2" />
               Ask Themison AI
