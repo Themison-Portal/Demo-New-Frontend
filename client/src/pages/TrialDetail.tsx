@@ -293,12 +293,9 @@ export default function TrialDetail() {
         if (typeof window === "undefined" || !trialTabStorageKey) return;
         const params = new URLSearchParams(window.location.search);
         const fromQuery = (params.get("tab") || "").trim();
-        const fromStorage = (window.localStorage.getItem(trialTabStorageKey) || "").trim();
         const nextTab = TRIAL_DETAIL_TAB_IDS.has(fromQuery)
             ? fromQuery
-            : TRIAL_DETAIL_TAB_IDS.has(fromStorage)
-                ? fromStorage
-                : "overview";
+            : "overview";
         setActiveTab(nextTab);
     }, [trialTabStorageKey]);
 
