@@ -451,9 +451,9 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                 >
                   <option value="screening">Screening</option>
                   <option value="baseline">Baseline</option>
+                  <option value="treatment">Treatment</option>
                   <option value="follow_up">Follow-up</option>
-                  <option value="safety_check">Safety Check</option>
-                  <option value="end_of_treatment">End of Treatment</option>
+                  <option value="study_closeout">Study Closeout</option>
                 </select>
               </div>
 

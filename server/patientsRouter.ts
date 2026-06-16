@@ -290,13 +290,47 @@ export const patientsRouter = router({
           throw new Error("Could not retrieve current member details");
         }
 
+        // Convert visitTime from "09:00 AM", "09:00", etc. to standard 24h "HH:MM:00"
+        let visitTime: string | null = null;
+        if (input.visitTime) {
+          const timeStr = input.visitTime.trim();
+          const match = timeStr.match(/^(\d{1,2}):(\d{2})(?:\s*|:)?(?:\d{2})?\s*(AM|PM)?$/i);
+          if (match) {
+            let hours = parseInt(match[1]);
+            const minutes = match[2];
+            const ampm = match[3];
+            if (ampm) {
+              if (ampm.toUpperCase() === "PM" && hours < 12) hours += 12;
+              if (ampm.toUpperCase() === "AM" && hours === 12) hours = 0;
+            }
+            visitTime = `${String(hours).padStart(2, "0")}:${minutes}:00`;
+          } else {
+            visitTime = timeStr;
+          }
+        }
+
+        // Sanitize visitType to match backend enum
+        const validVisitTypes = new Set([
+          "screening",
+          "baseline",
+          "follow_up",
+          "treatment",
+          "assessment",
+          "monitoring",
+          "adverse_event",
+          "unscheduled",
+          "study_closeout",
+          "withdrawal",
+        ]);
+        const visitType = validVisitTypes.has(input.visitType) ? input.visitType : "follow_up";
+
         const visitPayload = {
           patient_id: input.patientId,
           trial_id: input.trialId,
           doctor_id: currentMember.id,
           visit_date: input.visitDate.split("T")[0],
-          visit_time: input.visitTime || null,
-          visit_type: input.visitType,
+          visit_time: visitTime,
+          visit_type: visitType,
           status: "scheduled",
           notes: input.notes || "",
           location: input.location || "",
