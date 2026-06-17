@@ -198,6 +198,11 @@ export function StudySetupWizardEntry({
       setUploading(true);
       setSelectedCategory(category);
       const base64 = await toBase64(file);
+      console.log("[wizard-upload] document upload", {
+        filename: file.name,
+        trialId,
+        category,
+      });
       await uploadMutation.mutateAsync({
         trialId,
         filename: file.name,

@@ -332,6 +332,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
         const base64 = reader.result as string;
         const base64Data = base64.split(",")[1]; // Remove data:...;base64, prefix
 
+        console.log("[doc-hub-upload] document upload", {
+          filename: selectedFile.name,
+          trialId,
+          category,
+        });
         await uploadMutation.mutateAsync({
           trialId,
           filename: selectedFile.name,

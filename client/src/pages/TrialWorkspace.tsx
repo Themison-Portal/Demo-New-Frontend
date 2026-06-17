@@ -54,6 +54,10 @@ export function TrialWorkspace() {
   // Synchronous re-entry guard for handleSubmitTrial — blocks a double-click from
   // creating two trials + two protocol uploads (concurrent RAG ingest → OOM).
   const isSubmittingTrialRef = useRef(false);
+  // Once the protocol is uploaded for the current create session, don't upload it
+  // again — prevents a retained file from being re-uploaded into a second trial.
+  // Reset in resetCreateTrialForm when a new create session starts.
+  const protocolUploadedRef = useRef(false);
   const [indexedAnimationInstance, setIndexedAnimationInstance] = useState(0);
   const { getCurrentDataMode, state } = useDemoState();
   const currentDataMode = getCurrentDataMode();
@@ -133,9 +137,17 @@ export function TrialWorkspace() {
     setAddMemberOpen(false);
     setProtocolFile(null);
     setProtocolBase64(null);
+    protocolUploadedRef.current = false;
     setUploadState("idle");
     setIndexedAnimationInstance(0);
     setCreatedTrialForTeaser(null);
+  };
+
+  // Close the create-trial dialog AND reset the form, so a retained protocol file
+  // can never survive a close and get re-uploaded into a later trial.
+  const closeCreateTrial = () => {
+    setCreateTrialOpen(false);
+    resetCreateTrialForm();
   };
 
   const currentMember = useMemo(() => {
@@ -526,8 +538,12 @@ export function TrialWorkspace() {
     });
     setCreateStep(6);
 
-    if (selectedProtocolFile && selectedProtocolBase64) {
+    if (selectedProtocolFile && selectedProtocolBase64 && !protocolUploadedRef.current) {
       try {
+        console.log("[create-trial] protocol upload", {
+          filename: selectedProtocolFile.name,
+          trialId: createdTrialId,
+        });
         await uploadDocumentMutation.mutateAsync({
           trialId: createdTrialId,
           filename: selectedProtocolFile.name,
@@ -535,6 +551,11 @@ export function TrialWorkspace() {
           category: "Protocol",
           demoMode: currentDataMode,
         });
+        // Mark uploaded + clear the retained file so a later create-trial action
+        // can't silently re-upload the same protocol into a new trial.
+        protocolUploadedRef.current = true;
+        setProtocolFile(null);
+        setProtocolBase64(null);
       } catch {
         toast.error("Trial created, but protocol upload failed. Please upload in Document Hub.");
       }
@@ -678,7 +699,7 @@ export function TrialWorkspace() {
       <div className={`fixed inset-0 z-50 ${createTrialOpen ? "pointer-events-auto" : "pointer-events-none"}`}>
         <div
           className={`absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-500 ${createTrialOpen ? "opacity-100" : "opacity-0"}`}
-          onClick={() => setCreateTrialOpen(false)}
+          onClick={closeCreateTrial}
         />
         <div
           className={`absolute left-0 top-0 h-full w-full bg-white flex flex-col transform-gpu transition-[transform,opacity] duration-[1400ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform ${
@@ -740,7 +761,7 @@ export function TrialWorkspace() {
             </div>
             <button
               type="button"
-              onClick={() => setCreateTrialOpen(false)}
+              onClick={closeCreateTrial}
               className="absolute right-6 top-6 text-gray-400 hover:text-gray-600"
               aria-label="Close"
             >
