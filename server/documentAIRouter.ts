@@ -27,6 +27,8 @@ type DocumentAISource = {
   section?: string;
   category?: string | null;
   page?: number | null;
+  bboxes?: number[][];
+  highlightUrl?: string;
 };
 
 type WorksheetBlockType = "text" | "heading1" | "heading2" | "heading3" | "checklist";
@@ -389,6 +391,7 @@ async function queryViaCoreBackend(params: {
         page?: number | null;
         excerpt: string;
         relevance?: string | null;
+        bboxes?: number[][] | null;
       }>;
       route: string;
       documentsQueried: number;
@@ -410,15 +413,31 @@ async function queryViaCoreBackend(params: {
     const docByBeId = new Map(coreBackendDocs.map((d) => [d.coreBackendDocumentId, d]));
     const sources: DocumentAISource[] = beResponse.sources.map((src) => {
       const doc = docByBeId.get(src.fileId);
+      const fileUrl = doc?.fileUrl;
+      const page = typeof src.page === "number" ? src.page : null;
+      const bboxes = Array.isArray(src.bboxes) ? src.bboxes : undefined;
+      // When a source carries docling bboxes + a page + a backend-fetchable PDF
+      // URL, precompute the BE highlight-PDF URL so the viewer can show the cited
+      // sentences highlighted (server-burned via /query/highlighted-pdf, which is
+      // public). Falls back to the #search behaviour when bboxes are absent.
+      const highlightUrl =
+        bboxes && bboxes.length > 0 && page && fileUrl && ENV.fastapiBackendUrl
+          ? `${ENV.fastapiBackendUrl.replace(/\/$/, "")}/query/highlighted-pdf` +
+            `?doc=${encodeURIComponent(fileUrl)}` +
+            `&page=${page}` +
+            `&bboxes=${encodeURIComponent(JSON.stringify(bboxes))}`
+          : undefined;
       return {
         fileId: src.fileId,
         filename: src.filename || doc?.filename,
-        fileUrl: doc?.fileUrl,
+        fileUrl,
         protocolId: doc?.id,
         category: doc?.category ?? null,
         excerpt: src.excerpt,
         section: src.section ?? undefined,
-        page: typeof src.page === "number" ? src.page : null,
+        page,
+        bboxes,
+        highlightUrl,
       };
     });
 

@@ -1976,7 +1976,13 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   );
 
   const buildSourceViewerUrl = useCallback(
-    (source: { fileUrl?: string; page?: number; excerpt?: string }) => {
+    (source: { fileUrl?: string; page?: number; excerpt?: string; highlightUrl?: string }) => {
+      // Prefer the server-burned, bbox-accurate highlighted PDF when available
+      // (set by the BFF when the citation carries docling bboxes); otherwise fall
+      // back to the browser PDF.js text-search highlight.
+      if (source.highlightUrl) {
+        return source.highlightUrl;
+      }
       const baseUrl = source.fileUrl || "https://pdfobject.com/pdf/sample.pdf";
       const hashParts: string[] = [];
       if (source.page) hashParts.push(`page=${source.page}`);
@@ -2007,6 +2013,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     page?: number;
     fileUrl?: string;
     excerpt?: string;
+    highlightUrl?: string;
   }) => {
     if (taskPaneOpenedAt && taskPaneDocument) {
       logEvent({
