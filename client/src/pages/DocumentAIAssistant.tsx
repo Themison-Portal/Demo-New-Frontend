@@ -1981,7 +1981,11 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
       // (set by the BFF when the citation carries docling bboxes); otherwise fall
       // back to the browser PDF.js text-search highlight.
       if (source.highlightUrl) {
-        return source.highlightUrl;
+        // The highlight is burned onto the cited page; without a #page fragment
+        // the iframe opens at page 1 and the user never sees it. Jump to the page.
+        return source.page
+          ? `${source.highlightUrl}#page=${source.page}`
+          : source.highlightUrl;
       }
       const baseUrl = source.fileUrl || "https://pdfobject.com/pdf/sample.pdf";
       const hashParts: string[] = [];
