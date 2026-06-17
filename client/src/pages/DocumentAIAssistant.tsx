@@ -335,7 +335,7 @@ type WorksheetDraft = {
   title: string;
   subtitle: string;
   blocks: WorksheetBlock[];
-  sources: Array<{ filename: string; section?: string; excerpt?: string; fileUrl?: string; protocolId?: number; page?: number | null; category?: string }>;
+  sources: Array<{ filename: string; section?: string; excerpt?: string; fileUrl?: string; protocolId?: number; page?: number | null; category?: string; highlightUrl?: string }>;
   status: WorksheetDraftStatus;
   createdAt: string;
   updatedAt: string;
@@ -2226,6 +2226,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             section: source.section,
             category: source.category,
             page: source.page ?? null,
+            highlightUrl: (source as any).highlightUrl,
           })),
         });
 
@@ -2289,6 +2290,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             protocolId: source.protocolId,
             page: source.page ?? null,
             category: source.category,
+            highlightUrl: source.highlightUrl,
           })),
           status: "draft",
           createdAt: nowIso,
@@ -6086,6 +6088,7 @@ Output rules:
                                   page: source.page || undefined,
                                   fileUrl: source.fileUrl,
                                   excerpt: source.excerpt,
+                                  highlightUrl: source.highlightUrl,
                                 })
                               }
                               className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-left hover:bg-gray-50"
