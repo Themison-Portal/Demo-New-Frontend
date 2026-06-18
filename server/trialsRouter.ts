@@ -3,18 +3,20 @@ import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
-import { authTokenFrom } from "./_core/coreBackendDocs";
-import { trialsRouterLocal } from "./trialsRouter.local";
-import { isConnectionError } from "./_core/fallbackHelper";
+import { authTokenFrom, resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import { getDb } from "./db";
+import { buildTrialChildAggregates, cleanupTrialChildData } from "./_core/trialContext";
+import { logTelemetryEvent } from "./_core/telemetry";
+import type { DemoMode } from "./_core/demoMode";
 
 /**
  * Trials are BE-owned (Postgres `trials`, keyed by UUID). The FE client routes
  * by a bare `slug` (e.g. "cardiac-a2b3c", "1") and the demo dataset is a
  * `demo_mode` (sample|full|building). The BFF resolves (slug, demoMode) -> the
  * BE trial via `GET /api/trials/by-slug`, and presents `id = slug` to the
- * client so routing is unchanged. The FE MySQL `trials` table is only used as a
- * transition fallback (for trials not yet backfilled into the BE) and is
- * retired in Phase E.
+ * client so routing is unchanged. The FE MySQL `trials` table has been retired:
+ * trials are BE-only (no FE fallback). FE-owned CHILD aggregates (execution /
+ * telemetry) are still computed locally but keyed by the BE trial UUID.
  */
 
 // BE status CHECK is planning|active|completed|paused|cancelled. Map FE<->BE.
@@ -143,7 +145,13 @@ async function computeDocsAggregate(beUuid: string, ctx: any) {
     categories,
     latestUploadedAt,
     currentProtocol: current
-      ? { id: current.id, filename: current.document_name }
+      ? {
+          id: current.id,
+          filename: current.document_name,
+          documentVersion:
+            current.document_version ?? current.current_version ?? null,
+          releaseDate: current.release_date ?? null,
+        }
       : null,
     latestProtocolIndexed: current ? isReady(current.ingestion_status) : false,
     protocolCount: protocols.length,
@@ -229,17 +237,8 @@ export const trialsRouter = router({
         const enrolled = await enrolledCount(t.id, ctx);
         return { ...mapBackendTrialToClient(t), enrolledPatients: enrolled };
       } catch (err) {
-        // Offline OR trial not yet backfilled into the BE -> FE fallback.
-        try {
-          return await trialsRouterLocal
-            .createCaller(ctx)
-            .getById({ id: input.id, demoMode });
-        } catch {
-          if (!isConnectionError(err)) {
-            console.error(`Error getting trial ${input.id}:`, err);
-          }
-          return null;
-        }
+        console.error(`Error getting trial ${input.id}:`, err);
+        return null;
       }
     }),
 
@@ -255,57 +254,389 @@ export const trialsRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const demoMode = normalizeDemoMode(input.demoMode);
-      const include = Array.isArray(input.include) ? input.include : undefined;
-      const localArgs = {
-        id: input.id,
-        demoMode,
-        include,
-        pageContext: input.pageContext,
-        emitTelemetry: input.emitTelemetry,
-      };
+      const includeList = Array.isArray(input.include) ? input.include : undefined;
+      const include = new Set(
+        includeList ?? ["trial", "documents", "telemetry", "execution", "suggestions", "insights"]
+      );
+
+      let beTrial: any;
       try {
-        const beTrial = await resolveBeTrial(input.id, demoMode, ctx);
-        // Reuse the local aggregator for execution/telemetry/insights (keyed by
-        // the FE prefixed id); override `trial` with BE metadata and `documents`
-        // with a BE-computed aggregate (local reads the retired protocols table).
-        let localCtx: any = null;
-        try {
-          localCtx = await trialsRouterLocal.createCaller(ctx).getContext(localArgs);
-        } catch {
-          localCtx = null; // BE-only trial with no FE child data yet
-        }
-        const [enrolled, documents] = await Promise.all([
-          enrolledCount(beTrial.id, ctx),
-          computeDocsAggregate(beTrial.id, ctx),
-        ]);
-        const trial = {
-          ...mapBackendTrialToClient(beTrial),
-          enrolledPatients: enrolled,
-        };
-        if (localCtx) return { ...localCtx, trial, documents };
-        return {
-          trial,
-          protocol: null,
-          chunks: [],
-          documents,
-          telemetry: null,
-          execution: null,
-          suggestions: [],
-          insights: [],
-          pageContext: input.pageContext ?? null,
-          generatedAt: new Date().toISOString(),
-          contextVersion: "v2",
-        };
+        beTrial = await resolveBeTrial(input.id, demoMode, ctx);
       } catch (err) {
-        try {
-          return await trialsRouterLocal.createCaller(ctx).getContext(localArgs);
-        } catch {
-          if (!isConnectionError(err)) {
-            console.error("Error in getContext:", err);
+        console.error("Error in getContext:", err);
+        return null;
+      }
+
+      const trial = {
+        ...mapBackendTrialToClient(beTrial),
+        enrolledPatients: await enrolledCount(beTrial.id, ctx),
+      };
+
+      // FE-owned child aggregates (execution/telemetry) are keyed by the BE
+      // trial UUID. Documents come from the BE document hub. Both degrade to
+      // empty/typed defaults rather than throwing.
+      const mode = (demoMode ?? "sample") as DemoMode;
+      let beTrialUuid: string | null = null;
+      try {
+        const db = await getDb();
+        beTrialUuid = db ? await resolveBeTrialIdForRead(db, mode, input.id) : null;
+      } catch {
+        beTrialUuid = beTrial?.id ?? null;
+      }
+      if (!beTrialUuid) beTrialUuid = beTrial?.id ?? null;
+
+      const [documents, childAggregates] = await Promise.all([
+        computeDocsAggregate(beTrial.id, ctx),
+        (async () => {
+          try {
+            const db = await getDb();
+            if (!db) return null;
+            return await buildTrialChildAggregates(db, beTrialUuid);
+          } catch {
+            return null;
           }
-          return null;
+        })(),
+      ]);
+
+      const telemetryStats = childAggregates?.telemetry ?? {
+        totalEvents: 0,
+        eventsLast7Days: 0,
+        aiInvolvedEvents: 0,
+        aiUsageRate: 0,
+        byEventType: {} as Record<string, number>,
+        byAction: {} as Record<string, number>,
+        byEntityType: {} as Record<string, number>,
+        lastEventAt: null as Date | null,
+        recent: [] as any[],
+      };
+      const executionStats = childAggregates?.execution ?? {
+        scaffolds: 0,
+        phases: 0,
+        visitLikePhases: 0,
+        tasks: {
+          total: 0,
+          pending: 0,
+          inProgress: 0,
+          completed: 0,
+          blocked: 0,
+          unassigned: 0,
+          dueToday: 0,
+          dueSoon: 0,
+          overdue: 0,
+          progressPercent: 0,
+        },
+      };
+
+      const documentStats = documents;
+      let suggestions: any = undefined;
+      let insights: any = undefined;
+
+      if (include.has("suggestions") || include.has("insights")) {
+        const draftSuggestions: Array<{
+          id: string;
+          category: "documents" | "execution" | "timeline" | "readiness" | "telemetry";
+          priority: "high" | "medium" | "low";
+          title: string;
+          description: string;
+          actionLabel: string;
+          actionTarget: "overview" | "document-hub" | "study-setup-wizard" | "assistant";
+          confidence: number;
+        }> = [];
+
+        if (documentStats.total === 0) {
+          draftSuggestions.push({
+            id: "upload_protocol",
+            category: "documents",
+            priority: "high",
+            title: "Protocol missing in Document Hub",
+            description: "Upload the protocol to enable retrieval, extraction traceability, and AI context.",
+            actionLabel: "Open Document Hub",
+            actionTarget: "document-hub",
+            confidence: 0.99,
+          });
+        } else if (documentStats.processing > 0) {
+          draftSuggestions.push({
+            id: "wait_for_indexing",
+            category: "documents",
+            priority: "high",
+            title: `${documentStats.processing} document(s) still indexing`,
+            description: "Themison AI will provide stronger guidance after indexing finishes.",
+            actionLabel: "Review Documents",
+            actionTarget: "document-hub",
+            confidence: 0.95,
+          });
+        }
+
+        const protocolDocCount = documentStats.protocolCount ?? 0;
+        if (documentStats.total > 0 && protocolDocCount === 0) {
+          draftSuggestions.push({
+            id: "missing_protocol_category",
+            category: "documents",
+            priority: "high",
+            title: "No protocol document categorized",
+            description: "Tag at least one document as Protocol so task generation and citations stay traceable.",
+            actionLabel: "Review Document Categories",
+            actionTarget: "document-hub",
+            confidence: 0.93,
+          });
+        }
+
+        if (documentStats.currentProtocol && !documentStats.latestProtocolIndexed) {
+          draftSuggestions.push({
+            id: "current_protocol_not_indexed",
+            category: "documents",
+            priority: "high",
+            title: "Current protocol is not indexed yet",
+            description: "Wait for indexing or retry processing to ensure complete AI retrieval and citations.",
+            actionLabel: "Open Document Hub",
+            actionTarget: "document-hub",
+            confidence: 0.94,
+          });
+        }
+
+        if (executionStats.tasks.total === 0 && documentStats.total > 0) {
+          draftSuggestions.push({
+            id: "generate_study_setup",
+            category: "execution",
+            priority: "high",
+            title: "No execution plan generated yet",
+            description: "Run Study Setup Agent to convert protocol sections into actionable tasks.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.97,
+          });
+        }
+
+        if (!trial.startDate || !trial.endDate) {
+          draftSuggestions.push({
+            id: "set_trial_timeline",
+            category: "timeline",
+            priority: "medium",
+            title: "Timeline is incomplete",
+            description: "Set both start and end dates to activate schedule-based planning and alerts.",
+            actionLabel: "Set Dates in Overview",
+            actionTarget: "overview",
+            confidence: 0.92,
+          });
+        }
+
+        if (trial.startDate && trial.endDate) {
+          const startMs = new Date(trial.startDate).getTime();
+          const endMs = new Date(trial.endDate).getTime();
+          if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs < startMs) {
+            draftSuggestions.push({
+              id: "timeline_invalid_range",
+              category: "timeline",
+              priority: "high",
+              title: "Timeline date range is invalid",
+              description: "End date is earlier than start date. Correct timeline dates to avoid schedule errors.",
+              actionLabel: "Fix Dates in Overview",
+              actionTarget: "overview",
+              confidence: 0.98,
+            });
+          }
+        }
+
+        if ((trial.status || "not-started") === "not-started" && executionStats.tasks.total > 0) {
+          draftSuggestions.push({
+            id: "activate_trial",
+            category: "readiness",
+            priority: "medium",
+            title: "Trial is still not started",
+            description: "Activate when onboarding and core setup are complete to begin active tracking.",
+            actionLabel: "Review Trial Status",
+            actionTarget: "overview",
+            confidence: 0.82,
+          });
+        }
+
+        if (executionStats.tasks.blocked > 0) {
+          draftSuggestions.push({
+            id: "blocked_tasks",
+            category: "execution",
+            priority: "high",
+            title: `${executionStats.tasks.blocked} blocked task(s) detected`,
+            description: "Resolve blockers first to protect visit timelines and downstream dependencies.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.88,
+          });
+        }
+
+        if (executionStats.tasks.overdue > 0) {
+          draftSuggestions.push({
+            id: "overdue_tasks",
+            category: "execution",
+            priority: "high",
+            title: `${executionStats.tasks.overdue} overdue task(s)`,
+            description: "Overdue tasks may impact near-term visits. Review and re-sequence immediately.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.91,
+          });
+        }
+
+        if (executionStats.tasks.unassigned > 0) {
+          draftSuggestions.push({
+            id: "unassigned_tasks",
+            category: "execution",
+            priority: "medium",
+            title: `${executionStats.tasks.unassigned} task(s) are unassigned`,
+            description: "Assign owners to improve execution accountability and reduce delays.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.84,
+          });
+        }
+
+        if (executionStats.tasks.dueToday > 0) {
+          draftSuggestions.push({
+            id: "high_due_today_load",
+            category: "execution",
+            priority: executionStats.tasks.dueToday >= 5 ? "high" : "medium",
+            title: `${executionStats.tasks.dueToday} task(s) due today`,
+            description:
+              executionStats.tasks.dueToday >= 5
+                ? "Today’s workload is high. Prioritize critical-path items and confirm owners now."
+                : "Review today’s due tasks and confirm ownership to protect protocol timelines.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.8,
+          });
+        }
+
+        if (executionStats.tasks.dueSoon > 0) {
+          draftSuggestions.push({
+            id: "due_soon_tasks",
+            category: "execution",
+            priority: "medium",
+            title: `${executionStats.tasks.dueSoon} task(s) due within 72 hours`,
+            description:
+              "Near-term task deadlines are approaching. Sequence work now to avoid overdue spillover.",
+            actionLabel: "Open Study Setup Agent",
+            actionTarget: "study-setup-wizard",
+            confidence: 0.83,
+          });
+        }
+
+        if (telemetryStats.eventsLast7Days === 0) {
+          const isActiveLike =
+            (trial.status || "not-started") === "active" ||
+            (trial.status || "not-started") === "recruiting";
+          draftSuggestions.push({
+            id: "low_recent_activity",
+            category: "telemetry",
+            priority: isActiveLike ? "medium" : "low",
+            title: isActiveLike
+              ? "No recent activity detected on an active trial"
+              : "No recent operational activity detected",
+            description: isActiveLike
+              ? "Log current trial activity to keep risk detection and signals current."
+              : "As the team uses tasks and documents, Themison AI recommendations become more precise.",
+            actionLabel: "Open Themison AI",
+            actionTarget: "assistant",
+            confidence: 0.76,
+          });
+        }
+
+        if (telemetryStats.totalEvents >= 10 && telemetryStats.aiUsageRate < 0.08) {
+          draftSuggestions.push({
+            id: "low_ai_utilization",
+            category: "telemetry",
+            priority: "low",
+            title: "Low AI utilization in recent workflow",
+            description: "Use Themison AI for task clarifications and protocol Q&A to improve decision speed and consistency.",
+            actionLabel: "Ask Themison AI",
+            actionTarget: "assistant",
+            confidence: 0.67,
+          });
+        }
+
+        const priorityOrder = { high: 0, medium: 1, low: 2 } as const;
+        const rankedSuggestions = draftSuggestions.sort(
+          (a, b) => priorityOrder[a.priority] - priorityOrder[b.priority] || b.confidence - a.confidence
+        );
+        const normalizedPageContext = String(input.pageContext || "").toLowerCase();
+        const pageCategoryFilters: Record<string, Array<"documents" | "execution" | "timeline" | "readiness" | "telemetry">> = {
+          overview: ["documents", "execution", "timeline", "readiness", "telemetry"],
+          "document-hub": ["documents"],
+          "study-setup-wizard": ["execution", "readiness", "documents"],
+        };
+        const allowedCategories = pageCategoryFilters[normalizedPageContext];
+        suggestions = (allowedCategories
+          ? rankedSuggestions.filter((signal) => allowedCategories.includes(signal.category))
+          : rankedSuggestions).slice(0, 12);
+
+        const readinessParts = [
+          documentStats.total > 0,
+          documentStats.indexed > 0,
+          executionStats.tasks.total > 0,
+          Boolean(trial.startDate && trial.endDate),
+          (trial.status || "not-started") !== "not-started",
+        ];
+        const readinessScore = Math.round(
+          (readinessParts.filter(Boolean).length / readinessParts.length) * 100
+        );
+        const aiCoverageScore =
+          documentStats.active > 0
+            ? Math.round((documentStats.indexed / documentStats.active) * 100)
+            : 0;
+
+        insights = {
+          readinessScore,
+          aiCoverageScore,
+          blockedTaskRisk: executionStats.tasks.blocked > 0 ? "high" : "low",
+          pendingTaskLoad: executionStats.tasks.pending,
+          dueTodayTasks: executionStats.tasks.dueToday,
+          dueSoonTasks: executionStats.tasks.dueSoon,
+          totalSignals: suggestions.length,
+        };
+      }
+
+      if (input.emitTelemetry) {
+        try {
+          await logTelemetryEvent({
+            eventType: "trial_context_viewed",
+            action: "viewed",
+            userId: ctx.user ? String(ctx.user.id) : null,
+            entityType: "trial",
+            entityId: beTrialUuid ?? beTrial.id,
+            payload: {
+              pageContext: input.pageContext ?? null,
+              include: Array.from(include),
+              suggestionCount: Array.isArray(suggestions) ? suggestions.length : 0,
+              documentTotal: documentStats.total,
+              executionTaskTotal: executionStats.tasks.total,
+              demoMode: mode,
+            },
+          });
+        } catch {
+          /* telemetry is best-effort */
         }
       }
+
+      return {
+        trial: include.has("trial") ? trial : undefined,
+        documents: include.has("documents") ? documents : undefined,
+        telemetry: include.has("telemetry") ? telemetryStats : undefined,
+        execution: include.has("execution") ? executionStats : undefined,
+        suggestions: include.has("suggestions") ? suggestions ?? [] : undefined,
+        insights:
+          include.has("insights")
+            ? insights ?? {
+                readinessScore: 0,
+                aiCoverageScore: 0,
+                blockedTaskRisk: "low",
+                pendingTaskLoad: 0,
+                dueTodayTasks: 0,
+                dueSoonTasks: 0,
+                totalSignals: 0,
+              }
+            : undefined,
+        pageContext: input.pageContext ?? null,
+        generatedAt: new Date().toISOString(),
+        contextVersion: "v2",
+      };
     }),
 
   list: publicProcedure
@@ -324,12 +655,8 @@ export const trialsRouter = router({
           }))
         );
       } catch (err) {
-        try {
-          return await trialsRouterLocal.createCaller(ctx).list({ demoMode });
-        } catch {
-          if (!isConnectionError(err)) console.error("Error listing trials:", err);
-          return [];
-        }
+        console.error("Error listing trials:", err);
+        return [];
       }
     }),
 
@@ -360,11 +687,6 @@ export const trialsRouter = router({
         });
         return mapBackendTrialToClient(created);
       } catch (err) {
-        if (isConnectionError(err)) {
-          return trialsRouterLocal
-            .createCaller(ctx)
-            .create({ ...input, id: slug, demoMode: demoMode ?? "sample" } as any);
-        }
         console.error("Error creating trial:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -386,11 +708,6 @@ export const trialsRouter = router({
         });
         return mapBackendTrialToClient(updated);
       } catch (err) {
-        if (isConnectionError(err)) {
-          return trialsRouterLocal
-            .createCaller(ctx)
-            .update({ ...input, demoMode } as any);
-        }
         console.error("Error updating trial:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -403,28 +720,25 @@ export const trialsRouter = router({
     .input(z.object({ id: z.string(), demoMode: z.any().optional() }))
     .mutation(async ({ input, ctx }) => {
       const demoMode = normalizeDemoMode(input.demoMode);
+      const mode = (demoMode ?? "sample") as DemoMode;
       try {
         const beTrial = await resolveBeTrial(input.id, demoMode, ctx);
         await callBackend(`/api/trials/${beTrial.id}`, {
           method: "DELETE",
           user: ctx.user,
         });
-        // Also cascade FE-owned child data for this trial (scaffolds/maps/etc.)
-        // — handled by the local delete until Phase C moves it server-side.
+        // Best-effort cascade of FE-owned child data, keyed by the BE trial UUID.
         try {
-          await trialsRouterLocal
-            .createCaller(ctx)
-            .delete({ id: input.id, demoMode: demoMode ?? "sample" });
+          const db = await getDb();
+          if (db) {
+            const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.id);
+            await cleanupTrialChildData(db, beTrialUuid ?? beTrial.id);
+          }
         } catch {
           /* FE child cleanup best-effort */
         }
         return { success: true };
       } catch (err) {
-        if (isConnectionError(err)) {
-          return trialsRouterLocal
-            .createCaller(ctx)
-            .delete({ id: input.id, demoMode: demoMode ?? "sample" });
-        }
         console.error("Error deleting trial:", err);
         return { success: true };
       }

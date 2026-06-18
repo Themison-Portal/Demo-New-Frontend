@@ -2,15 +2,13 @@
  * Shared helpers for talking to the BE's trial-documents API from the BFF.
  *
  * Documents are owned by the BE (`trial_documents` in Postgres); the FE
- * `protocols` table is retired. Trials stay FE-owned, so resolving an FE trial
- * id to the BE trial UUID (`trials.coreBackendTrialId`) is the one MySQL read
- * the document paths still need.
+ * `protocols` table is retired. Trials are BE-owned too — the client's slug is
+ * resolved to the BE trial UUID via the BE `by-slug` endpoint (no FE MySQL
+ * `trials` read), so these document paths no longer touch FE MySQL at all.
  */
 
-import { eq } from "drizzle-orm";
-import { trials } from "../../drizzle/schema";
 import { getDb } from "../db";
-import { resolveTrialId, type DemoMode } from "./demoMode";
+import { type DemoMode } from "./demoMode";
 import { callBackend } from "./backendClient";
 import type { CoreBackendTrialDocument } from "@shared/coreBackendTypes";
 
@@ -30,12 +28,12 @@ export function authTokenFrom(ctx: unknown): string {
 }
 
 /**
- * Resolve the BE trial UUID for a (demo-prefixed or real) FE trial id, WITHOUT
- * provisioning a BE trial. Returns null when there is no BE trial yet, so read
- * paths return an empty list rather than creating one.
- *  - An explicit `trials.coreBackendTrialId` mapping always wins.
- *  - A real (non-demo) trial's `resolvedTrialId` already IS the BE UUID.
- *  - Demo/building trials with no mapping yet → null.
+ * Resolve the BE trial UUID for a client trial id (bare slug or BE UUID),
+ * WITHOUT provisioning a BE trial. Returns null when there is no BE trial, so
+ * read paths return an empty list rather than creating one.
+ *  - A bare BE UUID resolves to itself.
+ *  - Otherwise the slug (+ demo_mode) is resolved via the BE `by-slug` endpoint.
+ *  - No BE trial for that slug/mode → null.
  */
 export async function resolveBeTrialIdForRead(
   db: Db,
@@ -58,21 +56,10 @@ export async function resolveBeTrialIdForRead(
       /* not found for this query — try the next, then the FE mapping */
     }
   }
-  // 3. Transition fallback: the FE `trials.coreBackendTrialId` mapping (for
-  //    trials not yet backfilled into the BE). Retired in Phase E.
-  const resolvedTrialId = await resolveTrialId(db, mode, trialId, mode !== "building");
-  const [row] = await db
-    .select({ cb: trials.coreBackendTrialId })
-    .from(trials)
-    .where(eq(trials.id, resolvedTrialId))
-    .limit(1);
-  if (row?.cb) return row.cb;
-  if (!resolvedTrialId.includes(":") && UUID_RE.test(resolvedTrialId)) {
-    return resolvedTrialId;
-  }
+  // No BE trial for this slug/mode. The FE `trials` table is retired, so there
+  // is no further fallback — the trial simply isn't in the BE.
   console.warn(
-    `[coreBackendDocs] No BE trial mapping for FE trial "${trialId}" ` +
-      `(mode=${mode}, resolved=${resolvedTrialId}, hasRow=${!!row}, cb=${row?.cb ?? null}). ` +
+    `[coreBackendDocs] No BE trial for "${trialId}" (mode=${mode}). ` +
       `Documents for this trial cannot be listed from the BE.`
   );
   return null;

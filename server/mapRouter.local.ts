@@ -18,7 +18,6 @@ import {
   mapTelemetryEvents,
   protocolChunks,
   protocolMapSections,
-  trials,
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
@@ -27,6 +26,7 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
 import { resolveTrialId, stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
 import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import { callBackend } from "./_core/backendClient";
 
 const MAP_STATUSES = ["draft", "active", "revised", "archived"] as const;
 const MAP_DEMO_MODES: DemoMode[] = ["sample", "full", "building"];
@@ -2026,26 +2026,34 @@ export const mapRouterLocal = router({
         trialCandidateIds.add(String(protocol.trialId));
       }
 
-      const trialRows =
-        trialCandidateIds.size > 0
-          ? await db
-              .select()
-              .from(trials)
-              .where(inArray(trials.id, Array.from(trialCandidateIds)))
-          : [];
-      const trialById = new Map(trialRows.map((row) => [row.id, row]));
-      const preferredTrialIds = [
-        protocol?.trialId ? String(protocol.trialId) : "",
-        requestedMode ? toDemoId(requestedMode, input.trialId) : "",
-        input.trialId,
-        ...Array.from(trialCandidateIds),
-      ]
-        .map((id) => id.trim())
-        .filter((id, index, arr) => id.length > 0 && arr.indexOf(id) === index);
-      const trial =
-        preferredTrialIds.map((id) => trialById.get(id)).find((row): row is typeof trialRows[number] => Boolean(row)) ??
-        trialRows[0] ??
-        null;
+      // Trials are BE-owned (the FE `trials` table is retired). Read the trial's
+      // metadata/scheduling fields from the BE by slug (+ demo_mode); on a 404
+      // (trial missing) fall through to null, as the old code did for missing rows.
+      const trialMode = (requestedMode as DemoMode) ?? "full";
+      let trial: {
+        title: string | null;
+        sponsor: string | null;
+        indication: string | null;
+        startDate: string | null;
+        endDate: string | null;
+      } | null = null;
+      try {
+        const beTrial = await callBackend<any>(`/api/trials/by-slug`, {
+          query: { slug: input.trialId, demo_mode: trialMode },
+        });
+        if (beTrial?.id) {
+          trial = {
+            title: beTrial.name ?? null,
+            sponsor: beTrial.sponsor ?? null,
+            indication: beTrial.indication ?? null,
+            startDate: beTrial.study_start ?? null,
+            endDate: beTrial.estimated_close_out ?? null,
+          };
+        }
+      } catch {
+        // BE 404 / lookup failure: leave `trial` null (defaults applied below).
+        trial = null;
+      }
       let targetMap: typeof executionMaps.$inferSelect | undefined;
       if (input.mapId) {
         const [map] = await db.select().from(executionMaps).where(eq(executionMaps.id, input.mapId)).limit(1);

@@ -7,19 +7,32 @@ import {
   mapTelemetryEvents,
   protocolChunks,
   protocols,
-  trials,
   users,
   type ExecutionMap,
   type MapPhase,
   type MapTask,
   type MapTelemetryEvent,
   type Protocol,
-  type Trial,
 } from "../../drizzle/schema";
 import { invokeLLM } from "./llm";
 import { ENV } from "./env";
-import { stripDemoId } from "./demoMode";
-import { resolveBeTrialIdForRead } from "./coreBackendDocs";
+import { stripDemoId, toDemoId } from "./demoMode";
+import { callBackend } from "./backendClient";
+
+// Trials are BE-owned (the FE MySQL `trials` table is retired). This file
+// sources trial metadata from the BE (`/api/trials*`) and shapes it like the
+// rows it used to read from the FE table. BE list rows carry both the FE key
+// (`slug`) and the BE UUID (`id`); operational/`executionMaps` joins stay keyed
+// by the BE UUID.
+const UQ_BE_TO_FE_STATUS: Record<string, string> = {
+  planning: "not-started",
+  paused: "on-hold",
+  cancelled: "terminated",
+};
+function uqBeStatusToFe(status: string | undefined | null): string {
+  if (!status) return "not-started";
+  return UQ_BE_TO_FE_STATUS[status] ?? status;
+}
 import {
   getProtocolContextChunks,
   getStructuredEligibilityCriteria,
@@ -2738,25 +2751,29 @@ async function collectOperationalEvidence(
   };
   if (!trialId) {
     const asOf = formatIsoNow();
-    const prefixedTrialRows = (await db
-      .select()
-      .from(trials)
-      .where(like(trials.id, `${demoMode}:%`))
-      .orderBy(desc(trials.updatedAt))) as Trial[];
-    const trialRows =
-      prefixedTrialRows.length > 0
-        ? prefixedTrialRows
-        : demoMode === "building"
-          ? []
-          : ((await db
-              .select()
-              .from(trials)
-              .where(notLike(trials.id, "%:%"))
-              .orderBy(desc(trials.updatedAt))) as Trial[]);
+    // Trials are BE-owned: list trials for this demo mode from the BE. Keep
+    // `id` as the FE prefixed key (so the FE-keyed `protocols` join below still
+    // matches) and carry the BE UUID for executionMaps (BE-keyed) lookups.
+    let beTrialList: any[] = [];
+    try {
+      beTrialList = await callBackend<any[]>("/api/trials", { query: { demo_mode: demoMode } });
+    } catch {
+      beTrialList = [];
+    }
+    const trialRows = (beTrialList ?? []).map((t: any) => ({
+      id: toDemoId(demoMode, String(t?.slug || t?.id)),
+      beTrialUuid: (t?.id ?? null) as string | null,
+      title: (t?.name ?? null) as string | null,
+      investigationalProduct: (t?.investigational_product ?? null) as string | null,
+      status: uqBeStatusToFe(t?.status),
+      phase: (t?.phase ?? null) as string | null,
+      enrolledPatients: Number(t?.enrolled_patients ?? 0),
+      targetPatients: (t?.target_patients ?? null) as number | null,
+    }));
     if (trialRows.length === 0) return [] as OperationalEvidence[];
 
     const evidence: OperationalEvidence[] = [];
-    const statusCounts = trialRows.reduce((acc: Record<string, number>, trial: Trial) => {
+    const statusCounts = trialRows.reduce((acc: Record<string, number>, trial) => {
       const key = String(trial.status || "unknown");
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
@@ -2846,16 +2863,13 @@ async function collectOperationalEvidence(
       });
     }
 
-    // executionMaps is BE-keyed: resolve each FE trial id to its BE trial UUID,
-    // then query/group maps by the BE UUID (FE trial-name lookups are re-keyed
-    // by BE UUID below so display still resolves).
+    // executionMaps is BE-keyed: the BE trial list already carries each trial's
+    // BE UUID, so map FE prefixed id -> BE UUID directly (FE trial-name lookups
+    // are re-keyed by BE UUID below so display still resolves).
     const beUuidByFeId = new Map<string, string>();
-    await Promise.all(
-      trialRows.map(async (trial) => {
-        const be = await resolveBeTrialIdForRead(db, demoMode, stripDemoId(String(trial.id)));
-        if (be) beUuidByFeId.set(String(trial.id), be);
-      })
-    );
+    for (const trial of trialRows) {
+      if (trial.beTrialUuid) beUuidByFeId.set(String(trial.id), trial.beTrialUuid);
+    }
     const beTrialUuidsForMaps = Array.from(beUuidByFeId.values());
     const mapRows = beTrialUuidsForMaps.length
       ? ((await db
@@ -3104,8 +3118,39 @@ async function collectOperationalEvidence(
   }
   const asOf = formatIsoNow();
 
-  const trialRows = (await db.select().from(trials).where(eq(trials.id, trialId)).limit(1)) as Trial[];
-  const trial = trialRows[0];
+  // Trials are BE-owned: fetch this trial's metadata from the BE by (slug,
+  // demo_mode) instead of the retired FE `trials` table. The FE-keyed
+  // `protocols` read below intentionally still uses the FE trial id; executionMaps
+  // (BE-keyed) uses `beTrialUuid`.
+  let trial: {
+    id: string;
+    title: string | null;
+    investigationalProduct: string | null;
+    status: string;
+    phase: string | null;
+    enrolledPatients: number;
+    targetPatients: number | null;
+  } | null = null;
+  try {
+    const beTrial = await callBackend<any>("/api/trials/by-slug", {
+      query: { slug: stripDemoId(String(trialId)), demo_mode: demoMode },
+    });
+    if (beTrial?.id || beTrial?.slug) {
+      trial = {
+        // Keep the FE prefixed id as the internal join key (mapTrialById <->
+        // trialLabelById), matching the pre-retirement behavior.
+        id: toDemoId(demoMode, String(beTrial?.slug || beTrial?.id)),
+        title: beTrial?.name ?? null,
+        investigationalProduct: beTrial?.investigational_product ?? null,
+        status: uqBeStatusToFe(beTrial?.status),
+        phase: beTrial?.phase ?? null,
+        enrolledPatients: Number(beTrial?.enrolled_patients ?? 0),
+        targetPatients: beTrial?.target_patients ?? null,
+      };
+    }
+  } catch {
+    trial = null;
+  }
   if (!trial) return [] as OperationalEvidence[];
 
   const evidence: OperationalEvidence[] = [];

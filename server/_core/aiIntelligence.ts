@@ -9,17 +9,72 @@ import {
   tasks,
   taskScaffolds,
   telemetryEvents,
-  trials,
   knowledgeGraphEdges,
   knowledgeGraphNodes,
 } from "../../drizzle/schema";
-import { and, desc, eq, inArray, like, notLike } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { DemoMode } from "./demoMode";
-import { stripDemoId } from "./demoMode";
+import { stripDemoId, toDemoId } from "./demoMode";
 import { resolveBeTrialIdForRead } from "./coreBackendDocs";
+import { callBackend } from "./backendClient";
 import { ENV } from "./env";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
+
+// Trials are BE-owned: the FE MySQL `trials` table is retired. These helpers
+// source trial metadata from the BE (`/api/trials*`) and shape it like the rows
+// the downstream snapshot/graph logic used to read from the FE table. Trial
+// identity here is the BE `slug` (the canonical FE trial key, e.g. "1"), kept
+// consistent for node keys and `stripDemoId`. Child tables stay BE-UUID keyed.
+const BE_TO_FE_STATUS: Record<string, string> = {
+  planning: "not-started",
+  paused: "on-hold",
+  cancelled: "terminated",
+};
+
+function beStatusToFe(status: string | undefined | null): string {
+  if (!status) return "not-started";
+  return BE_TO_FE_STATUS[status] ?? status;
+}
+
+/** Demo mode encoded in a prefixed FE trial id (e.g. "sample:1" -> "sample"). */
+function modeFromTrialId(trialId: string): DemoMode {
+  const prefix = trialId.includes(":") ? trialId.split(":")[0] : "";
+  return prefix === "full" || prefix === "building" ? (prefix as DemoMode) : "sample";
+}
+
+/**
+ * Map a BE trial row to the shape the snapshot/graph logic expects. `id` is the
+ * BE `slug` (the FE trial key) so `stripDemoId`/node keys behave as before.
+ */
+function mapBeTrialRow(t: any) {
+  return {
+    id: t?.slug || t?.id,
+    title: t?.name ?? null,
+    investigationalProduct: t?.investigational_product ?? null,
+    status: beStatusToFe(t?.status),
+    phase: t?.phase ?? null,
+    sponsor: t?.sponsor ?? null,
+    indication: t?.indication ?? null,
+    startDate: t?.study_start ?? null,
+    endDate: t?.estimated_close_out ?? null,
+    enrolledPatients: t?.enrolled_patients ?? 0,
+    targetPatients: t?.target_patients ?? null,
+    createdAt: t?.created_at ?? null,
+  };
+}
+
+/** Fetch a single BE trial (by FE slug + demo mode) and map it, or null. */
+async function fetchBeTrial(slug: string, mode: DemoMode) {
+  try {
+    const t = await callBackend<any>("/api/trials/by-slug", {
+      query: { slug, demo_mode: mode },
+    });
+    return t?.id || t?.slug ? mapBeTrialRow(t) : null;
+  } catch {
+    return null;
+  }
+}
 
 function toDayKey(date = new Date()) {
   return date.toISOString().slice(0, 10);
@@ -96,7 +151,9 @@ export async function computeTrialIntelligenceSnapshot(
   trialId: string,
   beTrialUuid: string | null = null
 ): Promise<TrialIntelligenceSnapshot | null> {
-  const [trial] = await db.select().from(trials).where(eq(trials.id, trialId)).limit(1);
+  // Trials are BE-owned: source trial metadata from the BE by (slug, demo_mode)
+  // instead of the retired FE `trials` table. Child tables below stay BE-keyed.
+  const trial = await fetchBeTrial(stripDemoId(String(trialId)), modeFromTrialId(String(trialId)));
   if (!trial) return null;
 
   const protocolRows = await db
@@ -357,7 +414,9 @@ export async function syncTrialKnowledgeGraph(
   trialId: string,
   beTrialUuid: string | null = null
 ) {
-  const [trial] = await db.select().from(trials).where(eq(trials.id, trialId)).limit(1);
+  // Trials are BE-owned: source trial metadata from the BE by (slug, demo_mode)
+  // instead of the retired FE `trials` table. Graph nodes/edges stay BE-keyed.
+  const trial = await fetchBeTrial(stripDemoId(String(trialId)), modeFromTrialId(String(trialId)));
   if (!trial) {
     return {
       trialId,
@@ -529,21 +588,20 @@ export async function syncTrialKnowledgeGraph(
   } as const;
 }
 
-async function getTrialsForMode(db: any, mode: DemoMode) {
-  const prefixed = await db
-    .select()
-    .from(trials)
-    .where(like(trials.id, `${mode}:%`))
-    .orderBy(trials.createdAt);
-
-  if (prefixed.length > 0) return prefixed;
-  if (mode === "building") return [];
-
-  return await db
-    .select()
-    .from(trials)
-    .where(notLike(trials.id, "%:%"))
-    .orderBy(trials.createdAt);
+async function getTrialsForMode(_db: any, mode: DemoMode) {
+  // Trials are BE-owned: list trials for this demo mode from the BE instead of
+  // the retired FE `trials` table. Each row is shaped like the old FE row, and
+  // its `id` is re-prefixed with the mode (e.g. "full:1") so downstream
+  // `stripDemoId`/`modeFromTrialId` resolve the BE trial under the right mode.
+  let beTrials: any[] = [];
+  try {
+    beTrials = await callBackend<any[]>("/api/trials", { query: { demo_mode: mode } });
+  } catch {
+    beTrials = [];
+  }
+  return (beTrials ?? [])
+    .map(mapBeTrialRow)
+    .map((trial) => ({ ...trial, id: toDemoId(mode, String(trial.id)) }));
 }
 
 export async function buildCrossTrialAnalytics(db: any, mode: DemoMode, persistRollups = false) {

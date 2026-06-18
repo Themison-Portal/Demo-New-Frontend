@@ -12,7 +12,6 @@ import {
   threadParticipants,
   threads,
   trialInboxes,
-  trials,
   users,
 } from "../drizzle/schema";
 import { getDb } from "./db";
@@ -128,21 +127,28 @@ function shouldInvokeAI(content: string, forceForThread = false) {
   return intent !== "conversational";
 }
 
-async function getTrialContext(db: DbClient, trialId: string) {
-  const [trial] = await db
-    .select({
-      id: trials.id,
-      name: trials.title,
-      protocolNumber: trials.protocolNumber,
-      phase: trials.phase,
-      therapeuticArea: trials.indication,
-      status: trials.status,
-    })
-    .from(trials)
-    .where(eq(trials.id, trialId))
-    .limit(1);
-
-  return trial ?? null;
+async function getTrialContext(db: DbClient, trialId: string, mode: DemoMode = "sample") {
+  // Trials are BE-owned (the FE `trials` table is retired). Resolve the BE
+  // trial UUID via the BE and read its metadata from `/api/trials/by-slug`.
+  const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+  if (!beTrialId) return null;
+  let t: any;
+  try {
+    t = await callBackend<any>(`/api/trials/by-slug`, {
+      query: { slug: trialId, demo_mode: mode },
+    });
+  } catch {
+    return null;
+  }
+  if (!t?.id) return null;
+  return {
+    id: t.id,
+    name: t.name ?? null,
+    protocolNumber: t.protocol_number ?? null,
+    phase: t.phase ?? null,
+    therapeuticArea: t.indication ?? null,
+    status: t.status ?? null,
+  };
 }
 
 async function getPrimaryUserContext(db: DbClient, userId: number) {
@@ -160,16 +166,16 @@ async function getPrimaryUserContext(db: DbClient, userId: number) {
   return user ?? null;
 }
 
-async function getProtocolChunksForTrial(db: DbClient, trialId: string, query: string) {
-  // Documents are BE-owned (the FE `protocols` table is retired). Resolve the
-  // BE trial and take its top documents (current first, then newest).
-  const [trialRow] = await db
-    .select({ cb: trials.coreBackendTrialId })
-    .from(trials)
-    .where(eq(trials.id, trialId))
-    .limit(1);
-  let beTrialId = trialRow?.cb ?? null;
-  if (!beTrialId && !trialId.includes(":")) beTrialId = trialId; // real trial: id IS the BE UUID
+async function getProtocolChunksForTrial(
+  db: DbClient,
+  trialId: string,
+  query: string,
+  mode: DemoMode = "sample"
+) {
+  // Documents are BE-owned (the FE `protocols` table is retired). Trials are
+  // also BE-owned, so resolve the BE trial UUID via the BE (no FE `trials`
+  // read) and take its top documents (current first, then newest).
+  const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
   if (!beTrialId) return [];
 
   let beDocs;

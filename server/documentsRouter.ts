@@ -1,10 +1,10 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { documentCategories, trials } from "../drizzle/schema";
-import { eq, like, notLike } from "drizzle-orm";
+import { documentCategories } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 import { callBackend } from "./_core/backendClient";
-import { resolveTrialId, stripDemoId, type DemoMode } from "./_core/demoMode";
+import { type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { ENV } from "./_core/env";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
@@ -12,7 +12,6 @@ import {
   CoreBackendError,
   type CoreBackendTrialDocument,
 } from "@shared/coreBackendTypes";
-import { normalizeStatusForBackend } from "./trialsRouter";
 import {
   authTokenFrom,
   resolveBeTrialIdForRead,
@@ -22,67 +21,9 @@ import {
 /**
  * Documents are owned by the BE (`trial_documents` in Postgres) — the FE
  * `protocols` table is retired. These BFF procedures read/write documents
- * through the core-backend REST API; the FE MySQL is only consulted for the
- * `trials.coreBackendTrialId` mapping (trials stay FE-owned).
+ * through the core-backend REST API. Trials are BE-owned now, so this router
+ * no longer touches the FE MySQL `trials` table.
  */
-
-/**
- * Demo/building trials are local sandbox rows in the FE MySQL `trials` table
- * with no core-backend counterpart. This lazily creates a core-backend trial
- * for such a local trial (on first upload) and persists the mapping in
- * `trials.coreBackendTrialId`. Returns the core-backend trial UUID, or null if
- * registration fails.
- */
-async function ensureCoreBackendTrialId(
-  db: NonNullable<Awaited<ReturnType<typeof getDb>>>,
-  localTrialId: string,
-  meta: {
-    title?: string | null;
-    sponsor?: string | null;
-    phase?: string | null;
-    location?: string | null;
-    status?: string | null;
-    description?: string | null;
-    indication?: string | null;
-  },
-  user: unknown
-): Promise<string | null> {
-  try {
-    const created = await callBackend<{ id?: string }>(`/api/trials/with-assignments`, {
-      method: "POST",
-      body: {
-        name: meta.title || "Untitled Trial",
-        sponsor: meta.sponsor || "",
-        phase: meta.phase || "Phase I",
-        location: meta.location || "",
-        status: normalizeStatusForBackend(meta.status),
-        description: meta.description || meta.indication || "",
-        members: [],
-        pending_members: [],
-      },
-      user: user as any,
-    });
-    if (created?.id) {
-      await db
-        .update(trials)
-        .set({ coreBackendTrialId: created.id })
-        .where(eq(trials.id, localTrialId));
-      console.log(
-        `[documents] Registered local trial ${localTrialId} with core-backend trial ${created.id}`
-      );
-      return created.id;
-    }
-    console.warn(
-      `[documents] core-backend trial create returned no id for ${localTrialId}.`
-    );
-  } catch (error) {
-    console.warn(
-      `[documents] Failed to register local trial ${localTrialId} with core-backend.`,
-      error
-    );
-  }
-  return null;
-}
 
 const parseVersionNumber = (value?: string | null) => {
   if (!value) return 0;
@@ -182,12 +123,6 @@ export const documentsRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(
-        db,
-        mode,
-        input.trialId,
-        mode !== "building"
-      );
 
       const buffer = Buffer.from(input.fileData, "base64");
       if (buffer.length > 50 * 1024 * 1024) {
@@ -200,44 +135,19 @@ export const documentsRouter = router({
         );
       }
 
-      // Resolve — and for demo/building trials, lazily provision — the
-      // core-backend trial this upload attaches to.
-      const [trialMeta] = await db
-        .select({
-          coreBackendTrialId: trials.coreBackendTrialId,
-          currentVersion: trials.currentVersion,
-          amendmentVersion: trials.amendmentVersion,
-          releaseDate: trials.releaseDate,
-          title: trials.title,
-          sponsor: trials.sponsor,
-          phase: trials.phase,
-          location: trials.location,
-          status: trials.status,
-          description: trials.description,
-          indication: trials.indication,
-        })
-        .from(trials)
-        .where(eq(trials.id, resolvedTrialId))
-        .limit(1);
-
       // Resolve the trial the SAME way the read path does (bare UUID → BE
       // by-slug → FE mapping), so uploads land under the trial the Hub lists.
-      // Only when the trial genuinely isn't in the BE yet do we lazily provision
-      // one (transition/legacy demo trials).
-      let beTrialId: string | null = await resolveBeTrialIdForRead(
+      // Trials are BE-owned now: they must already exist in the backend (created
+      // via the trials flow). If there's no BE trial, fail loudly rather than
+      // silently provisioning a stray one.
+      const beTrialId: string | null = await resolveBeTrialIdForRead(
         db,
         mode,
         input.trialId
       );
       if (!beTrialId) {
-        const meta = trialMeta ?? {
-          title: input.filename.replace(/\.[^./\\]+$/, "") || input.filename,
-        };
-        beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, meta, ctx.user);
-      }
-      if (!beTrialId) {
         throw new Error(
-          "Could not resolve a backend trial for this upload. Please retry."
+          "Trial is not registered in the backend — create/backfill it first."
         );
       }
 
@@ -265,13 +175,9 @@ export const documentsRouter = router({
 
       const documentVersion =
         input.documentVersion?.trim() ||
-        (isProtocolCategory ? trialMeta?.currentVersion || nextAutoVersion : undefined);
-      const amendmentVersion =
-        input.amendmentVersion?.trim() ||
-        (isProtocolCategory ? trialMeta?.amendmentVersion || undefined : undefined);
-      const releaseDate =
-        input.releaseDate?.trim() ||
-        (isProtocolCategory ? trialMeta?.releaseDate || undefined : undefined);
+        (isProtocolCategory ? nextAutoVersion : undefined);
+      const amendmentVersion = input.amendmentVersion?.trim() || undefined;
+      const releaseDate = input.releaseDate?.trim() || undefined;
       const markAsCurrent = isProtocolCategory ? (input.markAsCurrent ?? true) : false;
       const docCategory = isProtocolCategory ? "protocol" : input.category.toLowerCase();
 
@@ -552,45 +458,40 @@ export const documentsRouter = router({
         .optional()
     )
     .query(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) return [];
       const mode = (input?.demoMode ?? "sample") as DemoMode;
 
-      // Candidate trials = FE trials for this demo mode that have a BE mapping.
-      const candidates = await db
-        .select({
-          id: trials.id,
-          title: trials.title,
-          coreBackendTrialId: trials.coreBackendTrialId,
-        })
-        .from(trials)
-        .where(
-          mode === "sample" || mode === "full" || mode === "building"
-            ? like(trials.id, `${mode}:%`)
-            : notLike(trials.id, "%:%")
+      // Trials are BE-owned: list them from the backend (filtered by demo mode)
+      // and keep only those that have at least one document.
+      let beTrials: any[] = [];
+      try {
+        beTrials = await callBackend<any[]>("/api/trials", {
+          query: { demo_mode: mode },
+          user: ctx.user,
+        });
+      } catch (error) {
+        console.warn(
+          `[documents/getTrialsWithDocuments] BE trials list failed for mode=${mode}:`,
+          error instanceof Error ? error.message : error
         );
+        return [];
+      }
 
       const token = authTokenFrom(ctx);
       const client = getCoreBackendClient();
       const results = await Promise.all(
-        candidates
-          .filter((t) => !!t.coreBackendTrialId)
-          .map(async (t) => {
-            try {
-              const docs = await client.listTrialDocuments(
-                t.coreBackendTrialId as string,
-                token
-              );
-              return docs.length > 0
-                ? {
-                    id: stripDemoId(t.id),
-                    name: t.title || `Trial ${stripDemoId(t.id).toUpperCase()}`,
-                  }
-                : null;
-            } catch {
-              return null;
-            }
-          })
+        (beTrials ?? []).map(async (beTrial) => {
+          try {
+            const docs = await client.listTrialDocuments(beTrial.id, token);
+            return docs.length > 0
+              ? {
+                  id: beTrial.slug ?? beTrial.id,
+                  name: beTrial.name,
+                }
+              : null;
+          } catch {
+            return null;
+          }
+        })
       );
       return results.filter((r): r is { id: string; name: string } => r !== null);
     }),
