@@ -920,6 +920,7 @@ type ModeRowCollection = {
   rows: SnapshotRows;
   trialIds: string[];
   protocolIds: number[];
+  protocolDocIds: string[];
   scaffoldIds: number[];
   phaseIds: number[];
   taskIds: number[];
@@ -1182,6 +1183,7 @@ async function collectModeRows(
       rows: emptySnapshotRows(),
       trialIds: [],
       protocolIds: [],
+      protocolDocIds: [],
       scaffoldIds: [],
       phaseIds: [],
       taskIds: [],
@@ -1203,19 +1205,20 @@ async function collectModeRows(
     .from(protocols)
     .where(inArray(protocols.trialId, trialIds));
   const protocolIds = protocolRows.map((row) => row.id);
+  const protocolDocIds = protocolRows.map((row) => String(row.id));
 
   const protocolSectionRows = protocolIds.length > 0
     ? await tx
         .select()
         .from(protocolSections)
-        .where(inArray(protocolSections.protocolId, protocolIds))
+        .where(inArray(protocolSections.protocolId, protocolDocIds))
     : [];
 
   const protocolChunkRows = protocolIds.length > 0
     ? await tx
         .select()
         .from(protocolChunks)
-        .where(inArray(protocolChunks.protocolId, protocolIds))
+        .where(inArray(protocolChunks.protocolId, protocolDocIds))
     : [];
 
   const scaffoldRows = await tx
@@ -1277,7 +1280,7 @@ async function collectModeRows(
           .from(fileSearchDocuments)
           .where(
             or(
-              inArray(fileSearchDocuments.protocolId, protocolIds),
+              inArray(fileSearchDocuments.protocolId, protocolDocIds),
               inArray(fileSearchDocuments.storeId, storeIds)
             )
           )
@@ -1285,7 +1288,7 @@ async function collectModeRows(
       ? await tx
           .select()
           .from(fileSearchDocuments)
-          .where(inArray(fileSearchDocuments.protocolId, protocolIds))
+          .where(inArray(fileSearchDocuments.protocolId, protocolDocIds))
       : storeIds.length > 0
       ? await tx
           .select()
@@ -1583,6 +1586,7 @@ async function collectModeRows(
     },
     trialIds,
     protocolIds,
+    protocolDocIds,
     scaffoldIds,
     phaseIds,
     taskIds,
@@ -1763,6 +1767,7 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
     const {
       trialIds,
       protocolIds,
+      protocolDocIds,
       scaffoldIds,
       phaseIds,
       taskIds,
@@ -1955,13 +1960,13 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
     if (protocolIds.length > 0) {
       await tx
         .delete(protocolSections)
-        .where(inArray(protocolSections.protocolId, protocolIds));
+        .where(inArray(protocolSections.protocolId, protocolDocIds));
       await tx
         .delete(protocolChunks)
-        .where(inArray(protocolChunks.protocolId, protocolIds));
+        .where(inArray(protocolChunks.protocolId, protocolDocIds));
       await tx
         .delete(fileSearchDocuments)
-        .where(inArray(fileSearchDocuments.protocolId, protocolIds));
+        .where(inArray(fileSearchDocuments.protocolId, protocolDocIds));
       await tx
         .delete(protocols)
         .where(inArray(protocols.id, protocolIds));
@@ -2453,68 +2458,14 @@ async function seedModeOperationalData(
     primary: boolean;
   }> = [];
 
-  for (const trial of seededTrials) {
-    const currentVersion = (trial.seed.currentVersion || "1.0").trim() || "1.0";
-    const amendmentVersion = (trial.seed.amendmentVersion || "0.1").trim() || "0.1";
-    const releaseDate = trial.seed.releaseDate || toYyyyMmDd(addDays(now, -(trial.index % 45)));
-    const shouldIndexPrimary = trial.seed.status !== "not-started" && trial.index % 5 !== 0;
-    const primaryFileKey = `seed/${mode}/${trial.seed.id}/protocol-${currentVersion}.pdf`;
-
-    protocolInserts.push({
-      trialId: trial.trialId,
-      filename: `${trial.seed.id.toUpperCase()}_Protocol_${currentVersion}.pdf`,
-      fileUrl: `https://demo.themison.ai/${primaryFileKey}`,
-      fileKey: primaryFileKey,
-      fileSize: 1_100_000 + trial.index * 8_000,
-      category: "Protocol",
-      documentVersion: currentVersion,
-      amendmentVersion,
-      releaseDate,
-      isCurrent: true,
-      archivedAt: null,
-      sourceType: "manual",
-      sourceReference: `seed-${mode}-${trial.seed.id}-protocol`,
-      uploadedBy: createdBy,
-      createdAt: addDays(now, -(15 + trial.index)),
-      updatedAt: addDays(now, -(15 + trial.index)),
-    });
-    protocolSeedMeta.push({
-      trialId: trial.trialId,
-      fileKey: primaryFileKey,
-      category: "Protocol",
-      shouldIndex: shouldIndexPrimary,
-      primary: true,
-    });
-
-    if (trial.index % 2 === 0 || trial.seed.status !== "not-started") {
-      const amendmentFileKey = `seed/${mode}/${trial.seed.id}/amendment-${amendmentVersion}.pdf`;
-      protocolInserts.push({
-        trialId: trial.trialId,
-        filename: `${trial.seed.id.toUpperCase()}_Amendment_${amendmentVersion}.pdf`,
-        fileUrl: `https://demo.themison.ai/${amendmentFileKey}`,
-        fileKey: amendmentFileKey,
-        fileSize: 540_000 + trial.index * 4_000,
-        category: "Amendment",
-        documentVersion: currentVersion,
-        amendmentVersion,
-        releaseDate,
-        isCurrent: false,
-        archivedAt: trial.index % 6 === 0 ? addDays(now, -(3 + (trial.index % 4))) : null,
-        sourceType: trial.index % 3 === 0 ? "integration" : "manual",
-        sourceReference: `seed-${mode}-${trial.seed.id}-amendment`,
-        uploadedBy: createdBy,
-        createdAt: addDays(now, -(9 + trial.index)),
-        updatedAt: addDays(now, -(9 + trial.index)),
-      });
-      protocolSeedMeta.push({
-        trialId: trial.trialId,
-        fileKey: amendmentFileKey,
-        category: "Amendment",
-        shouldIndex: trial.index % 3 === 0,
-        primary: false,
-      });
-    }
-  }
+  // Documents are now owned by the BE (`trial_documents`); the FE `protocols`
+  // table is retired. The demo was a content-less UI mock (placeholder PDF URLs
+  // + synthetic one-line chunks) with no real documents to seed into the BE, so
+  // demo trials intentionally seed NO documents. Consequently every block below
+  // that is anchored to a protocol (file-search docs, protocol sections/chunks,
+  // task scaffolds, phases/tasks, execution maps + children) no-ops via its
+  // existing `if (!primaryProtocol) continue` / `if (!scaffold) continue` guard.
+  // Leaving `protocolInserts` / `protocolSeedMeta` empty is deliberate.
 
   if (protocolInserts.length > 0) {
     await db.insert(protocols).values(protocolInserts);
@@ -2567,7 +2518,7 @@ async function seedModeOperationalData(
     if (!protocolRow || !storeRow) continue;
     fileDocInserts.push({
       storeId: storeRow.id,
-      protocolId: protocolRow.id,
+      protocolId: String(protocolRow.id),
       documentName: `seed-file-${mode}-${protocolRow.id}`,
       displayName: protocolRow.filename,
       uploadedAt: addDays(now, -(2 + (protocolRow.id % 4))),
@@ -2595,7 +2546,7 @@ async function seedModeOperationalData(
     ];
     sectionSeed.forEach((section, sectionIndex) => {
       protocolSectionInserts.push({
-        protocolId: primaryProtocol.id,
+        protocolId: String(primaryProtocol.id),
         name: section.name,
         pageReference: section.pageReference,
         dateReference: null,
@@ -2615,7 +2566,7 @@ async function seedModeOperationalData(
     ];
     chunkSeed.forEach((chunk, chunkIndex) => {
       protocolChunkInserts.push({
-        protocolId: primaryProtocol.id,
+        protocolId: String(primaryProtocol.id),
         trialId: trial.trialId,
         chunkIndex,
         sectionType: chunk.sectionType,
@@ -2650,7 +2601,7 @@ async function seedModeOperationalData(
     const scaffoldStatus = resolveScaffoldStatus(trial.seed.status);
     const confirmedAt = scaffoldStatus === "draft" ? null : addDays(now, -(6 + (trial.index % 7)));
     scaffoldInserts.push({
-      protocolId: primaryProtocol.id,
+      protocolId: String(primaryProtocol.id),
       trialId: trial.trialId,
       status: scaffoldStatus,
       confirmedAt,
@@ -2787,7 +2738,7 @@ async function seedModeOperationalData(
     mapInserts.push({
       id: mapId,
       trialId: trial.trialId,
-      protocolId: primaryProtocol.id,
+      protocolId: String(primaryProtocol.id),
       status: mapStatus,
       version: 1,
       metadata: {
@@ -3359,7 +3310,7 @@ async function cloneModeIntoBuilding(
         .insert(protocolSections)
         .values({
           ...protocolSectionInsert,
-          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+          protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
           parentSectionId: null,
         })
         .$returningId();
@@ -3383,7 +3334,7 @@ async function cloneModeIntoBuilding(
       const { id: _protocolChunkId, ...protocolChunkInsert } = row;
       await tx.insert(protocolChunks).values({
         ...protocolChunkInsert,
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
         trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
       });
     }
@@ -3395,7 +3346,7 @@ async function cloneModeIntoBuilding(
         .insert(taskScaffolds)
         .values({
           ...scaffoldInsert,
-          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+          protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
           trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
         })
         .$returningId();
@@ -3462,7 +3413,7 @@ async function cloneModeIntoBuilding(
         ...row,
         id: nextMapId,
         trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
       });
     }
 
@@ -3516,7 +3467,7 @@ async function cloneModeIntoBuilding(
       await tx.insert(protocolMapSections).values({
         ...row,
         id: nextSectionId,
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
         mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
         parentSectionId: null,
         linkedPhaseIds: remapLinkedIds(row.linkedPhaseIds, mapPhaseIdMap),

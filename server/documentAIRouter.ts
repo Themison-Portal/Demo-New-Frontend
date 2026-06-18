@@ -1,28 +1,31 @@
 import { z } from "zod";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import { getDb } from "./db";
-import { protocols } from "../drizzle/schema";
-import { eq, inArray, and, isNotNull, like, desc } from "drizzle-orm";
 import { resolveTrialId, type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { invokeLLM } from "./_core/llm";
-import {
-  getProtocolContextChunks,
-  ingestProtocolContextChunks,
-  type ProtocolContextChunk,
-} from "./_core/protocolContext";
-import { runUnifiedQuery } from "./_core/unifiedQuery";
 import { ENV } from "./_core/env";
 import { callBackend } from "./_core/backendClient";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
+import { authTokenFrom, resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import type { CoreBackendTrialDocument } from "@shared/coreBackendTypes";
+// Type-only: the protocolContext module stays for scaffold generation. The
+// chunk-ranking helpers below are legacy (the FE-local RAG chat path is
+// retired) and unused, but kept until protocolContext is finalized.
+import type { ProtocolContextChunk } from "./_core/protocolContext";
 
-const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
+/**
+ * Documents are owned by the BE. Document chat/worksheet query the BE's
+ * `/api/document-ai/chat` (→ RAG) by BE document UUID; the FE `protocols`
+ * table and the FE-local RAG fallback are retired here.
+ */
 
 type DocumentAISource = {
   fileId?: string;
   filename?: string;
   fileUrl?: string;
-  protocolId?: number;
+  /** BE document UUID (the FE document identity post-retirement). */
+  documentId?: string;
   excerpt?: string;
   section?: string;
   category?: string | null;
@@ -338,49 +341,22 @@ function buildPromptContext(
   };
 }
 
-function buildSourcesFromChunks(
-  chunks: ProtocolContextChunk[],
-  protocolById: Map<number, typeof protocols.$inferSelect>
-): DocumentAISource[] {
-  const sourceMap = new Map<string, DocumentAISource>();
-  for (const chunk of chunks) {
-    const protocol = protocolById.get(chunk.protocolId);
-    const key = `${chunk.protocolId}:${chunk.sectionTitle || chunk.sectionType}:${chunk.pageStart || chunk.pageEnd || ""}`;
-    if (sourceMap.has(key)) continue;
-
-    sourceMap.set(key, {
-      filename: protocol?.filename || chunk.citation.filename,
-      fileUrl: protocol?.fileUrl,
-      protocolId: chunk.protocolId,
-      category: protocol?.category ?? null,
-      excerpt: chunk.chunkText.slice(0, 260),
-      section: chunk.sectionTitle || chunk.sectionType,
-      page: chunk.pageStart ?? chunk.pageEnd ?? null,
-    });
-  }
-  return Array.from(sourceMap.values()).slice(0, 16);
-}
-
-type IndexedProtocolRow = typeof protocols.$inferSelect & {
-  coreBackendDocumentId: string;
-};
-
 /**
- * Query a set of core-backend-registered protocols via the BE's
- * /api/document-ai/chat endpoint (→ RAG) and map the BE's sources back to the FE
- * source shape. Returns null if the BE call fails so the caller can fall back to
- * the local pipeline. Shared by the selected-document path and the
- * "All Documents" path.
+ * Query a set of BE documents via the BE's /api/document-ai/chat endpoint
+ * (→ RAG) and map the BE's sources back to the FE source shape (joining with the
+ * BE document row for fileUrl/category). `documentIds` are BE document UUIDs.
+ * Returns null if the BE call fails. Shared by the selected-document path and
+ * the "All Documents" path.
  */
 async function queryViaCoreBackend(params: {
-  coreBackendDocs: IndexedProtocolRow[];
+  docs: CoreBackendTrialDocument[];
   messages: Array<{ role: "user" | "assistant"; content: string }>;
   resolvedTrialId: string | undefined;
   sessionId: string | undefined;
   user: unknown;
   questionType: string;
 }): Promise<{ message: string; thinking?: string; sources: DocumentAISource[] } | null> {
-  const { coreBackendDocs, messages, resolvedTrialId, sessionId, user, questionType } = params;
+  const { docs, messages, resolvedTrialId, sessionId, user, questionType } = params;
   try {
     const beResponse = await callBackend<{
       message: string;
@@ -401,19 +377,19 @@ async function queryViaCoreBackend(params: {
       method: "POST",
       body: {
         messages,
-        documentIds: coreBackendDocs.map((d) => d.coreBackendDocumentId),
+        documentIds: docs.map((d) => d.id),
         trialId: resolvedTrialId ?? null,
         sessionId: sessionId ?? null,
       },
       user: user as any,
     });
 
-    // Map BE sources back to the FE source shape (joins with the FE protocol row
-    // so the UI keeps protocolId, fileUrl, category, etc).
-    const docByBeId = new Map(coreBackendDocs.map((d) => [d.coreBackendDocumentId, d]));
+    // Map BE sources back to the FE source shape, joining with the BE document
+    // row (keyed by UUID) so the UI keeps documentId, fileUrl, category, etc.
+    const docByBeId = new Map(docs.map((d) => [d.id, d]));
     const sources: DocumentAISource[] = beResponse.sources.map((src) => {
       const doc = docByBeId.get(src.fileId);
-      const fileUrl = doc?.fileUrl;
+      const fileUrl = doc?.document_url;
       const page = typeof src.page === "number" ? src.page : null;
       const bboxes = Array.isArray(src.bboxes) ? src.bboxes : undefined;
       // When a source carries docling bboxes + a page + a backend-fetchable PDF
@@ -429,10 +405,10 @@ async function queryViaCoreBackend(params: {
           : undefined;
       return {
         fileId: src.fileId,
-        filename: src.filename || doc?.filename,
+        filename: src.filename || doc?.document_name,
         fileUrl,
-        protocolId: doc?.id,
-        category: doc?.category ?? null,
+        documentId: src.fileId,
+        category: doc?.category ?? doc?.document_type ?? null,
         excerpt: src.excerpt,
         section: src.section ?? undefined,
         page,
@@ -449,7 +425,7 @@ async function queryViaCoreBackend(params: {
       payload: {
         route: "core_backend_document_ai",
         backendRoute: beResponse.route,
-        docCount: coreBackendDocs.length,
+        docCount: docs.length,
         docsWithSources: beResponse.documentsWithSources,
         citationCount: sources.length,
         questionType,
@@ -467,7 +443,7 @@ async function queryViaCoreBackend(params: {
     };
   } catch (error) {
     console.warn(
-      "[Document AI] BE /api/document-ai/chat failed; falling back to local pipeline.",
+      "[Document AI] BE /api/document-ai/chat failed.",
       error
     );
     return null;
@@ -531,414 +507,83 @@ export const documentAIRouter = router({
         aiInvolved: true,
       });
 
-      // If no documents are explicitly selected, use unified retrieval for the active scope.
-      // Fall back to basic LLM only if unified retrieval fails.
-      if (!input.documentIds || input.documentIds.length === 0) {
-        // "All Documents" mode: the client sends no documentIds. Resolve the
-        // in-scope INDEXED protocols (registered with the core-backend) and query
-        // them via the BE/RAG, instead of falling straight into the decommissioned
-        // FE-local runUnifiedQuery (which abstains with "document evidence is
-        // missing"). Only short-circuits when indexed docs exist AND the BE
-        // answers; otherwise the existing unified path still runs, preserving
-        // operational/telemetry answers and the basic-assistant fallback.
-        if (ENV.coreBackendApiUrl) {
-          const ALL_DOCS_CAP = 10;
-          const indexedScope = resolvedTrialId
-            ? and(
-                eq(protocols.trialId, resolvedTrialId),
-                isNotNull(protocols.coreBackendDocumentId)
-              )
-            : and(
-                like(protocols.trialId, `${mode}:%`),
-                isNotNull(protocols.coreBackendDocumentId)
-              );
-          const indexedProtocols = await db
-            .select()
-            .from(protocols)
-            .where(indexedScope)
-            .orderBy(desc(protocols.createdAt))
-            .limit(ALL_DOCS_CAP);
-          const coreBackendDocs = indexedProtocols.filter(
-            (p): p is IndexedProtocolRow => !!p.coreBackendDocumentId
-          );
-          if (coreBackendDocs.length > 0) {
-            const beResult = await queryViaCoreBackend({
-              coreBackendDocs,
-              messages: input.messages,
-              resolvedTrialId,
-              sessionId: input.sessionId,
-              user: ctx.user,
-              questionType,
-            });
-            if (beResult) return beResult;
-          }
-        }
-
-        try {
-          const unified = await runUnifiedQuery({
-            db,
-            query: latestUserMessage.content,
-            messages: input.messages,
-            trialId: resolvedTrialId,
-            demoMode: mode,
-            userId: ctx.user?.id,
-          });
-
-          await logTelemetryEvent({
-            eventType: "ai_response_generated",
-            action: "generated",
-            sessionId: input.sessionId,
-            entityType: "response",
-            entityId: resolvedTrialId,
-            payload: {
-              route: unified.route,
-              confidence: unified.confidence,
-              abstained: unified.abstained,
-              questionType,
-            },
-            aiInvolved: true,
-            aiOutput: unified.message,
-            aiSources: unified.sources,
-          });
-
-          return unified;
-        } catch (error) {
-          console.warn("[Document AI] Unified query path failed in unfiltered mode; falling back to basic assistant.", error);
-        }
-
-        // Build conversation history for context
-        const conversationHistory = input.messages.map(msg => 
-          `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
-        ).join('\n\n');
-
-        const systemPrompt = `You are Themison AI, a helpful assistant for clinical trial research teams. You help with:
-- Understanding clinical trial protocols and procedures
-- Answering questions about trial operations and regulations
-- Providing guidance on study setup and execution
-- Assisting with document analysis and organization
-
-Be professional, accurate, and helpful. Use clear clinical terminology when appropriate.
-
-Previous conversation:
-${conversationHistory}`;
-
-        let response: Awaited<ReturnType<typeof invokeLLM>>;
-        try {
-          response = await invokeLLM({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: latestUserMessage.content },
-            ],
-          });
-        } catch (error) {
-          // Phase 6: the FE-local basic-assistant fallback has no LLM key and
-          // throws "[FE LLM deprecated]". Degrade gracefully instead of 500ing.
-          if (error instanceof Error && error.message.includes("[FE LLM deprecated]")) {
-            console.warn(
-              "[Document AI] Basic-assistant fallback unavailable (Phase 6); returning graceful message."
-            );
-            return {
-              message:
-                "I can't synthesize an answer for this scope yet. Upload protocol documents under a real trial so the backend can index them for retrieval. (Sandbox/building-mode trials don't support cloud AI chat.)",
-            };
-          }
-          throw error;
-        }
-
-        const rawContent = response.choices[0]?.message?.content;
-        let answer = "I apologize, but I'm unable to generate a response at the moment.";
-        
-        if (typeof rawContent === 'string') {
-          answer = rawContent;
-        } else if (Array.isArray(rawContent)) {
-          answer = rawContent
-            .filter((item: any) => item.type === 'text')
-            .map((item: any) => item.text)
-            .join('\n');
-        }
-
-        await logTelemetryEvent({
-          eventType: "ai_response_generated",
-          action: "generated",
-          sessionId: input.sessionId,
-          entityType: "response",
-          payload: {
-            route: "fallback_llm",
-            questionType,
-          },
-          aiInvolved: true,
-          aiOutput: answer,
-        });
-
+      if (!ENV.coreBackendApiUrl) {
         return {
-          message: answer,
-          thinking: "Analyzing your question about clinical trial procedures and searching my knowledge base for relevant information to provide an accurate response.",
-        };
-      }
-
-      const documentIds = input.documentIds
-        .map((id) => Number.parseInt(id, 10))
-        .filter((id) => Number.isFinite(id));
-
-      const selectedProtocols = documentIds.length
-        ? await db.select().from(protocols).where(inArray(protocols.id, documentIds))
-        : [];
-
-      // Phase 4: when any selected docs are mapped to core-backend
-      // `trial_documents`, route the query through the BE's /api/document-ai/chat
-      // endpoint. The BE fans out across documents, picks the BEST response
-      // (most sources / non-"do not contain") rather than `successes[0]`, and
-      // returns a unified answer + flattened citations. Falls back to the
-      // legacy local pipeline if the BE call fails.
-      const coreBackendDocs = selectedProtocols.filter(
-        (p): p is typeof p & { coreBackendDocumentId: string } =>
-          !!p.coreBackendDocumentId
-      );
-      if (coreBackendDocs.length > 0 && ENV.coreBackendApiUrl) {
-        const beResult = await queryViaCoreBackend({
-          coreBackendDocs,
-          messages: input.messages,
-          resolvedTrialId,
-          sessionId: input.sessionId,
-          user: ctx.user,
-          questionType,
-        });
-        if (beResult) return beResult;
-      }
-
-      // When the BE/RAG integration is configured but none of the selected
-      // documents are registered with the core-backend (no coreBackendDocumentId),
-      // the only remaining path is the decommissioned FE-local RAG (no OpenAI
-      // key in the cloud deploy), which abstains with a cryptic embeddings
-      // error. Return an actionable message instead of falling into that dead
-      // path so the user knows to re-upload and wait for indexing.
-      if (
-        ENV.coreBackendApiUrl &&
-        selectedProtocols.length > 0 &&
-        coreBackendDocs.length === 0
-      ) {
-        return {
-          message:
-            "These documents aren't indexed in the AI knowledge base yet, so I can't answer from them. Please re-upload the document(s); once indexing finishes you'll be able to ask questions about them.",
+          message: "AI chat is unavailable: the backend is not configured.",
           sources: [],
         };
       }
 
-      if (selectedProtocols.length === 0) {
-        return {
-          message: "The selected documents have not been processed yet. Please wait for processing to complete.",
-        };
-      }
+      const token = authTokenFrom(ctx);
+      const client = getCoreBackendClient();
 
-      if (!resolvedTrialId) {
-        resolvedTrialId = selectedProtocols[0]?.trialId;
-      }
-
-      try {
-        const unified = await runUnifiedQuery({
-          db,
-          query: latestUserMessage.content,
-          messages: input.messages,
-          protocolIds: documentIds,
-          trialId: resolvedTrialId,
-          demoMode: mode,
-          userId: ctx.user?.id,
-        });
-
-        await logTelemetryEvent({
-          eventType: "ai_response_generated",
-          action: "generated",
-          sessionId: input.sessionId,
-          entityType: "response",
-          entityId: resolvedTrialId,
-          payload: {
-            route: unified.route,
-            confidence: unified.confidence,
-            abstained: unified.abstained,
-            questionType,
-          },
-          aiInvolved: true,
-          aiOutput: unified.message,
-          aiSources: unified.sources,
-        });
-
-        return unified;
-      } catch (error) {
-        console.warn("[Document AI] Unified query path failed; falling back to legacy path.", error);
-      }
-
-      const protocolById = new Map(selectedProtocols.map((protocol) => [protocol.id, protocol]));
-
-      try {
-        const needsComprehensive = isComprehensiveQuestion(latestUserMessage.content);
-        const sectionTypeHints = getSectionTypeHints(latestUserMessage.content);
-        const chunkGroups = await Promise.all(
-          selectedProtocols.map(async (protocol) => {
-            const baseRequest = {
-              protocolId: protocol.id,
-              query: latestUserMessage.content,
-              comprehensive: true as const,
-              limit: needsComprehensive ? 10 : 6,
-            };
-            try {
-              const broad = await getProtocolContextChunks(baseRequest);
-              if (sectionTypeHints && sectionTypeHints.length > 0) {
-                const focused = await getProtocolContextChunks({
-                  ...baseRequest,
-                  sectionTypes: sectionTypeHints,
-                });
-                if (focused.length > 0) {
-                  const merged = [...focused];
-                  const existing = new Set(merged.map((chunk) => chunk.id));
-                  for (const chunk of broad) {
-                    if (existing.has(chunk.id)) continue;
-                    merged.push(chunk);
-                    existing.add(chunk.id);
-                  }
-                  return merged;
-                }
-              }
-              return broad;
-            } catch (error) {
-              console.warn("[Document AI] Failed to fetch protocol context chunks", protocol.id, error);
-              return [];
-            }
-          })
-        );
-
-        const contextCandidates = chunkGroups.flat();
-        const orderedCandidates = contextCandidates.sort((a, b) => {
-          if (a.protocolId !== b.protocolId) return a.protocolId - b.protocolId;
-          const ap = a.pageStart ?? Number.MAX_SAFE_INTEGER;
-          const bp = b.pageStart ?? Number.MAX_SAFE_INTEGER;
-          if (ap !== bp) return ap - bp;
-          return a.id - b.id;
-        });
-
-        const { selectedChunks, contextText } = buildPromptContext(orderedCandidates, {
-          maxChunks: needsComprehensive ? 28 : 14,
-          maxChars: needsComprehensive ? 42000 : 24000,
-          perChunkChars: needsComprehensive ? 2200 : 1500,
-        });
-
-        if (selectedChunks.length > 0 && contextText.trim().length > 0) {
-          const history = input.messages
-            .slice(-8, -1)
-            .map((msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`)
-            .join("\n\n");
-
-          const systemPrompt = `You are Themison AI for clinical trial operations.
-You must answer using ONLY the retrieved protocol context.
-If the question involves criteria, tables, schedules, procedures, visits, endpoints, or requirements:
-- Be exhaustive and do not omit continuation rows across pages.
-- Preserve numbering and sub-items when present.
-- Include footnote conditions when they change applicability.
-Always include source tags in this exact format: [Source: <filename>, <page label>].
-If the retrieved context is insufficient, clearly state what is missing instead of guessing.`;
-
-          const response = await invokeLLM({
-            messages: [
-              { role: "system", content: systemPrompt },
-              {
-                role: "user",
-                content: `Conversation so far:\n${history}\n\nRetrieved protocol context:\n${contextText}\n\nQuestion: ${latestUserMessage.content}`,
-              },
-            ],
-          });
-
-          const answer =
-            extractTextContent(response.choices[0]?.message?.content) ||
-            "I could not generate a grounded answer from the selected protocol context.";
-          let finalAnswer = answer;
-          let finalSources = buildSourcesFromChunks(selectedChunks, protocolById);
-
-          if (shouldRescueCoverage(latestUserMessage.content, answer)) {
-            const rescueGroups = await Promise.all(
-              selectedProtocols.map(async (protocol) => {
-                try {
-                  const allChunks = await getProtocolContextChunks({
-                    protocolId: protocol.id,
-                    limit: 2500,
-                  });
-                  return buildRescueCoverageChunks(latestUserMessage.content, allChunks);
-                } catch (error) {
-                  console.warn("[Document AI] Rescue coverage retrieval failed", protocol.id, error);
-                  return [];
-                }
-              })
-            );
-
-            const rescueCandidates = rescueGroups.flat();
-            if (rescueCandidates.length > 0) {
-              const rescueContext = buildPromptContext(
-                rescueCandidates.sort((a, b) => {
-                  const ap = a.pageStart ?? Number.MAX_SAFE_INTEGER;
-                  const bp = b.pageStart ?? Number.MAX_SAFE_INTEGER;
-                  if (ap !== bp) return ap - bp;
-                  return a.id - b.id;
-                }),
-                {
-                  maxChunks: 48,
-                  maxChars: 72000,
-                  perChunkChars: 2400,
-                }
-              );
-
-              const rescueResponse = await invokeLLM({
-                messages: [
-                  {
-                    role: "system",
-                    content:
-                      "You are Themison AI. Produce a complete answer from provided protocol text. Do not claim information is missing if present. For list/criteria/table questions, return every listed item in order with sub-items and conditions. Cite sources as [Source: <filename>, <page label>].",
-                  },
-                  {
-                    role: "user",
-                    content: `Retrieved protocol context:\n${rescueContext.contextText}\n\nQuestion: ${latestUserMessage.content}`,
-                  },
-                ],
-              });
-
-              const rescuedAnswer = extractTextContent(rescueResponse.choices[0]?.message?.content);
-              if (rescuedAnswer && rescuedAnswer.trim().length > 0) {
-                finalAnswer = rescuedAnswer;
-                finalSources = buildSourcesFromChunks(rescueContext.selectedChunks, protocolById);
-              }
-            }
-          }
-
-          await logTelemetryEvent({
-            eventType: "ai_response_generated",
-            action: "generated",
-            sessionId: input.sessionId,
-            entityType: "response",
-            payload: {
-              route: "selected_docs_local_context",
-              needsComprehensive,
-              selectedChunkCount: selectedChunks.length,
-              questionType,
-            },
-            aiInvolved: true,
-            aiOutput: finalAnswer,
-            aiSources: finalSources,
-          });
-
+      // Resolve the BE documents to query. Documents are BE-owned; their UUIDs
+      // come from the BE, never from FE MySQL.
+      let docs: CoreBackendTrialDocument[] = [];
+      if (!input.documentIds || input.documentIds.length === 0) {
+        // "All Documents": list the trial's BE documents (prefer indexed, cap
+        // the fan-out). No FE-local fallback — the FE-local RAG is retired.
+        const beTrialId = input.trialId
+          ? await resolveBeTrialIdForRead(db, mode, input.trialId)
+          : null;
+        if (!beTrialId) {
           return {
-            message: finalAnswer,
-            thinking: needsComprehensive
-              ? "Cross-checking structured and continued protocol sections to return complete criteria/procedure coverage."
-              : "Grounding the response in relevant protocol sections and page-level citations.",
-            sources: finalSources,
+            message:
+              "Select a trial with indexed documents to ask questions. (Sandbox/building-mode trials without backend documents don't support AI chat.)",
+            sources: [],
           };
         }
-      } catch (error) {
-        console.warn("[Document AI] Local protocol-context answer path failed; falling back to assistant retrieval.", error);
+        const ALL_DOCS_CAP = 10;
+        try {
+          const all = await client.listTrialDocuments(beTrialId, token);
+          const indexed = all.filter(
+            (d) =>
+              d.ingestion_status === "ready" || d.ingestion_status === "complete"
+          );
+          docs = (indexed.length > 0 ? indexed : all).slice(0, ALL_DOCS_CAP);
+        } catch (error) {
+          console.warn("[Document AI] BE list failed in All-Documents mode.", error);
+        }
+        if (docs.length === 0) {
+          return {
+            message:
+              "There are no indexed documents in this trial yet. Upload protocol documents and wait for indexing to finish, then ask again.",
+            sources: [],
+          };
+        }
+      } else {
+        // Selected documents: the ids ARE BE document UUIDs (the FE document
+        // identity). Fetch the BE docs (for source enrichment).
+        docs = (
+          await Promise.all(
+            input.documentIds.map(async (id) => {
+              try {
+                return await client.getTrialDocument(id, token);
+              } catch {
+                return null;
+              }
+            })
+          )
+        ).filter((d): d is CoreBackendTrialDocument => d !== null);
+        if (docs.length === 0) {
+          return {
+            message:
+              "These documents aren't available in the AI knowledge base yet. Please re-upload and wait for indexing to finish.",
+            sources: [],
+          };
+        }
       }
 
-      // Phase 5: OpenAI Vector Stores fallback is deprecated. If neither
-      // BE-forwarding (Phase 4) nor unifiedQuery succeeded, surface a
-      // clear error rather than calling OpenAI's Assistants API directly.
-      // The Vector Store schema (fileSearchStores/fileSearchDocuments) and
-      // any populated rows are vestigial — they get dropped in Phase 6.
+      const beResult = await queryViaCoreBackend({
+        docs,
+        messages: input.messages,
+        resolvedTrialId,
+        sessionId: input.sessionId,
+        user: ctx.user,
+        questionType,
+      });
+      if (beResult) return beResult;
+
       await logTelemetryEvent({
         eventType: "ai_response_generated",
         action: "generated",
@@ -946,7 +591,7 @@ If the retrieved context is insufficient, clearly state what is missing instead 
         entityType: "response",
         payload: {
           route: "no_results",
-          docCount: selectedProtocols.length,
+          docCount: docs.length,
           questionType,
         },
         aiInvolved: true,
@@ -954,8 +599,8 @@ If the retrieved context is insufficient, clearly state what is missing instead 
 
       return {
         message:
-          "I couldn't find an answer for that question in the selected documents. " +
-          "Try rephrasing, expanding the selection, or re-uploading the document if processing has failed.",
+          "I couldn't reach the AI service just now. Please try again in a moment.",
+        sources: [],
       };
     }),
 
@@ -971,7 +616,7 @@ If the retrieved context is insufficient, clearly state what is missing instead 
             z.object({
               filename: z.string().optional(),
               fileUrl: z.string().optional(),
-              protocolId: z.number().optional(),
+              documentId: z.string().optional(),
               excerpt: z.string().optional(),
               section: z.string().optional(),
               category: z.string().nullable().optional(),
@@ -981,29 +626,13 @@ If the retrieved context is insufficient, clearly state what is missing instead 
           .optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
-      const mode = (input.demoMode ?? "sample") as DemoMode;
-      let resolvedTrialId: string | undefined;
-      if (input.trialId && input.trialId !== "all") {
-        resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
-      }
-
+    .mutation(async ({ input }) => {
       const sourceList = input.sources ?? [];
-      const sourceProtocolIds = Array.from(
-        new Set(
-          sourceList
-            .map((source) => source.protocolId)
-            .filter((id): id is number => Number.isFinite(id))
-        )
-      );
 
-      let worksheetSources: DocumentAISource[] = sourceList.map((source) => ({
+      const worksheetSources: DocumentAISource[] = sourceList.map((source) => ({
         filename: source.filename,
         fileUrl: source.fileUrl,
-        protocolId: source.protocolId,
+        documentId: source.documentId,
         excerpt: source.excerpt,
         section: source.section,
         category: source.category ?? null,
@@ -1013,38 +642,21 @@ If the retrieved context is insufficient, clearly state what is missing instead 
       let worksheetSubtitle = "";
       let worksheetBlocks: WorksheetBlock[] = [];
 
-      let protocolRows: typeof protocols.$inferSelect[] = [];
-      if (sourceProtocolIds.length > 0) {
-        protocolRows = await db.select().from(protocols).where(inArray(protocols.id, sourceProtocolIds));
-      } else if (resolvedTrialId) {
-        protocolRows = await db.select().from(protocols).where(eq(protocols.trialId, resolvedTrialId));
-      }
-      const protocolById = new Map(protocolRows.map((row) => [row.id, row]));
+      // Build the evidence context from the citation excerpts that came back
+      // with the chat answer (documents are BE-owned; no FE-local chunk store).
+      const contextText = worksheetSources
+        .filter((s) => s.excerpt && s.excerpt.trim())
+        .slice(0, 20)
+        .map(
+          (s) =>
+            `[${s.filename || "Document"}${s.section ? ` | ${s.section}` : ""}${
+              s.page ? ` | p${s.page}` : ""
+            }]\n${s.excerpt}`
+        )
+        .join("\n\n---\n\n");
 
       try {
-        const chunkGroups = await Promise.all(
-          protocolRows.slice(0, 4).map(async (protocol) => {
-            try {
-              return await getProtocolContextChunks({
-                protocolId: protocol.id,
-                query: input.question,
-                comprehensive: true,
-                limit: 10,
-              });
-            } catch (error) {
-              console.warn("[Document AI] Failed to fetch worksheet context chunks", protocol.id, error);
-              return [];
-            }
-          })
-        );
-        const contextCandidates = chunkGroups.flat();
-        const { selectedChunks, contextText } = buildPromptContext(contextCandidates, {
-          maxChunks: 20,
-          maxChars: 36000,
-          perChunkChars: 1800,
-        });
-
-        if (selectedChunks.length > 0 && contextText.trim()) {
+        if (contextText.trim()) {
           const response = await invokeLLM({
             responseFormat: { type: "json_object" },
             messages: [
@@ -1084,7 +696,6 @@ ${contextText}
             worksheetTitle = String(parsed?.title || "").trim() || "Visit Worksheet";
             worksheetSubtitle = String(parsed?.subtitle || "").trim();
             worksheetBlocks = blocks;
-            worksheetSources = buildSourcesFromChunks(selectedChunks, protocolById);
           }
         }
       } catch (error) {
@@ -1101,7 +712,6 @@ ${contextText}
       if (!worksheetSubtitle) {
         worksheetSubtitle =
           worksheetSources.find((source) => source.filename)?.filename ||
-          protocolRows[0]?.filename ||
           "Protocol worksheet draft";
       }
 
@@ -1110,13 +720,13 @@ ${contextText}
         action: "worksheet_generated",
         sessionId: undefined,
         entityType: "worksheet",
-        entityId: resolvedTrialId,
+        entityId: input.trialId,
         aiInvolved: true,
         aiOutput: `${worksheetTitle}\n${worksheetBlocks.map((block) => block.content).join("\n")}`,
         aiSources: worksheetSources,
         payload: {
           question: input.question,
-          trialId: resolvedTrialId,
+          trialId: input.trialId,
           blockCount: worksheetBlocks.length,
         },
       });
@@ -1130,76 +740,40 @@ ${contextText}
     }),
 
   /**
-   * Upload a document to Google File Search Store
-   * Call this after a protocol is uploaded to S3
+   * (Re)trigger RAG ingestion for a single BE document by its UUID.
    */
   uploadDocument: protectedProcedure
     .input(
       z.object({
-        protocolId: z.number(),
+        coreBackendDocumentId: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
-      const db = await getDb();
-      if (!db) {
-        throw new Error("Database not available");
-      }
-
-      // Phase 5: OpenAI Vector Stores deprecated. This mutation now routes
-      // through BE -> RAG service when the protocol is mapped to core-backend.
+    .mutation(async ({ input, ctx }) => {
       try {
-        const protocol = await db
-          .select()
-          .from(protocols)
-          .where(eq(protocols.id, input.protocolId))
-          .limit(1);
-
-        if (protocol.length === 0) {
-          throw new Error("Protocol not found");
-        }
-
-        const doc = protocol[0];
-
-        if (!doc.coreBackendDocumentId) {
-          return {
-            success: false,
-            message:
-              "This document is not registered with the RAG service. Re-upload to get a coreBackendDocumentId before indexing.",
-          };
-        }
-
         const retry = await callBackend<{
           jobId: string;
           documentId: string;
           status: string;
           message: string;
-        }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(doc.coreBackendDocumentId)}`, {
-          method: "POST",
-        });
-
-        await db
-          .update(protocols)
-          .set({
-            coreBackendJobId: retry.jobId,
-            coreBackendIngestStatus: retry.status || "queued",
-          })
-          .where(eq(protocols.id, doc.id));
-
+        }>(
+          `/api/document-ai/retry-ingestion/${encodeURIComponent(input.coreBackendDocumentId)}`,
+          { method: "POST", user: ctx.user }
+        );
         return {
           success: true,
           message: retry.message || "Ingestion queued via core-backend",
         };
       } catch (error: any) {
-        console.error('Error uploading document:', error);
+        console.error("Error queuing document ingestion:", error);
         return {
           success: false,
-          message: error.message || "Failed to upload document",
+          message: error.message || "Failed to queue ingestion",
         };
       }
     }),
 
   /**
-   * Process all documents for a trial (upload to File Search Store)
+   * (Re)trigger RAG ingestion for every BE document of a trial.
    */
   processTrialDocuments: protectedProcedure
     .input(
@@ -1208,72 +782,44 @@ ${contextText}
         demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) {
         throw new Error("Database not available");
       }
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      if (!beTrialId) {
+        return { success: false, message: "No backend trial found for this trial" };
+      }
 
-      // Phase 5: Vector Stores deprecated. Bulk indexing now routes each
-      // protocol with a coreBackendDocumentId through the BE retry endpoint
-      // (which delegates to the RAG service via gRPC).
       try {
-        const docs = await db
-          .select()
-          .from(protocols)
-          .where(eq(protocols.trialId, resolvedTrialId));
-
+        const token = authTokenFrom(ctx);
+        const docs = await getCoreBackendClient().listTrialDocuments(beTrialId, token);
         if (docs.length === 0) {
-          return {
-            success: false,
-            message: "No documents found for this trial",
-          };
+          return { success: false, message: "No documents found for this trial" };
         }
 
         let successCount = 0;
         let errorCount = 0;
-        let skippedCount = 0;
         for (const doc of docs) {
-          if (!doc.coreBackendDocumentId) {
-            skippedCount++;
-            continue;
-          }
           try {
-            const retry = await callBackend<{
-              jobId: string;
-              documentId: string;
-              status: string;
-              message: string;
-            }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(doc.coreBackendDocumentId)}`, {
-              method: "POST",
-            });
-            await db
-              .update(protocols)
-              .set({
-                coreBackendJobId: retry.jobId,
-                coreBackendIngestStatus: retry.status || "queued",
-              })
-              .where(eq(protocols.id, doc.id));
+            await callBackend<{ jobId: string; status: string; message: string }>(
+              `/api/document-ai/retry-ingestion/${encodeURIComponent(doc.id)}`,
+              { method: "POST", user: ctx.user }
+            );
             successCount++;
           } catch (error) {
-            console.error(`Error queuing reingestion for ${doc.filename}:`, error);
+            console.error(`Error queuing reingestion for ${doc.document_name}:`, error);
             errorCount++;
           }
         }
 
         const parts = [`Queued reingestion for ${successCount} document(s)`];
         if (errorCount > 0) parts.push(`${errorCount} failed`);
-        if (skippedCount > 0)
-          parts.push(`${skippedCount} skipped (no coreBackendDocumentId)`);
-
-        return {
-          success: errorCount === 0,
-          message: parts.join("; "),
-        };
+        return { success: errorCount === 0, message: parts.join("; ") };
       } catch (error: any) {
-        console.error('Error processing trial documents:', error);
+        console.error("Error processing trial documents:", error);
         return {
           success: false,
           message: error.message || "Failed to process trial documents",

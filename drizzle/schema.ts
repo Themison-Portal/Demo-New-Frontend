@@ -124,7 +124,8 @@ export type InsertProtocol = typeof protocols.$inferInsert;
  */
 export const taskScaffolds = mysqlTable("taskScaffolds", {
   id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
   trialId: varchar("trialId", { length: 50 }).notNull(),
   status: mysqlEnum("status", ["draft", "confirmed", "active"]).default("draft").notNull(),
   confirmedAt: timestamp("confirmedAt"),
@@ -206,7 +207,8 @@ export type InsertPhaseTransition = typeof phaseTransitions.$inferInsert;
  */
 export const protocolSections = mysqlTable("protocolSections", {
   id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   pageReference: varchar("pageReference", { length: 50 }), // e.g., "p. 63-72"
   dateReference: varchar("dateReference", { length: 50 }), // e.g., "Mar 28"
@@ -304,7 +306,8 @@ export const executionMaps = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     trialId: varchar("trialId", { length: 50 }).notNull(),
-    protocolId: int("protocolId").notNull(),
+    // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
     status: mapStatusEnum.default("draft").notNull(),
     version: int("version").default(1).notNull(),
     metadata: json("metadata").notNull(),
@@ -438,7 +441,8 @@ export const protocolMapSections = mysqlTable(
   "protocol_map_sections",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    protocolId: int("protocolId").notNull(),
+    // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     sectionType: protocolMapSectionTypeEnum.default("custom").notNull(),
@@ -537,7 +541,8 @@ export type InsertMapTaskStatusHistory = typeof mapTaskStatusHistory.$inferInser
  */
 export const protocolChunks = mysqlTable("protocolChunks", {
   id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
   trialId: varchar("trialId", { length: 50 }).notNull(),
   chunkIndex: int("chunkIndex").notNull(),
   sectionType: varchar("sectionType", { length: 64 }).notNull(), // synopsis, visit, criteria, safety, etc.
@@ -577,7 +582,7 @@ export type InsertFileSearchStore = typeof fileSearchStores.$inferInsert;
 export const fileSearchDocuments = mysqlTable("fileSearchDocuments", {
   id: int("id").autoincrement().primaryKey(),
   storeId: int("storeId").notNull(), // Reference to fileSearchStores
-  protocolId: int("protocolId").notNull(), // Reference to protocols table
+  protocolId: varchar("protocolId", { length: 36 }).notNull(), // BE document UUID (protocols table retired)
   documentName: varchar("documentName", { length: 255 }).notNull(), // OpenAI File ID (e.g., 'file_abc123')
   displayName: varchar("displayName", { length: 255 }).notNull(),
   uploadedAt: timestamp("uploadedAt").defaultNow().notNull(),

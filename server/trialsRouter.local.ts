@@ -233,7 +233,7 @@ export const trialsRouterLocal = router({
         currentProtocol: null as any,
         latestProtocolIndexed: false,
       };
-      let indexedProtocolIds = new Set<number>();
+      let indexedProtocolIds = new Set<string>();
 
       if (include.has("documents") || include.has("suggestions") || include.has("insights")) {
         try {
@@ -253,7 +253,7 @@ export const trialsRouterLocal = router({
               indexedProtocolIds = new Set(vectorIndexedRows.map((row) => row.protocolId));
             }
           } else {
-            indexedProtocolIds = new Set<number>();
+            indexedProtocolIds = new Set<string>();
           }
 
           const byCategory = protocolRows.reduce<Record<string, number>>((acc, doc) => {
@@ -1584,7 +1584,7 @@ export const trialsRouterLocal = router({
         .select({ id: protocols.id })
         .from(protocols)
         .where(eq(protocols.trialId, resolvedId));
-      const protocolIds = protocolRows.map((row) => row.id);
+      const protocolIds: string[] = protocolRows.map((row) => String(row.id));
 
       const scaffoldRows = await db
         .select({ id: taskScaffolds.id })

@@ -54,7 +54,7 @@ export type UnifiedQueryPlan = {
 };
 
 export type DocumentEvidence = {
-  protocolId: number;
+  protocolId: string;
   filename: string;
   fileUrl: string | null;
   section: string;
@@ -107,7 +107,7 @@ export type UnifiedQueryResult = {
   sources: Array<{
     filename: string;
     fileUrl?: string | null;
-    protocolId?: number;
+    protocolId?: string;
     section?: string;
     page?: number | null;
     excerpt?: string;
@@ -132,7 +132,7 @@ export type RetrievalQualityReport = {
   route: UnifiedRoute;
   query: string;
   protocols: Array<{
-    protocolId: number;
+    protocolId: string;
     filename: string;
     retrievedCount: number;
     uniqueSections: number;
@@ -152,7 +152,7 @@ export type RetrievalCandidateDiagnostic = {
   rank: number;
   selected: boolean;
   chunkId: number;
-  protocolId: number;
+  protocolId: string;
   sectionType: string;
   sectionTitle: string | null;
   pageStart: number | null;
@@ -184,7 +184,7 @@ export type UnifiedQueryDiagnostics = {
   plan: UnifiedQueryPlan;
   route: UnifiedRoute;
   protocols: Array<{
-    protocolId: number;
+    protocolId: string;
     filename: string;
     category: string | null;
     isCurrent: boolean;
@@ -198,7 +198,7 @@ export type UnifiedQueryDiagnostics = {
   }>;
   chunkCoverage: Array<{
     chunkId: number;
-    protocolId: number;
+    protocolId: string;
     sectionType: string;
     sectionTitle: string | null;
     pageStart: number | null;
@@ -924,7 +924,7 @@ function isAbstainLanguage(answer: string) {
 
 async function resolveProtocolsForScope(
   db: any,
-  explicitProtocolIds: number[] | undefined,
+  explicitProtocolIds: string[] | undefined,
   trialId: string | undefined,
   queryPlan: UnifiedQueryPlan,
   demoMode?: "sample" | "full" | "building"
@@ -940,7 +940,7 @@ async function resolveProtocolsForScope(
   };
 
   if (explicitProtocolIds && explicitProtocolIds.length > 0) {
-    const rows = (await db.select().from(protocols).where(inArray(protocols.id, explicitProtocolIds))) as Protocol[];
+    const rows = (await db.select().from(protocols).where(inArray(protocols.coreBackendDocumentId, explicitProtocolIds))) as Protocol[];
     return sortByPrecedence(rows);
   }
   if (!trialId) {
@@ -1040,7 +1040,7 @@ async function collectDocumentEvidence(
   const grouped = await Promise.all(
     protocolRows.map(async (protocol) => {
       const requestBase = {
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         query,
         expandedQuery: queryExpansion.expandedQuery,
         preferredChunkTypes: routing.preferredChunkTypes,
@@ -1160,7 +1160,9 @@ async function collectDocumentEvidence(
   const selectedChunks = selectedRanked.map((item) => item.chunk);
   const selectedIds = new Set(selectedChunks.map((chunk) => chunk.id));
 
-  const protocolById = new Map(protocolRows.map((protocol) => [protocol.id, protocol]));
+  const protocolById = new Map(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol])
+  );
   const evidence = selectedRanked.map(({ chunk, score }): DocumentEvidence => {
     const protocol = protocolById.get(chunk.protocolId);
     return {
@@ -2291,14 +2293,14 @@ async function buildDeterministicScheduleAnswer(
   queryPlan: UnifiedQueryPlan,
   query: string,
   chunks: ProtocolContextChunk[],
-  protocolFileUrls?: Map<number, string | null>
+  protocolFileUrls?: Map<string, string | null>
 ) {
   if (queryPlan.focus !== "schedule" || queryPlan.amendmentIntent) return null;
   const best = collectStructuredScheduleEvidence(chunks);
   if (!best) {
     const fallbackProtocolId = chunks[0]?.protocolId;
     const fallbackFileUrl =
-      typeof fallbackProtocolId === "number" ? protocolFileUrls?.get(fallbackProtocolId) ?? null : null;
+      typeof fallbackProtocolId === "string" ? protocolFileUrls?.get(fallbackProtocolId) ?? null : null;
     const assisted = await extractScheduleAnswerAssist(query, chunks, undefined, fallbackFileUrl);
     if (!assisted) return null;
     const fallbackChunk = chunks.find((chunk) => isScheduleLikeChunk(chunk));
@@ -2795,24 +2797,24 @@ async function collectOperationalEvidence(
 
     const allProtocolRows = (await db.select().from(protocols).orderBy(desc(protocols.updatedAt))) as Protocol[];
     const activeProtocolRows = allProtocolRows.filter((protocol) => !protocol.archivedAt);
-    let indexedProtocolIds = new Set<number>();
+    let indexedProtocolIds = new Set<string>();
     if (activeProtocolRows.length > 0) {
       const indexedRows = USES_EXTERNAL_RAG
         ? ((await db
             .select({ protocolId: protocolChunks.protocolId })
             .from(protocolChunks)
-            .where(inArray(protocolChunks.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
-            protocolId: number;
+            .where(inArray(protocolChunks.protocolId, activeProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+            protocolId: string;
           }>)
         : ((await db
             .select({ protocolId: fileSearchDocuments.protocolId })
             .from(fileSearchDocuments)
-            .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
-            protocolId: number;
+            .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+            protocolId: string;
           }>);
       indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
     }
-    const indexedCount = activeProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;
+    const indexedCount = activeProtocolRows.filter((protocol) => indexedProtocolIds.has(String(protocol.id))).length;
     const coverage = activeProtocolRows.length
       ? Math.round((indexedCount / activeProtocolRows.length) * 100)
       : 0;
@@ -3105,24 +3107,24 @@ async function collectOperationalEvidence(
     .from(protocols)
     .where(and(eq(protocols.trialId, trialId), isNull(protocols.archivedAt)))
     .orderBy(desc(protocols.updatedAt))) as Protocol[];
-  let indexedProtocolIds = new Set<number>();
+  let indexedProtocolIds = new Set<string>();
   if (trialProtocolRows.length > 0) {
     const indexedRows = USES_EXTERNAL_RAG
       ? ((await db
           .select({ protocolId: protocolChunks.protocolId })
           .from(protocolChunks)
-          .where(inArray(protocolChunks.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
-          protocolId: number;
+          .where(inArray(protocolChunks.protocolId, trialProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+          protocolId: string;
         }>)
       : ((await db
           .select({ protocolId: fileSearchDocuments.protocolId })
           .from(fileSearchDocuments)
-          .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
-          protocolId: number;
+          .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+          protocolId: string;
         }>);
     indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
   }
-  const indexedTrialDocs = trialProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;
+  const indexedTrialDocs = trialProtocolRows.filter((protocol) => indexedProtocolIds.has(String(protocol.id))).length;
   const docCoverage = trialProtocolRows.length
     ? Math.round((indexedTrialDocs / trialProtocolRows.length) * 100)
     : 0;
@@ -3437,7 +3439,9 @@ function buildDocContext(chunks: ProtocolContextChunk[], query: string, maxItems
 
   return selected
     .sort((a, b) => {
-      if (a.protocolId !== b.protocolId) return a.protocolId - b.protocolId;
+      if (a.protocolId !== b.protocolId) {
+        return String(a.protocolId).localeCompare(String(b.protocolId));
+      }
       const ap = a.pageStart ?? Number.MAX_SAFE_INTEGER;
       const bp = b.pageStart ?? Number.MAX_SAFE_INTEGER;
       if (ap !== bp) return ap - bp;
@@ -3901,7 +3905,7 @@ export async function runUnifiedQuery(params: {
   db: any;
   query: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
-  protocolIds?: number[];
+  protocolIds?: string[];
   trialId?: string;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
@@ -3921,8 +3925,8 @@ export async function runUnifiedQuery(params: {
     provisionalPlan,
     params.demoMode
   );
-  const protocolFileUrls = new Map<number, string | null>(
-    protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
+  const protocolFileUrls = new Map<string, string | null>(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol.fileUrl ?? null])
   );
   const queryPlan = buildUnifiedQueryPlan(query, protocolRows.length > 0, Boolean(params.trialId));
   const route = queryPlan.route;
@@ -4333,7 +4337,7 @@ export async function runUnifiedQueryDiagnostics(params: {
   db: any;
   query: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
-  protocolIds?: number[];
+  protocolIds?: string[];
   trialId?: string;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
@@ -4353,8 +4357,8 @@ export async function runUnifiedQueryDiagnostics(params: {
     provisionalPlan,
     params.demoMode
   );
-  const protocolFileUrls = new Map<number, string | null>(
-    protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
+  const protocolFileUrls = new Map<string, string | null>(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol.fileUrl ?? null])
   );
   const queryPlan = buildUnifiedQueryPlan(query, protocolRows.length > 0, Boolean(params.trialId));
   const route = queryPlan.route;
@@ -4470,7 +4474,7 @@ export async function runUnifiedQueryDiagnostics(params: {
     plan: queryPlan,
     route,
     protocols: protocolRows.map((protocol) => ({
-      protocolId: protocol.id,
+      protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
       filename: protocol.filename,
       category: protocol.category ?? null,
       isCurrent: Boolean(protocol.isCurrent),
@@ -4508,7 +4512,7 @@ export async function runUnifiedQueryDiagnostics(params: {
 export async function evaluateUnifiedRetrievalQuality(params: {
   db: any;
   query: string;
-  protocolIds: number[];
+  protocolIds: string[];
 }) {
   const queryPlan = buildUnifiedQueryPlan(params.query, true, false);
   const protocolRows = await resolveProtocolsForScope(params.db, params.protocolIds, undefined, queryPlan);
@@ -4516,7 +4520,7 @@ export async function evaluateUnifiedRetrievalQuality(params: {
   const grouped = await Promise.all(
     protocolRows.map(async (protocol) => {
       const chunks = await getProtocolContextChunks({
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         query: params.query,
         comprehensive: true,
         limit: 12,
@@ -4542,7 +4546,7 @@ export async function evaluateUnifiedRetrievalQuality(params: {
       }
 
       return {
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         filename: protocol.filename,
         retrievedCount: chunks.length,
         uniqueSections: uniqueSections.size,

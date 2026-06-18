@@ -46,7 +46,7 @@ export type AgentApprovalRecord = {
   result: AgentRunResult;
   input: {
     query: string | null;
-    documentIds: number[];
+    documentIds: string[];
     payload: Record<string, unknown>;
   };
 };
@@ -149,7 +149,7 @@ async function buildAgentOutput(params: {
   trialId: string;
   agentType: AgentType;
   query: string | null;
-  documentIds: number[];
+  documentIds: string[];
   payload: Record<string, unknown>;
 }) {
   const snapshot = await computeTrialIntelligenceSnapshot(params.db, params.trialId);
@@ -330,7 +330,7 @@ export async function runOrchestratedAgent(params: {
   requestedBy: string;
   requireApproval: boolean;
   query: string | null;
-  documentIds: number[];
+  documentIds: string[];
   payload: Record<string, unknown>;
 }) {
   const generated = await buildAgentOutput({

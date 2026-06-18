@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
 import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
 import { type DemoMode } from "./_core/demoMode";
@@ -825,7 +826,7 @@ export const studySetupWizardRouter = router({
   getProtocolContext: protectedProcedure
     .input(
       z.object({
-        protocolId: z.number(),
+        protocolId: z.string(),
         query: z.string().optional(),
         sectionTypes: z.array(z.string()).optional(),
         limit: z.number().min(1).max(20).optional(),
@@ -835,10 +836,19 @@ export const studySetupWizardRouter = router({
     )
     .query(async ({ input, ctx }) => {
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const protocol = await db.getProtocolById(input.protocolId);
-      if (!protocol) {
+      // Protocol metadata comes from the BE (FE protocols table retired).
+      // protocolId is the BE document UUID string.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(input.protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) {
         throw new Error("Protocol not found");
       }
+      const protocol = {
+        id: input.protocolId,
+        filename: beDocument.document_name,
+        trialId: beDocument.trial_id ?? "",
+      };
       const protocolTrialId = protocol.trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);
@@ -904,7 +914,7 @@ export const studySetupWizardRouter = router({
    */
   generateScaffold: protectedProcedure
     .input(z.object({
-      protocolId: z.number(),
+      protocolId: z.string(),
       trialId: z.string(),
       demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
@@ -921,13 +931,22 @@ export const studySetupWizardRouter = router({
         payload: { protocolId, demoMode: mode },
         aiInvolved: true,
       });
-      
-      // Get protocol details
-      const protocol = await db.getProtocolById(protocolId);
-      if (!protocol) {
+
+      // Get protocol details from the BE (FE protocols table retired).
+      // The BE document is keyed by the UUID string protocolId.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) {
         throw new Error("Protocol not found");
       }
-      const protocolTrialId = protocol.trialId;
+      const protocol = {
+        filename: beDocument.document_name,
+        // document_url is the GCS blob path; used as the storage key below.
+        fileKey: beDocument.document_url,
+      };
+      // The mode-belonging check uses the (mode-prefixed) trialId the client passes.
+      const protocolTrialId = trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);
       const legacyAllowed = mode !== "building";
@@ -1273,13 +1292,22 @@ ${chunk.chunkText.slice(0, 700)}`;
    */
   getScaffold: protectedProcedure
     .input(z.object({
-      protocolId: z.number(),
+      protocolId: z.string(),
       demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
     .query(async ({ input }) => {
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const protocol = await db.getProtocolById(input.protocolId);
-      if (!protocol) return null;
+      // Protocol metadata comes from the BE (FE protocols table retired).
+      // protocolId is the BE document UUID string.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(input.protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) return null;
+      const protocol = {
+        id: input.protocolId,
+        filename: beDocument.document_name,
+        trialId: beDocument.trial_id ?? "",
+      };
       const protocolTrialId = protocol.trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);

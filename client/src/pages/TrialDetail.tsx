@@ -345,10 +345,10 @@ export default function TrialDetail() {
     // disable it while docs are still processing or failed (or none uploaded).
     const hasIndexedDocument = protocols.some((p: any) => !!p?.isIndexed);
 
-    const protocolId = protocols?.[0]?.id;
+    const protocolId = protocols?.[0]?.id as string | undefined;
     const { data: existingScaffold } = trpc.studySetupWizard.getScaffold.useQuery(
-        { protocolId: protocolId || 0, demoMode: currentDataMode },
-        { enabled: !!protocolId && protocolId > 0 }
+        { protocolId: protocolId ?? "", demoMode: currentDataMode },
+        { enabled: !!protocolId }
     );
     const {
         data: executionMapSummary,

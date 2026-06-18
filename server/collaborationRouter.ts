@@ -8,7 +8,6 @@ import {
   crossReferences,
   emailChains,
   messages,
-  protocols,
   threadAnchors,
   threadParticipants,
   threads,
@@ -18,6 +17,7 @@ import {
 } from "../drizzle/schema";
 import { getDb } from "./db";
 import { getProtocolContextChunks, type ProtocolContextChunk } from "./_core/protocolContext";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
 import { callBackend } from "./_core/backendClient";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
@@ -157,17 +157,35 @@ async function getPrimaryUserContext(db: DbClient, userId: number) {
 }
 
 async function getProtocolChunksForTrial(db: DbClient, trialId: string, query: string) {
-  const protocolRows = await db
-    .select({ id: protocols.id, filename: protocols.filename, isCurrent: protocols.isCurrent, createdAt: protocols.createdAt })
-    .from(protocols)
-    .where(eq(protocols.trialId, trialId))
-    .orderBy(desc(protocols.isCurrent), desc(protocols.createdAt))
-    .limit(3);
+  // Documents are BE-owned (the FE `protocols` table is retired). Resolve the
+  // BE trial and take its top documents (current first, then newest).
+  const [trialRow] = await db
+    .select({ cb: trials.coreBackendTrialId })
+    .from(trials)
+    .where(eq(trials.id, trialId))
+    .limit(1);
+  let beTrialId = trialRow?.cb ?? null;
+  if (!beTrialId && !trialId.includes(":")) beTrialId = trialId; // real trial: id IS the BE UUID
+  if (!beTrialId) return [];
+
+  let beDocs;
+  try {
+    beDocs = await getCoreBackendClient().listTrialDocuments(beTrialId, "auth-disabled-bypass");
+  } catch {
+    return [];
+  }
+  const topDocs = beDocs
+    .sort(
+      (a, b) =>
+        Number(b.is_current ?? false) - Number(a.is_current ?? false) ||
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
+    .slice(0, 3);
 
   const chunkSets = await Promise.all(
-    protocolRows.map(async (row) => {
+    topDocs.map(async (doc) => {
       const chunks = await getProtocolContextChunks({
-        protocolId: row.id,
+        protocolId: doc.id,
         query,
         limit: 4,
         comprehensive: true,

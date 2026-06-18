@@ -6,7 +6,6 @@ import {
   executionMaps,
   phases as legacyPhases,
   phaseTransitions as legacyPhaseTransitions,
-  protocols,
   protocolSections as legacyProtocolSections,
   mapPhases,
   mapPhaseTransitions,
@@ -22,6 +21,7 @@ import {
   trials,
 } from "../drizzle/schema";
 import { getDb } from "./db";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
@@ -1943,7 +1943,7 @@ export const mapRouterLocal = router({
     .input(
       z.object({
         trialId: z.string(),
-        protocolId: z.number(),
+        protocolId: z.string(),
         mapId: z.string().optional(),
         clearExisting: z.boolean().optional(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
@@ -1991,7 +1991,13 @@ export const mapRouterLocal = router({
         });
       }
 
-      const [protocol] = await db.select().from(protocols).where(eq(protocols.id, input.protocolId)).limit(1);
+      let protocol: { trialId: string | null; filename: string | null } | null = null;
+      try {
+        const beDoc = await getCoreBackendClient().getTrialDocument(input.protocolId, "auth-disabled-bypass");
+        protocol = { trialId: beDoc.trial_id, filename: beDoc.document_name };
+      } catch (error) {
+        console.warn("[map.importLegacyScaffold] failed to load BE trial document", error);
+      }
       if (protocol?.trialId) {
         trialCandidateIds.add(String(protocol.trialId));
       }
@@ -3268,7 +3274,7 @@ export const mapRouterLocal = router({
     .input(
       z.object({
         trialId: z.string(),
-        protocolId: z.number(),
+        protocolId: z.string(),
         status: z.enum(MAP_STATUSES).default("draft"),
         version: z.number().optional(),
         metadata: mapMetadataSchema.optional(),

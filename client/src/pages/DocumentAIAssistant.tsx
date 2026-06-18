@@ -96,7 +96,7 @@ interface ChatMessage {
     excerpt?: string;
     fileId?: string;
     fileUrl?: string;
-    protocolId?: number;
+    documentId?: string;
     page?: number;
     category?: string;
     sourceType?: string;
@@ -335,7 +335,7 @@ type WorksheetDraft = {
   title: string;
   subtitle: string;
   blocks: WorksheetBlock[];
-  sources: Array<{ filename: string; section?: string; excerpt?: string; fileUrl?: string; protocolId?: number; page?: number | null; category?: string; highlightUrl?: string }>;
+  sources: Array<{ filename: string; section?: string; excerpt?: string; fileUrl?: string; documentId?: string; page?: number | null; category?: string; highlightUrl?: string }>;
   status: WorksheetDraftStatus;
   createdAt: string;
   updatedAt: string;
@@ -832,7 +832,8 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
   }, [sourceModalOpen]);
   const [selectedTrials, setSelectedTrials] = useState<string[]>(trialId ? [trialId] : []);
   const [activeTrials, setActiveTrials] = useState<string[]>(trialId ? [trialId] : []);
-  const [selectedDocuments, setSelectedDocuments] = useState<number[]>([]);
+  // Document ids are BE document UUIDs (strings) — documents are BE-owned.
+  const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [isAllDocumentsMode, setIsAllDocumentsMode] = useState(true); // Default to searching all documents
   const [autoScoped, setAutoScoped] = useState(false);
   const [archiveGroups, setArchiveGroups] = useState<ArchiveFolderGroup[]>([]);
@@ -1891,11 +1892,12 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
       });
 
       const sources = (response as any).sources as Array<any> | undefined;
+      const thinking = (response as any).thinking as string | undefined;
       const assistantMessage: ChatMessage = {
         role: 'assistant',
         content: response.message,
-        thinking: response.thinking,
-        thoughtsSummary: response.thinking,
+        thinking,
+        thoughtsSummary: thinking,
         sources,
       };
       const nextHistoryWithAssistant = [...nextHistoryWithUser, assistantMessage];
@@ -2225,7 +2227,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
           sources: (messageEntry.sources || []).map((source) => ({
             filename: source.filename,
             fileUrl: source.fileUrl,
-            protocolId: source.protocolId,
+            documentId: source.documentId,
             excerpt: source.excerpt,
             section: source.section,
             category: source.category,
@@ -2291,7 +2293,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             section: source.section,
             excerpt: source.excerpt,
             fileUrl: source.fileUrl,
-            protocolId: source.protocolId,
+            documentId: source.documentId,
             page: source.page ?? null,
             category: source.category,
             highlightUrl: source.highlightUrl,
@@ -4639,7 +4641,7 @@ Output rules:
                                 title.toLowerCase() === "document" &&
                                 !canOpenDocument &&
                                 !source.page &&
-                                !source.protocolId;
+                                !source.documentId;
                               return {
                                 source,
                                 isTaskSource,

@@ -60,7 +60,7 @@ export async function getTaskScaffoldById(id: number) {
   return result[0] || null;
 }
 
-export async function getTaskScaffoldByProtocolId(protocolId: number) {
+export async function getTaskScaffoldByProtocolId(protocolId: string) {
   const db = await getDb();
   if (!db) return null;
   
@@ -238,7 +238,7 @@ export async function createProtocolSection(data: InsertProtocolSection) {
   });
 }
 
-export async function getProtocolSections(protocolId: number) {
+export async function getProtocolSections(protocolId: string) {
   const db = await getDb();
   if (!db) return [];
   

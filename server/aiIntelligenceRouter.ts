@@ -31,7 +31,7 @@ export const aiIntelligenceRouter = router({
       z.object({
         query: z.string().min(2).max(5000),
         trialId: z.string().optional(),
-        documentIds: z.array(z.number().int().positive()).optional(),
+        documentIds: z.array(z.string()).optional(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
         messages: z
           .array(
@@ -107,7 +107,7 @@ export const aiIntelligenceRouter = router({
     .input(
       z.object({
         query: z.string().min(2).max(2000),
-        documentIds: z.array(z.number().int().positive()).min(1),
+        documentIds: z.array(z.string()).min(1),
       })
     )
     .query(async ({ input }) => {
@@ -126,7 +126,7 @@ export const aiIntelligenceRouter = router({
       z.object({
         query: z.string().min(2).max(5000),
         trialId: z.string().optional(),
-        documentIds: z.array(z.number().int().positive()).optional(),
+        documentIds: z.array(z.string()).optional(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
         messages: z
           .array(
@@ -186,7 +186,7 @@ export const aiIntelligenceRouter = router({
       z.object({
         trialId: z.string().optional(),
         demoMode: z.enum(["sample", "full", "building"]).optional(),
-        documentIds: z.array(z.number().int().positive()).min(1),
+        documentIds: z.array(z.string()).min(1),
         cases: z
           .array(
             z.object({
@@ -316,7 +316,7 @@ export const aiIntelligenceRouter = router({
           "query_resolution",
         ]),
         query: z.string().max(5000).optional(),
-        documentIds: z.array(z.number().int().positive()).optional(),
+        documentIds: z.array(z.string()).optional(),
         payload: z.record(z.string(), z.unknown()).optional(),
         requireApproval: z.boolean().optional(),
       })
