@@ -220,9 +220,17 @@ export const documentsRouter = router({
         .where(eq(trials.id, resolvedTrialId))
         .limit(1);
 
+      const UUID_RE =
+        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
       let beTrialId: string | null = trialMeta?.coreBackendTrialId ?? null;
       if (!beTrialId) {
-        if (!trialMeta && mode !== "building") {
+        if (UUID_RE.test(input.trialId)) {
+          // The trial id is already the BE trial UUID (a real / wizard trial that
+          // exists in the BE). Upload directly under it — provisioning a fresh BE
+          // trial here would scatter the doc into an orphan trial the Hub never
+          // lists. This MUST match resolveBeTrialIdForRead's read-side resolution.
+          beTrialId = input.trialId;
+        } else if (!trialMeta && mode !== "building") {
           beTrialId = resolvedTrialId; // real trial: id already is the BE UUID
         } else {
           const meta = trialMeta ?? {
