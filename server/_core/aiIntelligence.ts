@@ -15,6 +15,8 @@ import {
 } from "../../drizzle/schema";
 import { and, desc, eq, inArray, like, notLike } from "drizzle-orm";
 import type { DemoMode } from "./demoMode";
+import { stripDemoId } from "./demoMode";
+import { resolveBeTrialIdForRead } from "./coreBackendDocs";
 import { ENV } from "./env";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
@@ -35,6 +37,11 @@ function clampBps(value: number) {
 
 export type TrialIntelligenceSnapshot = {
   trialId: string;
+  /**
+   * BE trial UUID (migrated child tables are keyed by this), or null when the
+   * trial has no BE mapping yet. `trialId` stays the FE id for `trials`/`protocols`.
+   */
+  beTrialUuid: string | null;
   snapshotDate: string;
   trial: {
     title: string;
@@ -84,7 +91,11 @@ export type TrialIntelligenceSnapshot = {
   features: Record<string, unknown>;
 };
 
-export async function computeTrialIntelligenceSnapshot(db: any, trialId: string): Promise<TrialIntelligenceSnapshot | null> {
+export async function computeTrialIntelligenceSnapshot(
+  db: any,
+  trialId: string,
+  beTrialUuid: string | null = null
+): Promise<TrialIntelligenceSnapshot | null> {
   const [trial] = await db.select().from(trials).where(eq(trials.id, trialId)).limit(1);
   if (!trial) return null;
 
@@ -128,10 +139,13 @@ export async function computeTrialIntelligenceSnapshot(db: any, trialId: string)
     ? clampPercent((indexedDocs.length / activeDocs.length) * 100)
     : 0;
 
-  const scaffoldRows = await db
-    .select({ id: taskScaffolds.id })
-    .from(taskScaffolds)
-    .where(eq(taskScaffolds.trialId, trialId));
+  // taskScaffolds is BE-keyed: query by the BE trial UUID, never the FE id.
+  const scaffoldRows = beTrialUuid
+    ? await db
+        .select({ id: taskScaffolds.id })
+        .from(taskScaffolds)
+        .where(eq(taskScaffolds.trialId, beTrialUuid))
+    : [];
   const scaffoldIds = scaffoldRows.map((row: any) => row.id);
 
   const phaseRows = scaffoldIds.length
@@ -244,6 +258,7 @@ export async function computeTrialIntelligenceSnapshot(db: any, trialId: string)
 
   return {
     trialId,
+    beTrialUuid,
     snapshotDate: toDayKey(),
     trial: {
       title: trial.title,
@@ -299,8 +314,13 @@ export async function persistTrialSnapshot(
   snapshot: TrialIntelligenceSnapshot,
   snapshotVersion = "v1"
 ) {
+  // aiFeatureSnapshots / aiAnalyticsRollups are BE-keyed: skip persistence when
+  // the trial has no BE mapping yet (never write a null/FE trialId).
+  const beTrialUuid = snapshot.beTrialUuid;
+  if (!beTrialUuid) return;
+
   await db.insert(aiFeatureSnapshots).values({
-    trialId: snapshot.trialId,
+    trialId: beTrialUuid,
     snapshotDate: snapshot.snapshotDate,
     snapshotVersion,
     featureVector: snapshot.features,
@@ -312,10 +332,10 @@ export async function persistTrialSnapshot(
 
   await db
     .delete(aiAnalyticsRollups)
-    .where(and(eq(aiAnalyticsRollups.trialId, snapshot.trialId), eq(aiAnalyticsRollups.rollupDate, snapshot.snapshotDate)));
+    .where(and(eq(aiAnalyticsRollups.trialId, beTrialUuid), eq(aiAnalyticsRollups.rollupDate, snapshot.snapshotDate)));
 
   await db.insert(aiAnalyticsRollups).values({
-    trialId: snapshot.trialId,
+    trialId: beTrialUuid,
     rollupDate: snapshot.snapshotDate,
     documentTotal: snapshot.documents.total,
     documentIndexed: snapshot.documents.indexed,
@@ -332,7 +352,11 @@ export async function persistTrialSnapshot(
   });
 }
 
-export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
+export async function syncTrialKnowledgeGraph(
+  db: any,
+  trialId: string,
+  beTrialUuid: string | null = null
+) {
   const [trial] = await db.select().from(trials).where(eq(trials.id, trialId)).limit(1);
   if (!trial) {
     return {
@@ -344,8 +368,20 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
     } as const;
   }
 
+  // knowledgeGraphNodes/Edges and taskScaffolds are BE-keyed: without a BE trial
+  // UUID there is nothing to key these reads/writes on, so skip.
+  if (!beTrialUuid) {
+    return {
+      trialId,
+      nodesCreated: 0,
+      edgesCreated: 0,
+      skipped: true,
+      reason: "No BE trial mapping",
+    } as const;
+  }
+
   const protocolRows = await db.select().from(protocols).where(eq(protocols.trialId, trialId));
-  const scaffoldRows = await db.select().from(taskScaffolds).where(eq(taskScaffolds.trialId, trialId));
+  const scaffoldRows = await db.select().from(taskScaffolds).where(eq(taskScaffolds.trialId, beTrialUuid));
   const scaffoldIds = scaffoldRows.map((row: any) => row.id);
   const phaseRows = scaffoldIds.length
     ? await db.select().from(phases).where(inArray(phases.scaffoldId, scaffoldIds))
@@ -355,8 +391,8 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
     ? await db.select().from(tasks).where(inArray(tasks.phaseId, phaseIds))
     : [];
 
-  await db.delete(knowledgeGraphEdges).where(eq(knowledgeGraphEdges.trialId, trialId));
-  await db.delete(knowledgeGraphNodes).where(eq(knowledgeGraphNodes.trialId, trialId));
+  await db.delete(knowledgeGraphEdges).where(eq(knowledgeGraphEdges.trialId, beTrialUuid));
+  await db.delete(knowledgeGraphNodes).where(eq(knowledgeGraphNodes.trialId, beTrialUuid));
 
   const nodes: Array<Record<string, unknown>> = [];
   const edges: Array<Record<string, unknown>> = [];
@@ -364,7 +400,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
 
   const trialNodeKey = `trial:${trial.id}`;
   nodes.push({
-    trialId,
+    trialId: beTrialUuid,
     nodeType: "Trial",
     nodeKey: trialNodeKey,
     displayName: trial.investigationalProduct || trial.title || trial.id,
@@ -381,7 +417,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
   for (const doc of protocolRows) {
     const docNodeKey = `document:${doc.id}`;
     nodes.push({
-      trialId,
+      trialId: beTrialUuid,
       nodeType: "Document",
       nodeKey: docNodeKey,
       displayName: doc.filename,
@@ -394,7 +430,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
       updatedAt: new Date(),
     });
     edges.push({
-      trialId,
+      trialId: beTrialUuid,
       edgeType: "HAS_DOCUMENT",
       fromNodeKey: trialNodeKey,
       toNodeKey: docNodeKey,
@@ -408,7 +444,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
   for (const phase of phaseRows) {
     const phaseNodeKey = `phase:${phase.id}`;
     nodes.push({
-      trialId,
+      trialId: beTrialUuid,
       nodeType: "Phase",
       nodeKey: phaseNodeKey,
       displayName: phase.name,
@@ -420,7 +456,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
       updatedAt: new Date(),
     });
     edges.push({
-      trialId,
+      trialId: beTrialUuid,
       edgeType: "HAS_PHASE",
       fromNodeKey: trialNodeKey,
       toNodeKey: phaseNodeKey,
@@ -432,7 +468,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
   for (const task of taskRows) {
     const taskNodeKey = `task:${task.id}`;
     nodes.push({
-      trialId,
+      trialId: beTrialUuid,
       nodeType: "Task",
       nodeKey: taskNodeKey,
       displayName: task.name,
@@ -446,7 +482,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
     });
 
     edges.push({
-      trialId,
+      trialId: beTrialUuid,
       edgeType: "HAS_TASK",
       fromNodeKey: `phase:${task.phaseId}`,
       toNodeKey: taskNodeKey,
@@ -459,7 +495,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
       if (!knownSections.has(sectionNodeKey)) {
         knownSections.add(sectionNodeKey);
         nodes.push({
-          trialId,
+          trialId: beTrialUuid,
           nodeType: "Section",
           nodeKey: sectionNodeKey,
           displayName: task.protocolSection,
@@ -469,7 +505,7 @@ export async function syncTrialKnowledgeGraph(db: any, trialId: string) {
         });
       }
       edges.push({
-        trialId,
+        trialId: beTrialUuid,
         edgeType: "DERIVED_FROM",
         fromNodeKey: taskNodeKey,
         toNodeKey: sectionNodeKey,
@@ -514,7 +550,12 @@ export async function buildCrossTrialAnalytics(db: any, mode: DemoMode, persistR
   const trialRows = await getTrialsForMode(db, mode);
   const snapshots = (
     await Promise.all(
-      trialRows.map((trial: any) => computeTrialIntelligenceSnapshot(db, trial.id))
+      trialRows.map(async (trial: any) => {
+        // Migrated child tables (taskScaffolds, ai_* rollups) are BE-keyed:
+        // resolve each FE trial id to its BE trial UUID (or null).
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, stripDemoId(String(trial.id)));
+        return computeTrialIntelligenceSnapshot(db, trial.id, beTrialUuid);
+      })
     )
   ).filter((snapshot): snapshot is TrialIntelligenceSnapshot => Boolean(snapshot));
 

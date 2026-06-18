@@ -11,7 +11,11 @@ import { eq } from "drizzle-orm";
 import { trials } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { resolveTrialId, type DemoMode } from "./demoMode";
+import { callBackend } from "./backendClient";
 import type { CoreBackendTrialDocument } from "@shared/coreBackendTypes";
+
+const UUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -38,6 +42,24 @@ export async function resolveBeTrialIdForRead(
   mode: DemoMode,
   trialId: string
 ): Promise<string | null> {
+  // 1. A bare-UUID trial id already IS the BE trial UUID (wizard docs uploaded
+  //    directly under the BE trial UUID).
+  if (UUID_RE.test(trialId)) return trialId;
+  // 2. Trials are BE-owned: resolve the client's slug (+ demo_mode) via the BE.
+  //    This is the primary path for BE-native trials (no FE `trials` row). Try
+  //    with the demo_mode first (disambiguates colliding sample/full slugs like
+  //    "1"); if that misses (e.g. a caller that didn't pass demoMode), retry on
+  //    the slug alone — safe for the unique wizard/building slugs.
+  for (const q of [{ slug: trialId, demo_mode: mode }, { slug: trialId }]) {
+    try {
+      const t = await callBackend<any>(`/api/trials/by-slug`, { query: q });
+      if (t?.id) return t.id;
+    } catch {
+      /* not found for this query — try the next, then the FE mapping */
+    }
+  }
+  // 3. Transition fallback: the FE `trials.coreBackendTrialId` mapping (for
+  //    trials not yet backfilled into the BE). Retired in Phase E.
   const resolvedTrialId = await resolveTrialId(db, mode, trialId, mode !== "building");
   const [row] = await db
     .select({ cb: trials.coreBackendTrialId })
@@ -45,16 +67,6 @@ export async function resolveBeTrialIdForRead(
     .where(eq(trials.id, resolvedTrialId))
     .limit(1);
   if (row?.cb) return row.cb;
-  // A bare-UUID trial id IS the BE trial UUID for a real trial — use it
-  // REGARDLESS of demo mode, whether or not a FE mirror row exists or has the
-  // mapping populated. This crucially covers wizard ("building") mode, where the
-  // FE passes the BE trial UUID directly but `resolveTrialId` prefixes it to
-  // "building:<uuid>" (no FE row) — so we must prefer the bare INPUT id. (The
-  // previous version excluded building mode and checked the prefixed resolved id,
-  // so a real trial's BE documents silently vanished from the Hub.)
-  const UUID_RE =
-    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-  if (UUID_RE.test(trialId)) return trialId;
   if (!resolvedTrialId.includes(":") && UUID_RE.test(resolvedTrialId)) {
     return resolvedTrialId;
   }

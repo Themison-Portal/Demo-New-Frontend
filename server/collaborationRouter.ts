@@ -19,8 +19,12 @@ import { getDb } from "./db";
 import { getProtocolContextChunks, type ProtocolContextChunk } from "./_core/protocolContext";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
 import { callBackend } from "./_core/backendClient";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import type { DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
+
+const demoModeSchema = z.enum(["sample", "full", "building"]);
 
 const layerSchema = z.enum(["messages", "threads", "inbox"]);
 const threadCategorySchema = z.enum([
@@ -651,15 +655,19 @@ async function draftEmailWithAI(
 export const collaborationRouter = router({
   conversations: router({
     list: protectedProcedure
-      .input(z.object({ trialId: z.string().min(1) }))
+      .input(z.object({ trialId: z.string().min(1), demoMode: demoModeSchema.optional() }))
       .query(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return [];
+
         const items = await db
           .select()
           .from(conversations)
-          .where(eq(conversations.trialId, input.trialId))
+          .where(eq(conversations.trialId, beTrialUuid))
           .orderBy(desc(conversations.updatedAt));
 
         if (!items.length) return [];
@@ -733,6 +741,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           type: z.enum(["direct", "group"]),
           name: z.string().max(255).optional(),
           participantUserIds: z.array(z.number().int().positive()).default([]),
@@ -742,10 +751,14 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
+
         const conversationId = randomUUID();
         await db.insert(conversations).values({
           id: conversationId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           type: input.type,
           name: input.type === "group" ? input.name ?? "Untitled Group" : null,
           createdBy: ctx.user.id,
@@ -767,7 +780,7 @@ export const collaborationRouter = router({
         }
 
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: "messages",
           eventType: "conversation_created",
@@ -920,6 +933,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           category: threadCategorySchema.optional(),
           status: threadStatusSchema.optional(),
         })
@@ -928,7 +942,11 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
-        const filters = [eq(threads.trialId, input.trialId)];
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return [];
+
+        const filters = [eq(threads.trialId, beTrialUuid)];
         if (input.category) filters.push(eq(threads.category, input.category));
         if (input.status) filters.push(eq(threads.status, input.status));
 
@@ -964,6 +982,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           title: z.string().min(2).max(500),
           category: threadCategorySchema,
           anchors: z
@@ -985,10 +1004,14 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
+
         const threadId = randomUUID();
         await db.insert(threads).values({
           id: threadId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           title: input.title,
           category: input.category,
           status: "open",
@@ -1051,7 +1074,7 @@ export const collaborationRouter = router({
         }
 
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: "threads",
           eventType: "thread_created",
@@ -1063,7 +1086,7 @@ export const collaborationRouter = router({
         });
 
         await logThreadCreationEntityEvent({
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           threadId,
           category: input.category,
@@ -1336,17 +1359,21 @@ export const collaborationRouter = router({
 
   inbox: router({
     getConfig: protectedProcedure
-      .input(z.object({ trialId: z.string().min(1) }))
+      .input(z.object({ trialId: z.string().min(1), demoMode: demoModeSchema.optional() }))
       .query(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new Error("Database not available");
-        return await ensureTrialInbox(db, input.trialId);
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return null;
+        return await ensureTrialInbox(db, beTrialUuid);
       }),
 
     listEmailChains: protectedProcedure
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           folder: emailFolderSchema.optional(),
           label: z.string().optional(),
           priority: emailPrioritySchema.optional(),
@@ -1356,7 +1383,11 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
-        const inbox = await ensureTrialInbox(db, input.trialId);
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return [];
+
+        const inbox = await ensureTrialInbox(db, beTrialUuid);
 
         const base = [eq(emailChains.inboxId, inbox.id)];
         if (input.folder) base.push(eq(emailChains.folder, input.folder));
@@ -1398,6 +1429,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           to: z.array(z.string().email()).min(1),
           cc: z.array(z.string().email()).default([]),
           subject: z.string().min(1).max(500),
@@ -1408,7 +1440,11 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
-        const inbox = await ensureTrialInbox(db, input.trialId);
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
+
+        const inbox = await ensureTrialInbox(db, beTrialUuid);
         const chainId = randomUUID();
 
         await db.insert(emailChains).values({
@@ -1452,7 +1488,7 @@ export const collaborationRouter = router({
         });
 
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: "inbox",
           eventType: "email_composed",
@@ -1981,6 +2017,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           layer: layerSchema,
           question: z.string().min(1).max(12000),
           conversationId: z.string().optional(),
@@ -1992,9 +2029,13 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
+
         return await createAiMessage({
           db,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: input.layer,
           question: input.question,
@@ -2107,6 +2148,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           content: z.string().min(1).max(8000),
           conversationId: z.string().optional(),
           threadId: z.string().optional(),
@@ -2116,6 +2158,10 @@ export const collaborationRouter = router({
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
         if (!db) throw new Error("Database not available");
+
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const taskCard = buildTaskCardFromPrompt(input.content);
         const messageText = `Prepared a task draft. Please review and confirm before creation.`;
@@ -2144,7 +2190,7 @@ export const collaborationRouter = router({
         }
 
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: input.threadId ? "threads" : "messages",
           eventType: "ai_task_suggested",
@@ -2219,10 +2265,14 @@ export const collaborationRouter = router({
       }),
 
     findRelatedThreads: protectedProcedure
-      .input(z.object({ trialId: z.string().min(1), query: z.string().min(2).max(500) }))
+      .input(z.object({ trialId: z.string().min(1), demoMode: demoModeSchema.optional(), query: z.string().min(2).max(500) }))
       .query(async ({ input }) => {
         const db = await getDb();
         if (!db) throw new Error("Database not available");
+
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return [];
 
         const tokenized = input.query
           .toLowerCase()
@@ -2232,7 +2282,7 @@ export const collaborationRouter = router({
           .slice(0, 8);
 
         const whereParts = tokenized.map((token) => like(threads.title, `%${token}%`));
-        const base = [eq(threads.trialId, input.trialId)];
+        const base = [eq(threads.trialId, beTrialUuid)];
         if (whereParts.length) {
           base.push(or(...whereParts) as any);
         }
@@ -2260,6 +2310,7 @@ export const collaborationRouter = router({
       .input(
         z.object({
           trialId: z.string().min(1),
+          demoMode: demoModeSchema.optional(),
           layer: layerSchema,
           eventType: z.string().min(2).max(120),
           eventData: z.record(z.string(), z.unknown()).default({}),
@@ -2273,8 +2324,12 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
 
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialUuid) return { success: true } as const;
+
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: input.layer,
           eventType: input.eventType,
@@ -2290,22 +2345,28 @@ export const collaborationRouter = router({
   }),
 
   seedDemoData: protectedProcedure
-    .input(z.object({ trialId: z.string().min(1) }))
+    .input(z.object({ trialId: z.string().min(1), demoMode: demoModeSchema.optional() }))
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new Error("Database not available");
 
-      const inbox = await ensureTrialInbox(db, input.trialId);
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      if (!beTrialUuid) {
+        throw new Error("No backend trial found for this trial id; cannot seed collaboration data");
+      }
+
+      const inbox = await ensureTrialInbox(db, beTrialUuid);
 
       const [conversationCountRows, threadCountRows, emailCountRows, emailInboxCountRows, emailDraftCountRows] = await Promise.all([
         db
           .select({ count: sql<number>`count(*)` })
           .from(conversations)
-          .where(eq(conversations.trialId, input.trialId)),
+          .where(eq(conversations.trialId, beTrialUuid)),
         db
           .select({ count: sql<number>`count(*)` })
           .from(threads)
-          .where(eq(threads.trialId, input.trialId)),
+          .where(eq(threads.trialId, beTrialUuid)),
         db
           .select({ count: sql<number>`count(*)` })
           .from(emailChains)
@@ -2338,7 +2399,7 @@ export const collaborationRouter = router({
         const [existingVisitThread] = await db
           .select({ id: threads.id })
           .from(threads)
-          .where(and(eq(threads.trialId, input.trialId), eq(threads.title, "Visit 3 timing clarification")))
+          .where(and(eq(threads.trialId, beTrialUuid), eq(threads.title, "Visit 3 timing clarification")))
           .limit(1);
 
         let threadVisitId = existingVisitThread?.id ?? null;
@@ -2346,7 +2407,7 @@ export const collaborationRouter = router({
           const [latestThread] = await db
             .select({ id: threads.id })
             .from(threads)
-            .where(eq(threads.trialId, input.trialId))
+            .where(eq(threads.trialId, beTrialUuid))
             .orderBy(desc(threads.updatedAt))
             .limit(1);
           threadVisitId = latestThread?.id ?? null;
@@ -2356,7 +2417,7 @@ export const collaborationRouter = router({
           threadVisitId = randomUUID();
           await db.insert(threads).values({
             id: threadVisitId,
-            trialId: input.trialId,
+            trialId: beTrialUuid,
             title: "Visit 3 timing clarification",
             category: "question",
             status: "open",
@@ -2565,7 +2626,7 @@ export const collaborationRouter = router({
         }
 
         await logCollabEvent(db, {
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           userId: ctx.user.id,
           layer: "inbox",
           eventType: "collaboration_seeded_inbox_backfill",
@@ -2641,7 +2702,7 @@ export const collaborationRouter = router({
       await db.insert(conversations).values([
         {
           id: dmConversationId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           type: "direct",
           name: null,
           createdBy: olivia,
@@ -2650,7 +2711,7 @@ export const collaborationRouter = router({
         },
         {
           id: groupConversationId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           type: "group",
           name: "Site Coordinators",
           createdBy: susan,
@@ -2673,7 +2734,7 @@ export const collaborationRouter = router({
       await db.insert(threads).values([
         {
           id: threadVisitId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           title: "Visit 3 timing clarification",
           category: "question",
           status: "open",
@@ -2688,7 +2749,7 @@ export const collaborationRouter = router({
         },
         {
           id: threadLabId,
-          trialId: input.trialId,
+          trialId: beTrialUuid,
           title: "Lab kit supplier approval",
           category: "decision",
           status: "resolved",
@@ -3282,7 +3343,7 @@ export const collaborationRouter = router({
       ]);
 
       await logCollabEvent(db, {
-        trialId: input.trialId,
+        trialId: beTrialUuid,
         userId: ctx.user.id,
         layer: "messages",
         eventType: "collaboration_seeded",

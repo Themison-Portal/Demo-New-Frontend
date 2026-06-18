@@ -26,6 +26,7 @@ import { logTelemetryEvent } from "./_core/telemetry";
 import { protectedProcedure, router } from "./_core/trpc";
 import { ingestProtocolContextChunks } from "./_core/protocolContext";
 import { resolveTrialId, stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
 
 const MAP_STATUSES = ["draft", "active", "revised", "archived"] as const;
 const MAP_DEMO_MODES: DemoMode[] = ["sample", "full", "building"];
@@ -1813,13 +1814,17 @@ export const mapRouterLocal = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
-      const candidates = resolveMapTrialCandidates(input.trialId, input.demoMode as DemoMode | undefined);
-      if (candidates.length === 0) return null;
+      const beTrialUuid = await resolveBeTrialIdForRead(
+        db,
+        input.demoMode as DemoMode,
+        input.trialId
+      );
+      if (!beTrialUuid) return null;
 
       const rows = await db
         .select()
         .from(executionMaps)
-        .where(candidates.length === 1 ? eq(executionMaps.trialId, candidates[0]) : inArray(executionMaps.trialId, candidates))
+        .where(eq(executionMaps.trialId, beTrialUuid))
         .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version));
 
       const selected = pickPreferredExecutionMap(rows, Boolean(input.includeArchived));
@@ -1843,12 +1848,21 @@ export const mapRouterLocal = router({
       );
       if (!uniqueTrialIds.length) return [];
 
-      const trialCandidateEntries = uniqueTrialIds.map((trialId) => ({
-        requestedTrialId: trialId,
-        candidates: resolveMapTrialCandidates(trialId, input.demoMode as DemoMode | undefined),
-      }));
+      const trialCandidateEntries = (
+        await Promise.all(
+          uniqueTrialIds.map(async (trialId) => {
+            const beTrialUuid = await resolveBeTrialIdForRead(
+              db,
+              input.demoMode as DemoMode,
+              trialId
+            );
+            if (!beTrialUuid) return null;
+            return { requestedTrialId: trialId, beTrialUuid };
+          })
+        )
+      ).filter(Boolean) as Array<{ requestedTrialId: string; beTrialUuid: string }>;
       const flatCandidateIds = Array.from(
-        new Set(trialCandidateEntries.flatMap((entry) => entry.candidates).filter(Boolean))
+        new Set(trialCandidateEntries.map((entry) => entry.beTrialUuid).filter(Boolean))
       );
       if (!flatCandidateIds.length) return [];
 
@@ -1860,8 +1874,7 @@ export const mapRouterLocal = router({
 
       const selectedMaps = trialCandidateEntries
         .map((entry) => {
-          const candidateSet = new Set(entry.candidates);
-          const perTrial = rows.filter((row) => candidateSet.has(row.trialId));
+          const perTrial = rows.filter((row) => row.trialId === entry.beTrialUuid);
           const selected = pickPreferredExecutionMap(perTrial, Boolean(input.includeArchived));
           if (!selected) return null;
           return { requestedTrialId: entry.requestedTrialId, map: selected };
@@ -1966,6 +1979,17 @@ export const mapRouterLocal = router({
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
       const requestedMode = input.demoMode as DemoMode | undefined;
+      const beTrialUuid = await resolveBeTrialIdForRead(
+        db,
+        (requestedMode as DemoMode) ?? "full",
+        input.trialId
+      );
+      if (!beTrialUuid) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No backend trial found for this trial id; cannot import an execution map.",
+        });
+      }
       const trialCandidateIds = new Set(resolveMapTrialCandidates(input.trialId, requestedMode));
       if (requestedMode) {
         const resolvedFromMode = await resolveTrialId(
@@ -2022,15 +2046,11 @@ export const mapRouterLocal = router({
         preferredTrialIds.map((id) => trialById.get(id)).find((row): row is typeof trialRows[number] => Boolean(row)) ??
         trialRows[0] ??
         null;
-      const resolvedTrialId = trial?.id ?? input.trialId;
-      trialCandidateIds.add(resolvedTrialId);
-      const trialCandidateIdList = Array.from(trialCandidateIds);
-
       let targetMap: typeof executionMaps.$inferSelect | undefined;
       if (input.mapId) {
         const [map] = await db.select().from(executionMaps).where(eq(executionMaps.id, input.mapId)).limit(1);
         if (!map) throw new TRPCError({ code: "NOT_FOUND", message: "Execution map not found" });
-        if (!trialCandidateIds.has(map.trialId)) {
+        if (map.trialId !== beTrialUuid) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Map does not belong to this trial" });
         }
         targetMap = map;
@@ -2040,7 +2060,7 @@ export const mapRouterLocal = router({
           .from(executionMaps)
           .where(
             and(
-              inArray(executionMaps.trialId, trialCandidateIdList),
+              eq(executionMaps.trialId, beTrialUuid),
               eq(executionMaps.protocolId, input.protocolId),
               or(eq(executionMaps.status, "draft"), eq(executionMaps.status, "revised"))
             )
@@ -2062,7 +2082,7 @@ export const mapRouterLocal = router({
         };
         await db.insert(executionMaps).values({
           id: mapId,
-          trialId: resolvedTrialId,
+          trialId: beTrialUuid,
           protocolId: input.protocolId,
           status: "draft",
           version: 1,
@@ -3193,7 +3213,7 @@ export const mapRouterLocal = router({
 
       await trackMapEvent({
         mapId: targetMap.id,
-        trialId: input.trialId,
+        trialId: beTrialUuid,
         eventType: "map.generated",
         userId: ctx.user.id,
         targetId: targetMap.id,
@@ -3278,17 +3298,30 @@ export const mapRouterLocal = router({
         status: z.enum(MAP_STATUSES).default("draft"),
         version: z.number().optional(),
         metadata: mapMetadataSchema.optional(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
 
+      const beTrialUuid = await resolveBeTrialIdForRead(
+        db,
+        (input.demoMode as DemoMode) ?? "full",
+        input.trialId
+      );
+      if (!beTrialUuid) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No backend trial found for this trial id; cannot create an execution map.",
+        });
+      }
+
       if (input.status === "active") {
         const [activeMap] = await db
           .select({ id: executionMaps.id })
           .from(executionMaps)
-          .where(and(eq(executionMaps.trialId, input.trialId), eq(executionMaps.status, "active")))
+          .where(and(eq(executionMaps.trialId, beTrialUuid), eq(executionMaps.status, "active")))
           .limit(1);
         if (activeMap) {
           throw new TRPCError({
@@ -3301,7 +3334,7 @@ export const mapRouterLocal = router({
       const id = randomUUID();
       await db.insert(executionMaps).values({
         id,
-        trialId: input.trialId,
+        trialId: beTrialUuid,
         protocolId: input.protocolId,
         status: input.status,
         version: input.version ?? 1,
@@ -3313,7 +3346,7 @@ export const mapRouterLocal = router({
 
       await trackMapEvent({
         mapId: id,
-        trialId: input.trialId,
+        trialId: beTrialUuid,
         eventType: "map.generated",
         userId: ctx.user.id,
         targetId: id,
@@ -3326,7 +3359,7 @@ export const mapRouterLocal = router({
         userId: ctx.user.id,
         entityType: "map",
         entityId: id,
-        trialId: input.trialId,
+        trialId: beTrialUuid,
         mapId: id,
         payload: {
           protocolId: input.protocolId,

@@ -467,6 +467,7 @@ function asLegacyKind(kind: EvalCaseKind): "criteria" | "schedule" | "general" {
 export async function runUnifiedEvalHarness(params: {
   db: any;
   trialId?: string;
+  beTrialUuid?: string | null;
   protocolIds: string[];
   cases?: EvalCaseInput[];
 }) {
@@ -488,6 +489,7 @@ export async function runUnifiedEvalHarness(params: {
       query: testCase.query,
       protocolIds: params.protocolIds,
       trialId: params.trialId,
+      beTrialUuid: params.beTrialUuid ?? null,
       maxDocChunks: 48,
     });
 

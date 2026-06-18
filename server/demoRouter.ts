@@ -39,8 +39,246 @@ import {
   trials,
 } from "../drizzle/schema";
 import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
+import { callBackend } from "./_core/backendClient";
 import { eq, inArray, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
+
+// FE UI statuses -> BE CHECK (planning|active|completed|paused|cancelled).
+// Mirrors scripts/backfill-trials-to-be.ts so demo-seeded BE trials match.
+const FE_TO_BE_STATUS: Record<string, string> = {
+  "not-started": "planning",
+  recruiting: "active",
+  "on-hold": "paused",
+  terminated: "cancelled",
+};
+function beStatus(s: string | null | undefined): string {
+  if (!s) return "planning";
+  return FE_TO_BE_STATUS[s] ?? s;
+}
+
+function toBeIso(v: unknown): string | null {
+  if (!v) return null;
+  try {
+    return new Date(v as any).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+// Map a seeded FE trial onto the BE `/api/trials` body. `slug` is the bare
+// trial id (no demo prefix); `demoMode` tags the trial as demo-owned so the
+// BE-sourced trial list surfaces it. Field mapping matches the backfill script.
+function feTrialToBeBody(t: any, slug: string, demoMode: DemoMode) {
+  return {
+    slug,
+    demo_mode: demoMode,
+    name: t.title || "Untitled Trial",
+    phase: t.phase || "Phase I",
+    location: t.location || "",
+    sponsor: t.sponsor || "",
+    status: beStatus(t.status),
+    description: t.description ?? null,
+    indication: t.indication ?? null,
+    study_start: toBeIso(t.startDate),
+    estimated_close_out: toBeIso(t.endDate),
+    protocol_number: t.protocolNumber ?? null,
+    investigational_product: t.investigationalProduct ?? null,
+    nct_number: t.nctNumber ?? null,
+    current_version: t.currentVersion ?? null,
+    amendment_version: t.amendmentVersion ?? null,
+    release_date: t.releaseDate ?? null,
+    sample_size: t.sampleSize ?? null,
+    number_of_sites: t.numberOfSites ?? null,
+    study_duration: t.studyDuration ?? null,
+    study_design_type: t.studyDesignType ?? null,
+    primary_objective: t.primaryObjective ?? null,
+    primary_endpoint: t.primaryEndpoint ?? null,
+    principal_investigator: t.principalInvestigator ?? null,
+    enrolled_patients: t.enrolledPatients ?? null,
+    target_patients: t.targetPatients ?? null,
+    completion_percentage: t.completionPercentage ?? null,
+  };
+}
+
+// Child tables whose `trialId` column carries the (now BE-UUID) trial key.
+// Mirrors scripts/rekey-child-trialid.sql. `protocols` is intentionally
+// excluded (document logic retired). Used by both the re-key (seed) and the
+// BE-UUID-scoped clear (wipe) paths. `trialId` is an untyped string column on
+// each of these, so these are traced manually rather than type-checked.
+const TRIAL_KEYED_CHILD_TABLES = [
+  taskScaffolds,
+  executionMaps,
+  mapTelemetryEvents,
+  mapTaskStatusHistory,
+  protocolChunks,
+  fileSearchStores,
+  aiFeatureSnapshots,
+  aiAnalyticsRollups,
+  aiTrainingExamples,
+  knowledgeGraphNodes,
+  knowledgeGraphEdges,
+  conversations,
+  threads,
+  trialInboxes,
+  collabTelemetryEvents,
+] as const;
+
+// Resolve the BE trial UUID for each just-seeded prefixed FE trial id.
+// Prefers the persisted `trials.coreBackendTrialId`; falls back to the BE
+// `/api/trials/by-slug` lookup so a prior partial run (BE created but FE not
+// updated) is still covered. Returns a Map<prefixedId, beUuid>.
+async function resolveSeededBeUuids(
+  db: DbClient,
+  mode: DemoMode,
+  prefixedIds: string[]
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (prefixedIds.length === 0) return result;
+
+  const rows = await db
+    .select({ id: trials.id, coreBackendTrialId: trials.coreBackendTrialId })
+    .from(trials)
+    .where(inArray(trials.id, prefixedIds));
+  const cbByPrefixed = new Map(rows.map((row) => [row.id, row.coreBackendTrialId]));
+
+  for (const prefixedId of prefixedIds) {
+    const cb = cbByPrefixed.get(prefixedId);
+    if (cb) {
+      result.set(prefixedId, cb);
+      continue;
+    }
+    const slug = stripDemoId(prefixedId);
+    try {
+      const found: any = await callBackend(`/api/trials/by-slug`, {
+        query: { slug, demo_mode: mode },
+      });
+      if (found?.id) result.set(prefixedId, found.id);
+    } catch {
+      /* not found in BE — leave unmapped */
+    }
+  }
+
+  return result;
+}
+
+// For each seeded FE trial, ensure a BE trial exists (PUT if the FE row already
+// carries a coreBackendTrialId or one is found by slug, else POST a new one),
+// persist the BE UUID back onto `trials.coreBackendTrialId`, and return a
+// Map<prefixedId, beUuid> for re-keying child data.
+async function ensureBeTrialsForSeed(
+  db: DbClient,
+  data: typeof SAMPLE_TRIALS,
+  mode: DemoMode
+): Promise<Map<string, string>> {
+  const beUuidByPrefixed = new Map<string, string>();
+  if (data.length === 0) return beUuidByPrefixed;
+
+  const prefixedIds = data.map((trial) => toDemoId(mode, trial.id));
+  const existing = await db
+    .select({ id: trials.id, coreBackendTrialId: trials.coreBackendTrialId })
+    .from(trials)
+    .where(inArray(trials.id, prefixedIds));
+  const cbByPrefixed = new Map(existing.map((row) => [row.id, row.coreBackendTrialId]));
+
+  for (const trial of data) {
+    const prefixedId = toDemoId(mode, trial.id);
+    const slug = trial.id;
+    const body = feTrialToBeBody(trial, slug, mode);
+    try {
+      // Resolve an existing BE trial: persisted mapping wins, else look up by
+      // slug+demo_mode (covers a prior partial run). PUT when found, else POST.
+      let beId: string | null = cbByPrefixed.get(prefixedId) ?? null;
+      if (!beId) {
+        try {
+          const found: any = await callBackend(`/api/trials/by-slug`, {
+            query: { slug, demo_mode: mode },
+          });
+          if (found?.id) beId = found.id;
+        } catch {
+          /* not found — will create */
+        }
+      }
+
+      if (beId) {
+        await callBackend(`/api/trials/${beId}`, { method: "PUT", body });
+        await db
+          .update(trials)
+          .set({ coreBackendTrialId: beId })
+          .where(eq(trials.id, prefixedId));
+      } else {
+        const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+          method: "POST",
+          body: { ...body, members: [], pending_members: [] },
+        });
+        if (beTrial?.id) {
+          beId = beTrial.id;
+          await db
+            .update(trials)
+            .set({ coreBackendTrialId: beTrial.id })
+            .where(eq(trials.id, prefixedId));
+        }
+      }
+
+      if (beId) beUuidByPrefixed.set(prefixedId, beId);
+    } catch (error) {
+      console.warn(
+        `[demo] Failed to create/update BE trial for ${prefixedId}; child data stays keyed by the prefixed id.`,
+        error
+      );
+    }
+  }
+
+  return beUuidByPrefixed;
+}
+
+// Re-key just-seeded child rows from the prefixed FE id to the BE UUID across
+// every trial-keyed child table. Scoped to the seeded trials only; skips any
+// trial that has no resolved BE UUID (its child rows stay prefixed). Mirrors
+// scripts/rekey-child-trialid.sql in code.
+async function rekeySeededChildData(
+  db: DbClient,
+  beUuidByPrefixed: Map<string, string>
+) {
+  for (const [prefixedId, beUuid] of Array.from(beUuidByPrefixed.entries())) {
+    if (!beUuid || beUuid === prefixedId) continue;
+    for (const table of TRIAL_KEYED_CHILD_TABLES) {
+      try {
+        await db
+          .update(table as never)
+          .set({ trialId: beUuid } as never)
+          .where(eq((table as any).trialId, prefixedId));
+      } catch (error) {
+        console.warn(
+          `[demo] Re-key skipped for a child table (${prefixedId} -> ${beUuid}) due to schema compatibility issue.`,
+          error
+        );
+      }
+    }
+  }
+}
+
+// Delete BE-UUID-keyed child rows for the given prefixed trials. Prior seeds
+// left child rows keyed by the BE UUID, so the prefixed-id deletes in
+// wipeModeData would miss them and duplicate on re-seed. Resolve the BE UUIDs
+// and delete every trial-keyed child table by them.
+async function clearBeKeyedChildData(
+  tx: DbTransaction,
+  beUuids: string[]
+) {
+  if (beUuids.length === 0) return;
+  for (const table of TRIAL_KEYED_CHILD_TABLES) {
+    try {
+      await tx
+        .delete(table as never)
+        .where(inArray((table as any).trialId, beUuids));
+    } catch (error) {
+      console.warn(
+        "[demo] BE-UUID-keyed child clear skipped for a table due to schema compatibility issue.",
+        error
+      );
+    }
+  }
+}
 
 const DEFAULT_CATEGORIES = [
   "Protocol",
@@ -1784,6 +2022,37 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
     } = collected;
     if (trialIds.length === 0) return;
 
+    // Prior (Phase-D) seeds left child rows keyed by the BE trial UUID, so the
+    // prefixed-id deletes below would MISS them and duplicate on re-seed.
+    // Resolve the BE UUIDs for these trials (from the persisted
+    // coreBackendTrialId, falling back to /api/trials/by-slug) and clear every
+    // trial-keyed child table by them BEFORE the prefixed-id deletes run.
+    const beUuidSet = new Set<string>();
+    const trialRowsForBe = asTypedRows<typeof trials.$inferSelect>(collected.rows.trials);
+    const unresolvedByMode = new Map<DemoMode, string[]>();
+    for (const trialRow of trialRowsForBe) {
+      const cb = trialRow.coreBackendTrialId;
+      if (cb) {
+        beUuidSet.add(cb);
+        continue;
+      }
+      const prefixedId = String(trialRow.id);
+      const demoMode = stripDemoId(prefixedId) === prefixedId
+        ? null
+        : (prefixedId.slice(0, prefixedId.indexOf(":")) as DemoMode);
+      if (demoMode === "sample" || demoMode === "full" || demoMode === "building") {
+        const list = unresolvedByMode.get(demoMode) ?? [];
+        list.push(prefixedId);
+        unresolvedByMode.set(demoMode, list);
+      }
+    }
+    for (const [demoMode, prefixedIds] of Array.from(unresolvedByMode.entries())) {
+      const resolved = await resolveSeededBeUuids(db, demoMode, prefixedIds);
+      for (const uuid of Array.from(resolved.values())) beUuidSet.add(uuid);
+    }
+    const beUuids = Array.from(beUuidSet).filter((uuid) => !trialIds.includes(uuid));
+    await clearBeKeyedChildData(tx, beUuids);
+
     if (crossReferenceIds.length > 0) {
       await tx
         .delete(crossReferences)
@@ -3147,6 +3416,15 @@ async function seedBaseModeData(
     } catch (error) {
       console.warn("[demo] Sample mode operational seed skipped due to schema compatibility issue.", error);
     }
+    // Create BE-owned trials and re-key the just-seeded child data by the BE
+    // UUID so the BE-sourced trial list + child lookups resolve. Best-effort:
+    // failures leave child data keyed by the prefixed id (logged inside).
+    try {
+      const beUuids = await ensureBeTrialsForSeed(db, SAMPLE_TRIALS, "sample");
+      await rekeySeededChildData(db, beUuids);
+    } catch (error) {
+      console.warn("[demo] Sample mode BE trial sync / re-key skipped.", error);
+    }
     return;
   }
   if (mode === "full") {
@@ -3155,6 +3433,12 @@ async function seedBaseModeData(
       await seedModeOperationalData(FULL_TRIALS, createdBy, "full", db);
     } catch (error) {
       console.warn("[demo] Full mode operational seed skipped due to schema compatibility issue.", error);
+    }
+    try {
+      const beUuids = await ensureBeTrialsForSeed(db, FULL_TRIALS, "full");
+      await rekeySeededChildData(db, beUuids);
+    } catch (error) {
+      console.warn("[demo] Full mode BE trial sync / re-key skipped.", error);
     }
     return;
   }
@@ -3279,13 +3563,73 @@ async function cloneModeIntoBuilding(
     const protocolMapSectionIdMap = new Map<string, string>();
 
     const trialRows = asTypedRows<typeof trials.$inferSelect>(rows.trials);
+    // Build maps from the BE UUID used to key child data. Source child rows are
+    // keyed by the SOURCE BE UUID; we create a fresh BE trial per building copy
+    // and re-key child trialId from the source BE UUID -> the new building BE
+    // UUID. We also map the source prefixed id (and the new building prefixed id)
+    // to the building BE UUID so child rows keyed either way resolve.
+    const buildingBeUuidByPrefixed = new Map<string, string>();
+    const buildingTrialSeedById = new Map<string, typeof trials.$inferSelect>();
     for (const row of trialRows) {
-      const nextTrialId = toDemoId("building", stripDemoId(String(row.id)));
+      const bareId = stripDemoId(String(row.id));
+      const nextTrialId = toDemoId("building", bareId);
       trialIdMap.set(String(row.id), nextTrialId);
+      buildingTrialSeedById.set(nextTrialId, row);
+      // Drop the source coreBackendTrialId; a building-specific BE trial is
+      // created (and the id persisted) below.
+      const { coreBackendTrialId: _sourceCb, ...rowWithoutCb } = row;
       await tx.insert(trials).values({
-        ...row,
+        ...rowWithoutCb,
         id: nextTrialId,
+        coreBackendTrialId: null,
       });
+    }
+
+    // Create a BE trial per building copy and remap the child trialId key.
+    // Best-effort: a trial that fails to create stays keyed by its source value
+    // (it simply won't match BE-UUID queries until re-seeded).
+    for (const [nextTrialId, sourceRow] of Array.from(buildingTrialSeedById.entries())) {
+      const slug = stripDemoId(nextTrialId);
+      const body = feTrialToBeBody(sourceRow, slug, "building");
+      try {
+        let beId: string | null = null;
+        try {
+          const found: any = await callBackend(`/api/trials/by-slug`, {
+            query: { slug, demo_mode: "building" },
+          });
+          if (found?.id) beId = found.id;
+        } catch {
+          /* not found — will create */
+        }
+        if (beId) {
+          await callBackend(`/api/trials/${beId}`, { method: "PUT", body });
+        } else {
+          const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+            method: "POST",
+            body: { ...body, members: [], pending_members: [] },
+          });
+          beId = beTrial?.id ?? null;
+        }
+        if (beId) {
+          await tx
+            .update(trials)
+            .set({ coreBackendTrialId: beId })
+            .where(eq(trials.id, nextTrialId));
+          buildingBeUuidByPrefixed.set(nextTrialId, beId);
+          // Child data is keyed by the SOURCE BE UUID -> building BE UUID.
+          const sourceCb = sourceRow.coreBackendTrialId;
+          if (sourceCb) trialIdMap.set(String(sourceCb), beId);
+          // Fallbacks: source/building prefixed ids -> building BE UUID, in case
+          // any child row was left keyed by a prefixed id.
+          trialIdMap.set(String(sourceRow.id), beId);
+          trialIdMap.set(nextTrialId, beId);
+        }
+      } catch (error) {
+        console.warn(
+          `[demo] Failed to create BE trial for building copy ${nextTrialId}; child data keeps its source key.`,
+          error
+        );
+      }
     }
 
     const protocolRows = asTypedRows<typeof protocols.$inferSelect>(rows.protocols);

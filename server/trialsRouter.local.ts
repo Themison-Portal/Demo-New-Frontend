@@ -25,6 +25,7 @@ import {
 } from "../drizzle/schema";
 import { and, desc, eq, inArray, like, ne, notLike } from "drizzle-orm";
 import { toDemoId, serializeTrial, resolveTrialId, type DemoMode } from "./_core/demoMode";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
 import { logTelemetryEvent } from "./_core/telemetry";
 import { ENV } from "./_core/env";
 
@@ -181,6 +182,10 @@ export const trialsRouterLocal = router({
       if (!db) throw new Error("Database not available");
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedId = await resolveTrialId(db, mode, input.id, mode !== "building");
+      // Child tables (taskScaffolds/phases/tasks, executionMaps/mapPhases/mapTasks, etc.)
+      // are now keyed by the BE trial UUID, not the FE prefixed id. We still READ the FE
+      // `trials` row by `resolvedId` for the offline/transition metadata fallback below.
+      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.id);
       const include = new Set(
         input.include ?? ["trial", "documents", "telemetry", "execution", "suggestions", "insights"]
       );
@@ -440,7 +445,7 @@ export const trialsRouterLocal = router({
         },
       };
 
-      if (needsExecution) {
+      if (needsExecution && beTrialUuid) {
         try {
           const now = new Date();
           const todayIso = now.toISOString().slice(0, 10);
@@ -455,7 +460,7 @@ export const trialsRouterLocal = router({
               updatedAt: executionMaps.updatedAt,
             })
             .from(executionMaps)
-            .where(eq(executionMaps.trialId, resolvedId))
+            .where(eq(executionMaps.trialId, beTrialUuid))
             .orderBy(desc(executionMaps.updatedAt));
 
           const activeExecutionMap = executionMapRows.find((row) => row.status !== "archived") ?? null;
@@ -551,7 +556,7 @@ export const trialsRouterLocal = router({
                 status: taskScaffolds.status,
               })
               .from(taskScaffolds)
-              .where(eq(taskScaffolds.trialId, resolvedId));
+              .where(eq(taskScaffolds.trialId, beTrialUuid));
 
             const scaffoldIds = scaffoldRows.map((row) => row.id);
             const phaseRows = scaffoldIds.length
@@ -654,6 +659,10 @@ export const trialsRouterLocal = router({
             };
           }
         }
+      } else if (needsExecution && !beTrialUuid && include.has("execution")) {
+        // No BE trial mapping yet: child tables hold no rows under a BE UUID, so
+        // surface the zero defaults rather than querying with the FE prefixed id.
+        execution = executionStats;
       }
 
       if (include.has("suggestions") || include.has("insights")) {
@@ -1569,6 +1578,10 @@ export const trialsRouterLocal = router({
       if (!db) throw new Error("Database not available");
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedId = await resolveTrialId(db, mode, input.id, mode !== "building");
+      // Child tables key on the BE trial UUID; the FE `trials` row + FE-owned
+      // `protocols` still key on the prefixed `resolvedId`. `beTrialUuid` may be
+      // null (no BE mapping yet) — never delete child rows with a null key.
+      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.id);
 
       const [existingTrial] = await db
         .select({ id: trials.id, title: trials.title })
@@ -1586,10 +1599,12 @@ export const trialsRouterLocal = router({
         .where(eq(protocols.trialId, resolvedId));
       const protocolIds: string[] = protocolRows.map((row) => String(row.id));
 
-      const scaffoldRows = await db
-        .select({ id: taskScaffolds.id })
-        .from(taskScaffolds)
-        .where(eq(taskScaffolds.trialId, resolvedId));
+      const scaffoldRows = beTrialUuid
+        ? await db
+            .select({ id: taskScaffolds.id })
+            .from(taskScaffolds)
+            .where(eq(taskScaffolds.trialId, beTrialUuid))
+        : [];
       const scaffoldIds = scaffoldRows.map((row) => row.id);
 
       const phaseRows = scaffoldIds.length
@@ -1634,14 +1649,18 @@ export const trialsRouterLocal = router({
             .where(inArray(telemetryEvents.entityId, protocolIds.map((id) => String(id))));
         }
 
+        // FE-owned `protocols` stays keyed by the FE prefixed id.
         await tx.delete(protocols).where(eq(protocols.trialId, resolvedId));
-        await tx.delete(fileSearchStores).where(eq(fileSearchStores.trialId, resolvedId));
 
-        await tx.delete(aiFeatureSnapshots).where(eq(aiFeatureSnapshots.trialId, resolvedId));
-        await tx.delete(aiAnalyticsRollups).where(eq(aiAnalyticsRollups.trialId, resolvedId));
-        await tx.delete(aiTrainingExamples).where(eq(aiTrainingExamples.trialId, resolvedId));
-        await tx.delete(knowledgeGraphNodes).where(eq(knowledgeGraphNodes.trialId, resolvedId));
-        await tx.delete(knowledgeGraphEdges).where(eq(knowledgeGraphEdges.trialId, resolvedId));
+        // BE-UUID-keyed child tables: only delete when a BE mapping exists.
+        if (beTrialUuid) {
+          await tx.delete(fileSearchStores).where(eq(fileSearchStores.trialId, beTrialUuid));
+          await tx.delete(aiFeatureSnapshots).where(eq(aiFeatureSnapshots.trialId, beTrialUuid));
+          await tx.delete(aiAnalyticsRollups).where(eq(aiAnalyticsRollups.trialId, beTrialUuid));
+          await tx.delete(aiTrainingExamples).where(eq(aiTrainingExamples.trialId, beTrialUuid));
+          await tx.delete(knowledgeGraphNodes).where(eq(knowledgeGraphNodes.trialId, beTrialUuid));
+          await tx.delete(knowledgeGraphEdges).where(eq(knowledgeGraphEdges.trialId, beTrialUuid));
+        }
 
         await tx.delete(telemetryEvents).where(eq(telemetryEvents.entityId, resolvedId));
         await tx.delete(trials).where(eq(trials.id, resolvedId));

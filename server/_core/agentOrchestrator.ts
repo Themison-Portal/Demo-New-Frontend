@@ -147,12 +147,13 @@ function buildSignalsFromSnapshot(snapshot: TrialIntelligenceSnapshot) {
 async function buildAgentOutput(params: {
   db: any;
   trialId: string;
+  beTrialUuid: string | null;
   agentType: AgentType;
   query: string | null;
   documentIds: string[];
   payload: Record<string, unknown>;
 }) {
-  const snapshot = await computeTrialIntelligenceSnapshot(params.db, params.trialId);
+  const snapshot = await computeTrialIntelligenceSnapshot(params.db, params.trialId, params.beTrialUuid);
   if (!snapshot) {
     throw new Error("Trial snapshot unavailable.");
   }
@@ -179,6 +180,7 @@ async function buildAgentOutput(params: {
       db: params.db,
       query: params.query,
       trialId: params.trialId,
+      beTrialUuid: params.beTrialUuid,
       protocolIds: params.documentIds.length > 0 ? params.documentIds : undefined,
       maxDocChunks: 40,
     });
@@ -326,6 +328,7 @@ async function buildAgentOutput(params: {
 export async function runOrchestratedAgent(params: {
   db: any;
   trialId: string;
+  beTrialUuid: string | null;
   agentType: AgentType;
   requestedBy: string;
   requireApproval: boolean;
@@ -336,6 +339,7 @@ export async function runOrchestratedAgent(params: {
   const generated = await buildAgentOutput({
     db: params.db,
     trialId: params.trialId,
+    beTrialUuid: params.beTrialUuid,
     agentType: params.agentType,
     query: params.query,
     documentIds: params.documentIds,
@@ -429,8 +433,9 @@ export function resolveApproval(params: {
 export async function getTelemetryDrivenSignals(params: {
   db: any;
   trialId: string;
+  beTrialUuid: string | null;
 }) {
-  const snapshot = await computeTrialIntelligenceSnapshot(params.db, params.trialId);
+  const snapshot = await computeTrialIntelligenceSnapshot(params.db, params.trialId, params.beTrialUuid);
   if (!snapshot) return null;
   const signals = buildSignalsFromSnapshot(snapshot);
   return {

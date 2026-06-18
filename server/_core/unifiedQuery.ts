@@ -19,6 +19,7 @@ import {
 import { invokeLLM } from "./llm";
 import { ENV } from "./env";
 import { stripDemoId } from "./demoMode";
+import { resolveBeTrialIdForRead } from "./coreBackendDocs";
 import {
   getProtocolContextChunks,
   getStructuredEligibilityCriteria,
@@ -2710,7 +2711,8 @@ async function collectOperationalEvidence(
   trialId?: string,
   userId?: number,
   query?: string,
-  demoMode: "sample" | "full" | "building" = "sample"
+  demoMode: "sample" | "full" | "building" = "sample",
+  beTrialUuid?: string | null
 ) {
   const targetDate = query ? parseOperationalTargetDate(query) : null;
   const targetDateKey = targetDate ? formatLocalDate(targetDate) : null;
@@ -2844,11 +2846,24 @@ async function collectOperationalEvidence(
       });
     }
 
-    const mapRows = (await db
-      .select()
-      .from(executionMaps)
-      .where(inArray(executionMaps.trialId, trialRows.map((trial) => trial.id)))
-      .orderBy(desc(executionMaps.updatedAt))) as ExecutionMap[];
+    // executionMaps is BE-keyed: resolve each FE trial id to its BE trial UUID,
+    // then query/group maps by the BE UUID (FE trial-name lookups are re-keyed
+    // by BE UUID below so display still resolves).
+    const beUuidByFeId = new Map<string, string>();
+    await Promise.all(
+      trialRows.map(async (trial) => {
+        const be = await resolveBeTrialIdForRead(db, demoMode, stripDemoId(String(trial.id)));
+        if (be) beUuidByFeId.set(String(trial.id), be);
+      })
+    );
+    const beTrialUuidsForMaps = Array.from(beUuidByFeId.values());
+    const mapRows = beTrialUuidsForMaps.length
+      ? ((await db
+          .select()
+          .from(executionMaps)
+          .where(inArray(executionMaps.trialId, beTrialUuidsForMaps))
+          .orderBy(desc(executionMaps.updatedAt))) as ExecutionMap[])
+      : [];
     const groupedByTrial = new Map<string, ExecutionMap[]>();
     for (const map of mapRows) {
       if (!map.trialId) continue;
@@ -2895,8 +2910,16 @@ async function collectOperationalEvidence(
       const delta = due - now;
       return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
     });
+    // Re-key trial names by BE UUID so cross-trial map/task lookups (which now
+    // resolve to executionMaps.trialId = BE UUID) still find a display name.
     const trialNameById = new Map(
-      trialRows.map((trial) => [String(trial.id), trial.investigationalProduct || trial.title || trial.id])
+      trialRows
+        .map((trial) => {
+          const be = beUuidByFeId.get(String(trial.id));
+          if (!be) return null;
+          return [be, trial.investigationalProduct || trial.title || trial.id] as const;
+        })
+        .filter((entry): entry is readonly [string, string] => entry !== null)
     );
     const mapTrialById = new Map(activeMaps.map((map) => [String(map.id), String(map.trialId)]));
 
@@ -3134,11 +3157,15 @@ async function collectOperationalEvidence(
     asOf,
   });
 
-  const mapRows = (await db
-    .select()
-    .from(executionMaps)
-    .where(eq(executionMaps.trialId, trialId))
-    .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version))) as ExecutionMap[];
+  // executionMaps is BE-keyed: query by the BE trial UUID (the FE `trials` and
+  // `protocols` reads above intentionally still use the FE trial id).
+  const mapRows = beTrialUuid
+    ? ((await db
+        .select()
+        .from(executionMaps)
+        .where(eq(executionMaps.trialId, beTrialUuid))
+        .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version))) as ExecutionMap[])
+    : [];
   const activeMap = pickPreferredExecutionMap(mapRows, false);
   if (!activeMap) return evidence;
 
@@ -3354,13 +3381,14 @@ async function collectOperationalEvidence(
   return evidence;
 }
 
-async function collectTelemetryEvidence(db: any, trialId?: string) {
-  if (!trialId) return [] as TelemetryEvidence[];
+async function collectTelemetryEvidence(db: any, beTrialUuid?: string | null) {
+  // mapTelemetryEvents is BE-keyed: query by the BE trial UUID only.
+  if (!beTrialUuid) return [] as TelemetryEvidence[];
   const asOf = formatIsoNow();
   const rows = (await db
     .select()
     .from(mapTelemetryEvents)
-    .where(eq(mapTelemetryEvents.trialId, trialId))
+    .where(eq(mapTelemetryEvents.trialId, beTrialUuid))
     .orderBy(desc(mapTelemetryEvents.createdAt))
     .limit(500)) as MapTelemetryEvent[];
   if (rows.length === 0) return [] as TelemetryEvidence[];
@@ -3907,6 +3935,8 @@ export async function runUnifiedQuery(params: {
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   protocolIds?: string[];
   trialId?: string;
+  /** BE trial UUID for migrated child tables (executionMaps, mapTelemetryEvents). */
+  beTrialUuid?: string | null;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
@@ -3940,9 +3970,9 @@ export async function runUnifiedQuery(params: {
       ? collectDocumentEvidence(params.db, query, protocolRows, queryPlan)
       : Promise.resolve({ evidence: [], chunks: [] }),
     needsOp
-      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode, params.beTrialUuid ?? null)
       : Promise.resolve([]),
-    needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
+    needsTelemetry ? collectTelemetryEvidence(params.db, params.beTrialUuid ?? null) : Promise.resolve([]),
   ]);
 
   const gaps: string[] = [];
@@ -4339,6 +4369,8 @@ export async function runUnifiedQueryDiagnostics(params: {
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   protocolIds?: string[];
   trialId?: string;
+  /** BE trial UUID for migrated child tables (executionMaps, mapTelemetryEvents). */
+  beTrialUuid?: string | null;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
@@ -4391,9 +4423,9 @@ export async function runUnifiedQueryDiagnostics(params: {
           } satisfies DocumentRetrievalDebug,
         }),
     needsOp
-      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode, params.beTrialUuid ?? null)
       : Promise.resolve([]),
-    needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
+    needsTelemetry ? collectTelemetryEvidence(params.db, params.beTrialUuid ?? null) : Promise.resolve([]),
   ]);
 
   const gaps: string[] = [];

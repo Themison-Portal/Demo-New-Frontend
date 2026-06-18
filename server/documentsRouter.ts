@@ -220,24 +220,20 @@ export const documentsRouter = router({
         .where(eq(trials.id, resolvedTrialId))
         .limit(1);
 
-      const UUID_RE =
-        /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-      let beTrialId: string | null = trialMeta?.coreBackendTrialId ?? null;
+      // Resolve the trial the SAME way the read path does (bare UUID → BE
+      // by-slug → FE mapping), so uploads land under the trial the Hub lists.
+      // Only when the trial genuinely isn't in the BE yet do we lazily provision
+      // one (transition/legacy demo trials).
+      let beTrialId: string | null = await resolveBeTrialIdForRead(
+        db,
+        mode,
+        input.trialId
+      );
       if (!beTrialId) {
-        if (UUID_RE.test(input.trialId)) {
-          // The trial id is already the BE trial UUID (a real / wizard trial that
-          // exists in the BE). Upload directly under it — provisioning a fresh BE
-          // trial here would scatter the doc into an orphan trial the Hub never
-          // lists. This MUST match resolveBeTrialIdForRead's read-side resolution.
-          beTrialId = input.trialId;
-        } else if (!trialMeta && mode !== "building") {
-          beTrialId = resolvedTrialId; // real trial: id already is the BE UUID
-        } else {
-          const meta = trialMeta ?? {
-            title: input.filename.replace(/\.[^./\\]+$/, "") || input.filename,
-          };
-          beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, meta, ctx.user);
-        }
+        const meta = trialMeta ?? {
+          title: input.filename.replace(/\.[^./\\]+$/, "") || input.filename,
+        };
+        beTrialId = await ensureCoreBackendTrialId(db, resolvedTrialId, meta, ctx.user);
       }
       if (!beTrialId) {
         throw new Error(

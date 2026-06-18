@@ -2,6 +2,8 @@ import { z } from "zod";
 import { protectedProcedure, router } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import { getDb } from "./db";
 import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
 import { type DemoMode } from "./_core/demoMode";
@@ -954,6 +956,16 @@ export const studySetupWizardRouter = router({
         throw new Error("Protocol does not belong to this demo mode");
       }
 
+      // TRIALS migrated to the BE: the scaffold child tables hold the BE trial
+      // UUID in their `trialId` column (not the prefixed FE id). Resolve it
+      // before any scaffold insert; if there's no BE trial yet, there's nothing
+      // to scaffold against — bail without writing a null trialId.
+      const wizardDb = await getDb();
+      const beTrialUuid = wizardDb ? await resolveBeTrialIdForRead(wizardDb, mode, trialId) : null;
+      if (!beTrialUuid) {
+        throw new Error("No backend trial found for this trial");
+      }
+
       // Check if scaffold already exists - if so, delete it and regenerate
       const existingScaffold = await db.getTaskScaffoldByProtocolId(protocolId);
       if (existingScaffold) {
@@ -1144,10 +1156,11 @@ ${chunk.chunkText.slice(0, 700)}`;
         scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);
       }
 
-      // Create task scaffold
+      // Create task scaffold. The child-table `trialId` is the BE trial UUID
+      // (post-TRIALS migration), not the prefixed FE id.
       await db.createTaskScaffold({
         protocolId,
-        trialId: protocolTrialId,
+        trialId: beTrialUuid,
         status: "draft",
       });
 

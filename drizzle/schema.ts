@@ -88,7 +88,7 @@ export type InsertTrial = typeof trials.$inferInsert;
  */
 export const protocols = mysqlTable("protocols", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(), // Reference to trial
+  trialId: varchar("trialId", { length: 36 }).notNull(), // Reference to trial
   filename: varchar("filename", { length: 255 }).notNull(),
   fileUrl: text("fileUrl").notNull(), // S3 URL
   fileKey: varchar("fileKey", { length: 512 }).notNull(), // S3 key
@@ -126,7 +126,7 @@ export const taskScaffolds = mysqlTable("taskScaffolds", {
   id: int("id").autoincrement().primaryKey(),
   // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
   protocolId: varchar("protocolId", { length: 36 }).notNull(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   status: mysqlEnum("status", ["draft", "confirmed", "active"]).default("draft").notNull(),
   confirmedAt: timestamp("confirmedAt"),
   confirmedBy: int("confirmedBy"),
@@ -305,7 +305,7 @@ export const executionMaps = mysqlTable(
   "execution_maps",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
   protocolId: varchar("protocolId", { length: 36 }).notNull(),
     status: mapStatusEnum.default("draft").notNull(),
@@ -470,7 +470,7 @@ export const mapTelemetryEvents = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     eventType: varchar("eventType", { length: 100 }).notNull(),
     userId: int("userId"),
     targetId: varchar("targetId", { length: 36 }),
@@ -493,7 +493,7 @@ export const mapTaskStatusHistory = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     taskId: varchar("taskId", { length: 36 }).notNull(),
     fromStatus: mysqlEnum("fromStatus", taskStatusValues),
     toStatus: mysqlEnum("toStatus", taskStatusValues).notNull(),
@@ -543,7 +543,7 @@ export const protocolChunks = mysqlTable("protocolChunks", {
   id: int("id").autoincrement().primaryKey(),
   // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
   protocolId: varchar("protocolId", { length: 36 }).notNull(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   chunkIndex: int("chunkIndex").notNull(),
   sectionType: varchar("sectionType", { length: 64 }).notNull(), // synopsis, visit, criteria, safety, etc.
   sectionTitle: varchar("sectionTitle", { length: 255 }),
@@ -566,7 +566,7 @@ export type InsertProtocolChunk = typeof protocolChunks.$inferInsert;
  */
 export const fileSearchStores = mysqlTable("fileSearchStores", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull().unique(), // One store per trial
+  trialId: varchar("trialId", { length: 36 }).notNull().unique(), // One store per trial
   storeName: varchar("storeName", { length: 255 }).notNull().unique(), // OpenAI Vector Store ID (e.g., 'vs_abc123')
   displayName: varchar("displayName", { length: 255 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -634,7 +634,7 @@ export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;
  */
 export const aiFeatureSnapshots = mysqlTable("ai_feature_snapshots", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   snapshotDate: varchar("snapshotDate", { length: 10 }).notNull(), // YYYY-MM-DD
   snapshotVersion: varchar("snapshotVersion", { length: 32 }).default("v1").notNull(),
   featureVector: json("featureVector").notNull(),
@@ -652,7 +652,7 @@ export type InsertAiFeatureSnapshot = typeof aiFeatureSnapshots.$inferInsert;
  */
 export const aiAnalyticsRollups = mysqlTable("ai_analytics_rollups", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   rollupDate: varchar("rollupDate", { length: 10 }).notNull(), // YYYY-MM-DD
   documentTotal: int("documentTotal").default(0).notNull(),
   documentIndexed: int("documentIndexed").default(0).notNull(),
@@ -677,7 +677,7 @@ export type InsertAiAnalyticsRollup = typeof aiAnalyticsRollups.$inferInsert;
 export const aiTrainingExamples = mysqlTable("ai_training_examples", {
   id: int("id").autoincrement().primaryKey(),
   sourceEventId: varchar("sourceEventId", { length: 36 }),
-  trialId: varchar("trialId", { length: 50 }),
+  trialId: varchar("trialId", { length: 36 }),
   userId: varchar("userId", { length: 64 }),
   prompt: text("prompt"),
   response: text("response"),
@@ -695,7 +695,7 @@ export type InsertAiTrainingExample = typeof aiTrainingExamples.$inferInsert;
  */
 export const knowledgeGraphNodes = mysqlTable("knowledge_graph_nodes", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   nodeType: varchar("nodeType", { length: 64 }).notNull(),
   nodeKey: varchar("nodeKey", { length: 191 }).notNull(),
   displayName: varchar("displayName", { length: 255 }),
@@ -712,7 +712,7 @@ export type InsertKnowledgeGraphNode = typeof knowledgeGraphNodes.$inferInsert;
  */
 export const knowledgeGraphEdges = mysqlTable("knowledge_graph_edges", {
   id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   edgeType: varchar("edgeType", { length: 64 }).notNull(),
   fromNodeKey: varchar("fromNodeKey", { length: 191 }).notNull(),
   toNodeKey: varchar("toNodeKey", { length: 191 }).notNull(),
@@ -798,7 +798,7 @@ export const conversations = mysqlTable(
   "conversations",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     type: collabConversationTypeEnum.notNull(),
     name: varchar("name", { length: 255 }),
     createdBy: int("createdBy").notNull(),
@@ -838,7 +838,7 @@ export const threads = mysqlTable(
   "threads",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     title: varchar("title", { length: 500 }).notNull(),
     category: collabThreadCategoryEnum.notNull(),
     status: collabThreadStatusEnum.default("open").notNull(),
@@ -906,7 +906,7 @@ export const trialInboxes = mysqlTable(
   "trial_inboxes",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     emailAddress: varchar("emailAddress", { length: 320 }).notNull(),
     isActive: boolean("isActive").default(true).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -1012,7 +1012,7 @@ export const collabTelemetryEvents = mysqlTable(
   "collab_telemetry_events",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     userId: int("userId"),
     eventType: varchar("eventType", { length: 120 }).notNull(),
     eventData: json("eventData").notNull(),
