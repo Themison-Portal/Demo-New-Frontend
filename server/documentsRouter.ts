@@ -107,7 +107,14 @@ export const documentsRouter = router({
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
-      if (!beTrialId) return [];
+      if (!beTrialId) {
+        // resolveBeTrialIdForRead already logged WHY (no mapping). Surface the
+        // input so deployed logs tie it to the trial the user is viewing.
+        console.warn(
+          `[documents/list] trial="${input.trialId}" mode=${mode} -> no BE trial; returning [].`
+        );
+        return [];
+      }
 
       let beDocs: CoreBackendTrialDocument[] = [];
       try {
@@ -115,9 +122,13 @@ export const documentsRouter = router({
           beTrialId,
           authTokenFrom(ctx)
         );
+        console.log(
+          `[documents/list] trial="${input.trialId}" mode=${mode} -> beTrial=${beTrialId} -> ${beDocs.length} doc(s)`
+        );
       } catch (error) {
-        console.warn(
-          `[documents/list] BE list failed for trial ${beTrialId}:`,
+        console.error(
+          `[documents/list] BE list FAILED trial="${input.trialId}" beTrial=${beTrialId} ` +
+            `coreBackendApiUrl=${ENV.coreBackendApiUrl}:`,
           error instanceof Error ? error.message : error
         );
         return [];

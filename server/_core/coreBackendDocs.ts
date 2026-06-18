@@ -45,9 +45,19 @@ export async function resolveBeTrialIdForRead(
     .where(eq(trials.id, resolvedTrialId))
     .limit(1);
   if (row?.cb) return row.cb;
-  if (!row && mode !== "building" && !resolvedTrialId.includes(":")) {
+  // A bare-UUID trial id (not demo-prefixed) IS the BE trial UUID for a real
+  // trial — fall back to it whether or not a FE mirror row exists or has the
+  // mapping populated. (Previously this only fired when no FE row existed, so a
+  // real trial whose FE row had a null coreBackendTrialId resolved to null and
+  // its BE documents silently vanished from the list.)
+  if (mode !== "building" && !resolvedTrialId.includes(":")) {
     return resolvedTrialId;
   }
+  console.warn(
+    `[coreBackendDocs] No BE trial mapping for FE trial "${trialId}" ` +
+      `(mode=${mode}, resolved=${resolvedTrialId}, hasRow=${!!row}, cb=${row?.cb ?? null}). ` +
+      `Documents for this trial cannot be listed from the BE.`
+  );
   return null;
 }
 
