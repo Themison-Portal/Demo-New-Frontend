@@ -45,12 +45,17 @@ export async function resolveBeTrialIdForRead(
     .where(eq(trials.id, resolvedTrialId))
     .limit(1);
   if (row?.cb) return row.cb;
-  // A bare-UUID trial id (not demo-prefixed) IS the BE trial UUID for a real
-  // trial — fall back to it whether or not a FE mirror row exists or has the
-  // mapping populated. (Previously this only fired when no FE row existed, so a
-  // real trial whose FE row had a null coreBackendTrialId resolved to null and
-  // its BE documents silently vanished from the list.)
-  if (mode !== "building" && !resolvedTrialId.includes(":")) {
+  // A bare-UUID trial id IS the BE trial UUID for a real trial — use it
+  // REGARDLESS of demo mode, whether or not a FE mirror row exists or has the
+  // mapping populated. This crucially covers wizard ("building") mode, where the
+  // FE passes the BE trial UUID directly but `resolveTrialId` prefixes it to
+  // "building:<uuid>" (no FE row) — so we must prefer the bare INPUT id. (The
+  // previous version excluded building mode and checked the prefixed resolved id,
+  // so a real trial's BE documents silently vanished from the Hub.)
+  const UUID_RE =
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (UUID_RE.test(trialId)) return trialId;
+  if (!resolvedTrialId.includes(":") && UUID_RE.test(resolvedTrialId)) {
     return resolvedTrialId;
   }
   console.warn(
