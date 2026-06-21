@@ -286,6 +286,7 @@ export default function TrialDetail() {
     const currentDataMode = getCurrentDataMode();
 
     const trialId = (params?.id || "").toLowerCase();
+    console.log("trialId from params:", trialId, "params:", params);
     const isValidTrialId = trialId.length > 0;
     const trialTabStorageKey = trialId ? `trial-active-tab:${currentDataMode}:${trialId}` : null;
 
@@ -360,11 +361,11 @@ export default function TrialDetail() {
     const confirmSuggestedMutation = trpc.map.confirmSuggested.useMutation();
     const launchMapMutation = trpc.map.launch.useMutation();
 
-    // Patient and Visit queries/mutations
-    const patientsQuery = trpc.patients.listByTrial.useQuery(
-        { trialId: trialId || "" },
-        { enabled: activeTab === "patients" && Boolean(trialId) }
-    );
+    // // Patient and Visit queries/mutations
+    // const patientsQuery = trpc.patients.listByTrial.useQuery(
+    //     { trialId: trialId || "" },
+    //     { enabled: activeTab === "patients" && Boolean(trialId) }
+    // );
 
     const generateCodeQuery = trpc.patients.generateCode.useQuery(undefined, {
         enabled: isEnrollDialogOpen,
@@ -408,21 +409,21 @@ export default function TrialDetail() {
         },
     });
 
-    const filteredPatients = useMemo(() => {
-        if (!patientsQuery.data) return [];
-        if (patientStatusFilter === "all") return patientsQuery.data;
-        return patientsQuery.data.filter(p => p.status === patientStatusFilter);
-    }, [patientsQuery.data, patientStatusFilter]);
+    // const filteredPatients = useMemo(() => {
+    //     if (!patientsQuery.data) return [];
+    //     if (patientStatusFilter === "all") return patientsQuery.data;
+    //     return patientsQuery.data.filter(p => p.status === patientStatusFilter);
+    // }, [patientsQuery.data, patientStatusFilter]);
 
-    const selectedPatient = useMemo(() => {
-        if (!selectedPatientId || !patientsQuery.data) return null;
-        return patientsQuery.data.find(p => p.patient_id === selectedPatientId) || null;
-    }, [selectedPatientId, patientsQuery.data]);
+    // const selectedPatient = useMemo(() => {
+    //     if (!selectedPatientId || !patientsQuery.data) return null;
+    //     return patientsQuery.data.find(p => p.patient_id === selectedPatientId) || null;
+    // }, [selectedPatientId, patientsQuery.data]);
 
-    const visitsQuery = trpc.patients.listVisits.useQuery(
-        { patientId: selectedPatientId || "", trialId: trialId || "" },
-        { enabled: Boolean(selectedPatientId && trialId) }
-    );
+    // const visitsQuery = trpc.patients.listVisits.useQuery(
+    //     { patientId: selectedPatientId || "", trialId: trialId || "" },
+    //     { enabled: Boolean(selectedPatientId && trialId) }
+    // );
 
     const createVisitMutation = trpc.patients.createVisit.useMutation({
         onSuccess: () => {
@@ -476,6 +477,29 @@ export default function TrialDetail() {
     const { data: trial, isLoading: isTrialLoading } = trpc.trials.getById.useQuery(
         { id: trialId, demoMode: currentDataMode },
         { enabled: isValidTrialId }
+    );
+
+    const patientsQuery = trpc.patients.listByTrial.useQuery(
+        // { trialId: trial?.id || "" },
+        { trialId: trial?.coreBackendTrialId || "" },
+        // { trialId: "3b4e2985-6685-424f-978b-2928010fc695" },
+        { enabled: activeTab === "patients" && Boolean(trial?.id) }
+    );
+
+    const filteredPatients = useMemo(() => {
+        if (!patientsQuery.data) return [];
+        if (patientStatusFilter === "all") return patientsQuery.data;
+        return patientsQuery.data.filter(p => p.status === patientStatusFilter);
+    }, [patientsQuery.data, patientStatusFilter]);
+
+    const selectedPatient = useMemo(() => {
+        if (!selectedPatientId || !patientsQuery.data) return null;
+        return patientsQuery.data.find(p => p.patient_id === selectedPatientId) || null;
+    }, [selectedPatientId, patientsQuery.data]);
+
+    const visitsQuery = trpc.patients.listVisits.useQuery(
+        { patientId: selectedPatientId || "", trialId: trial?.coreBackendTrialId || "" },
+        { enabled: Boolean(selectedPatientId && trial?.id) }
     );
     const { data: trialContext } = trpc.trials.getContext.useQuery(
         {
@@ -2691,7 +2715,11 @@ export default function TrialDetail() {
                                 <DialogHeader className="pb-4 border-b border-gray-100">
                                     <DialogTitle className="text-lg font-bold text-gray-950">Schedule Patient Visit</DialogTitle>
                                 </DialogHeader>
-                                <form onSubmit={(e) => { e.preventDefault(); createVisitMutation.mutate({ patientId: selectedPatientId || "", trialId, visitDate: visitForm.visitDate, visitTime: visitForm.visitTime, visitType: visitForm.visitType, notes: visitForm.notes, location: visitForm.location }); }} className="space-y-4 pt-4 text-xs">
+                                <form onSubmit={(e) => {
+                                    e.preventDefault();
+                                    console.log("createVisit trialId:", trial?.id);
+                                    createVisitMutation.mutate({ patientId: selectedPatientId || "", trialId: trial!.coreBackendTrialId, visitDate: visitForm.visitDate, visitTime: visitForm.visitTime, visitType: visitForm.visitType, notes: visitForm.notes, location: visitForm.location });
+                                }} className="space-y-4 pt-4 text-xs">
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-1.5">
                                             <label className="font-semibold text-gray-900">Visit Date</label>
@@ -2732,7 +2760,8 @@ export default function TrialDetail() {
                             </DialogContent>
                         </Dialog>
                     </div>
-                )}
+                )
+                }
                 <Dialog open={isEnrollDialogOpen} onOpenChange={setIsEnrollDialogOpen}>
                     <DialogContent className="sm:max-w-lg bg-white rounded-xl shadow-lg border border-gray-100 p-6">
                         <DialogHeader>
@@ -2851,7 +2880,11 @@ export default function TrialDetail() {
                                     !enrollForm.lastName ||
                                     !enrollForm.patientCode
                                 }
-                                onClick={() => enrollPatientMutation.mutate({ trialId: trialId || "", ...enrollForm })}
+                                onClick={() => enrollPatientMutation.mutate({
+                                    trialId: trial!.coreBackendTrialId,
+                                    demoMode: currentDataMode,
+                                    ...enrollForm
+                                })}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium h-9 px-4 flex items-center gap-1.5 shadow-sm"
                             >
                                 {enrollPatientMutation.isPending && (
@@ -2863,7 +2896,7 @@ export default function TrialDetail() {
                     </DialogContent>
                 </Dialog>
 
-            </div>
+            </div >
         );
 
     } else if (activeTab === "notifications") {
