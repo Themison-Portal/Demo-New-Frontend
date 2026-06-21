@@ -481,8 +481,8 @@ export default function TrialDetail() {
 
     const patientsQuery = trpc.patients.listByTrial.useQuery(
         // { trialId: trial?.id || "" },
-        // { trialId: trial?.coreBackendTrialId || "" },
-        { trialId: "3b4e2985-6685-424f-978b-2928010fc695" },
+        { trialId: trial?.coreBackendTrialId || "" },
+        // { trialId: "3b4e2985-6685-424f-978b-2928010fc695" },
         { enabled: activeTab === "patients" && Boolean(trial?.id) }
     );
 
