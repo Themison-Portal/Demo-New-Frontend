@@ -2,14 +2,13 @@
  * Shared helpers for talking to the BE's trial-documents API from the BFF.
  *
  * Documents are owned by the BE (`trial_documents` in Postgres); the FE
- * `protocols` table is retired. Trials are BE-owned too — the client's slug is
- * resolved to the BE trial UUID via the BE `by-slug` endpoint (no FE MySQL
- * `trials` read), so these document paths no longer touch FE MySQL at all.
+ * `protocols` table is retired. Trials are BE-owned too and identified by their
+ * UUID — there is no slug resolution, so these document paths don't touch FE
+ * MySQL at all.
  */
 
 import { getDb } from "../db";
 import { type DemoMode } from "./demoMode";
-import { callBackend } from "./backendClient";
 import type { CoreBackendTrialDocument } from "@shared/coreBackendTypes";
 
 const UUID_RE =
@@ -28,39 +27,20 @@ export function authTokenFrom(ctx: unknown): string {
 }
 
 /**
- * Resolve the BE trial UUID for a client trial id (bare slug or BE UUID),
- * WITHOUT provisioning a BE trial. Returns null when there is no BE trial, so
- * read paths return an empty list rather than creating one.
- *  - A bare BE UUID resolves to itself.
- *  - Otherwise the slug (+ demo_mode) is resolved via the BE `by-slug` endpoint.
- *  - No BE trial for that slug/mode → null.
+ * Validate a client trial id. Trials are identified solely by their BE UUID
+ * now (slugs are gone), so this is an identity check: a well-formed UUID
+ * resolves to itself; anything else returns null so read paths return an empty
+ * list rather than calling the BE with a bad id. `mode` is retained in the
+ * signature for the ~11 callers but is no longer used for resolution.
  */
 export async function resolveBeTrialIdForRead(
-  db: Db,
-  mode: DemoMode,
+  _db: Db,
+  _mode: DemoMode,
   trialId: string
 ): Promise<string | null> {
-  // 1. A bare-UUID trial id already IS the BE trial UUID (wizard docs uploaded
-  //    directly under the BE trial UUID).
   if (UUID_RE.test(trialId)) return trialId;
-  // 2. Trials are BE-owned: resolve the client's slug (+ demo_mode) via the BE.
-  //    This is the primary path for BE-native trials (no FE `trials` row). Try
-  //    with the demo_mode first (disambiguates colliding sample/full slugs like
-  //    "1"); if that misses (e.g. a caller that didn't pass demoMode), retry on
-  //    the slug alone — safe for the unique wizard/building slugs.
-  for (const q of [{ slug: trialId, demo_mode: mode }, { slug: trialId }]) {
-    try {
-      const t = await callBackend<any>(`/api/trials/by-slug`, { query: q });
-      if (t?.id) return t.id;
-    } catch {
-      /* not found for this query — try the next, then the FE mapping */
-    }
-  }
-  // No BE trial for this slug/mode. The FE `trials` table is retired, so there
-  // is no further fallback — the trial simply isn't in the BE.
   console.warn(
-    `[coreBackendDocs] No BE trial for "${trialId}" (mode=${mode}). ` +
-      `Documents for this trial cannot be listed from the BE.`
+    `[coreBackendDocs] Non-UUID trial id "${trialId}" — trials are UUID-only now; ignoring.`
   );
   return null;
 }

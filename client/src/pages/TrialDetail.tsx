@@ -362,7 +362,7 @@ export default function TrialDetail() {
 
     // Patient and Visit queries/mutations
     const patientsQuery = trpc.patients.listByTrial.useQuery(
-        { trialId: trialId || "" },
+        { trialId: trialId || "", demoMode: currentDataMode },
         { enabled: activeTab === "patients" && Boolean(trialId) }
     );
 
@@ -420,7 +420,7 @@ export default function TrialDetail() {
     }, [selectedPatientId, patientsQuery.data]);
 
     const visitsQuery = trpc.patients.listVisits.useQuery(
-        { patientId: selectedPatientId || "", trialId: trialId || "" },
+        { patientId: selectedPatientId || "", trialId: trialId || "", demoMode: currentDataMode },
         { enabled: Boolean(selectedPatientId && trialId) }
     );
 
@@ -2691,7 +2691,7 @@ export default function TrialDetail() {
                                 <DialogHeader className="pb-4 border-b border-gray-100">
                                     <DialogTitle className="text-lg font-bold text-gray-950">Schedule Patient Visit</DialogTitle>
                                 </DialogHeader>
-                                <form onSubmit={(e) => { e.preventDefault(); createVisitMutation.mutate({ patientId: selectedPatientId || "", trialId, visitDate: visitForm.visitDate, visitTime: visitForm.visitTime, visitType: visitForm.visitType, notes: visitForm.notes, location: visitForm.location }); }} className="space-y-4 pt-4 text-xs">
+                                <form onSubmit={(e) => { e.preventDefault(); createVisitMutation.mutate({ patientId: selectedPatientId || "", trialId, demoMode: currentDataMode, visitDate: visitForm.visitDate, visitTime: visitForm.visitTime, visitType: visitForm.visitType, notes: visitForm.notes, location: visitForm.location }); }} className="space-y-4 pt-4 text-xs">
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-1.5">
                                             <label className="font-semibold text-gray-900">Visit Date</label>
@@ -2851,7 +2851,7 @@ export default function TrialDetail() {
                                     !enrollForm.lastName ||
                                     !enrollForm.patientCode
                                 }
-                                onClick={() => enrollPatientMutation.mutate({ trialId: trialId || "", ...enrollForm })}
+                                onClick={() => enrollPatientMutation.mutate({ trialId: trialId || "", demoMode: currentDataMode, ...enrollForm })}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-medium h-9 px-4 flex items-center gap-1.5 shadow-sm"
                             >
                                 {enrollPatientMutation.isPending && (

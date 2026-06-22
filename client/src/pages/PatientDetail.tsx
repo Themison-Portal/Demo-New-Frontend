@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { useDemoState } from "@/contexts/DemoStateContext";
 
 interface PatientDetailProps {
     trialId: string;
@@ -38,6 +39,8 @@ type Tab = (typeof TABS)[number];
 
 export default function PatientDetail({ trialId, patientId }: PatientDetailProps) {
     const [, navigate] = useLocation();
+    const { getCurrentDataMode } = useDemoState();
+    const currentDataMode = getCurrentDataMode();
     const [activeTab, setActiveTab] = useState<Tab>("Overview");
     const [isScheduleVisitDialogOpen, setIsScheduleVisitDialogOpen] = useState(false);
     const [visitForm, setVisitForm] = useState({
@@ -49,12 +52,12 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
     });
 
     const patientsQuery = trpc.patients.listByTrial.useQuery(
-        { trialId },
+        { trialId, demoMode: currentDataMode },
         { enabled: Boolean(trialId) }
     );
 
     const visitsQuery = trpc.patients.listVisits.useQuery(
-        { patientId, trialId },
+        { patientId, trialId, demoMode: currentDataMode },
         { enabled: Boolean(patientId && trialId) }
     );
 
@@ -94,6 +97,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
         createVisitMutation.mutate({
             patientId,
             trialId,
+            demoMode: currentDataMode,
             visitDate: visitForm.visitDate,
             visitTime: visitForm.visitTime,
             visitType: visitForm.visitType,

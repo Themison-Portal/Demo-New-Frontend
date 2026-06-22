@@ -2761,7 +2761,7 @@ async function collectOperationalEvidence(
       beTrialList = [];
     }
     const trialRows = (beTrialList ?? []).map((t: any) => ({
-      id: toDemoId(demoMode, String(t?.slug || t?.id)),
+      id: toDemoId(demoMode, String(t?.id)),
       beTrialUuid: (t?.id ?? null) as string | null,
       title: (t?.name ?? null) as string | null,
       investigationalProduct: (t?.investigational_product ?? null) as string | null,
@@ -3118,8 +3118,8 @@ async function collectOperationalEvidence(
   }
   const asOf = formatIsoNow();
 
-  // Trials are BE-owned: fetch this trial's metadata from the BE by (slug,
-  // demo_mode) instead of the retired FE `trials` table. The FE-keyed
+  // Trials are BE-owned and identified by UUID: fetch this trial's metadata from
+  // the BE by UUID instead of the retired FE `trials` table. The FE-keyed
   // `protocols` read below intentionally still uses the FE trial id; executionMaps
   // (BE-keyed) uses `beTrialUuid`.
   let trial: {
@@ -3132,14 +3132,12 @@ async function collectOperationalEvidence(
     targetPatients: number | null;
   } | null = null;
   try {
-    const beTrial = await callBackend<any>("/api/trials/by-slug", {
-      query: { slug: stripDemoId(String(trialId)), demo_mode: demoMode },
-    });
-    if (beTrial?.id || beTrial?.slug) {
+    const beTrial = await callBackend<any>(`/api/trials/${stripDemoId(String(trialId))}`, {});
+    if (beTrial?.id) {
       trial = {
         // Keep the FE prefixed id as the internal join key (mapTrialById <->
         // trialLabelById), matching the pre-retirement behavior.
-        id: toDemoId(demoMode, String(beTrial?.slug || beTrial?.id)),
+        id: toDemoId(demoMode, String(beTrial?.id)),
         title: beTrial?.name ?? null,
         investigationalProduct: beTrial?.investigational_product ?? null,
         status: uqBeStatusToFe(beTrial?.status),

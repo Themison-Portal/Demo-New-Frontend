@@ -10,13 +10,12 @@ import { logTelemetryEvent } from "./_core/telemetry";
 import type { DemoMode } from "./_core/demoMode";
 
 /**
- * Trials are BE-owned (Postgres `trials`, keyed by UUID). The FE client routes
- * by a bare `slug` (e.g. "cardiac-a2b3c", "1") and the demo dataset is a
- * `demo_mode` (sample|full|building). The BFF resolves (slug, demoMode) -> the
- * BE trial via `GET /api/trials/by-slug`, and presents `id = slug` to the
- * client so routing is unchanged. The FE MySQL `trials` table has been retired:
- * trials are BE-only (no FE fallback). FE-owned CHILD aggregates (execution /
- * telemetry) are still computed locally but keyed by the BE trial UUID.
+ * Trials are BE-owned (Postgres `trials`, keyed by UUID) and identified solely
+ * by that UUID — the FE client routes by `/trial/<uuid>`. `demo_mode`
+ * (sample|full|building) partitions the demo datasets and is orthogonal to
+ * identity. The FE MySQL `trials` table has been retired: trials are BE-only
+ * (no FE fallback). FE-owned CHILD aggregates (execution / telemetry) are still
+ * computed locally but keyed by the BE trial UUID.
  */
 
 // BE status CHECK is planning|active|completed|paused|cancelled. Map FE<->BE.
@@ -42,9 +41,8 @@ function mapBackendStatusToClient(s: string | undefined | null): string {
 
 function mapBackendTrialToClient(t: any) {
   return {
-    // Present the bare slug to the client (it routes by `id`); fall back to the
-    // BE UUID for legacy rows that predate the slug column.
-    id: t.slug || t.id,
+    // Trials are identified by their BE UUID; the client routes by it.
+    id: t.id,
     coreBackendTrialId: t.id,
     title: t.name,
     protocolNumber: t.protocol_number || "",
@@ -84,10 +82,9 @@ function normalizeDemoMode(mode: any): "sample" | "full" | "building" | undefine
   return undefined;
 }
 
-/** Resolve the client's slug (+ demoMode) to the BE trial row. Throws on 404. */
-async function resolveBeTrial(slug: string, demoMode: string | undefined, ctx: any) {
-  return callBackend<any>(`/api/trials/by-slug`, {
-    query: { slug, demo_mode: demoMode },
+/** Fetch the BE trial row by its UUID. Throws on 404. */
+async function resolveBeTrial(beUuid: string, _demoMode: string | undefined, ctx: any) {
+  return callBackend<any>(`/api/trials/${beUuid}`, {
     user: ctx.user,
   });
 }
@@ -159,7 +156,7 @@ async function computeDocsAggregate(beUuid: string, ctx: any) {
   };
 }
 
-/** Client input -> BE trial body (snake_case). `slug`/`demo_mode` set explicitly. */
+/** Client input -> BE trial body (snake_case). `demo_mode` is set explicitly by callers. */
 function buildTrialBody(input: any): Record<string, unknown> {
   const b: Record<string, unknown> = {};
   const set = (k: string, v: unknown) => {
@@ -661,14 +658,12 @@ export const trialsRouter = router({
     }),
 
   create: protectedProcedure
-    .input(z.object({ id: z.string().optional(), ...trialWriteFields, title: z.string() }))
+    .input(z.object({ ...trialWriteFields, title: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const demoMode = normalizeDemoMode(input.demoMode);
-      const slug =
-        input.id || `trial-${Math.random().toString(36).substring(2, 9)}`;
+      // The BE assigns the trial UUID; the client no longer supplies an id/slug.
       const body = {
         ...buildTrialBody(input),
-        slug,
         demo_mode: demoMode,
         // BE-required fields with defaults.
         name: input.title,
@@ -698,10 +693,8 @@ export const trialsRouter = router({
   update: protectedProcedure
     .input(z.object({ id: z.string(), ...trialWriteFields }))
     .mutation(async ({ input, ctx }) => {
-      const demoMode = normalizeDemoMode(input.demoMode);
       try {
-        const beTrial = await resolveBeTrial(input.id, demoMode, ctx);
-        const updated = await callBackend<any>(`/api/trials/${beTrial.id}`, {
+        const updated = await callBackend<any>(`/api/trials/${input.id}`, {
           method: "PUT",
           body: buildTrialBody(input),
           user: ctx.user,
@@ -719,11 +712,8 @@ export const trialsRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string(), demoMode: z.any().optional() }))
     .mutation(async ({ input, ctx }) => {
-      const demoMode = normalizeDemoMode(input.demoMode);
-      const mode = (demoMode ?? "sample") as DemoMode;
       try {
-        const beTrial = await resolveBeTrial(input.id, demoMode, ctx);
-        await callBackend(`/api/trials/${beTrial.id}`, {
+        await callBackend(`/api/trials/${input.id}`, {
           method: "DELETE",
           user: ctx.user,
         });
@@ -731,8 +721,7 @@ export const trialsRouter = router({
         try {
           const db = await getDb();
           if (db) {
-            const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.id);
-            await cleanupTrialChildData(db, beTrialUuid ?? beTrial.id);
+            await cleanupTrialChildData(db, input.id);
           }
         } catch {
           /* FE child cleanup best-effort */

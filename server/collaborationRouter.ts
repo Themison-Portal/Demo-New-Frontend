@@ -128,15 +128,13 @@ function shouldInvokeAI(content: string, forceForThread = false) {
 }
 
 async function getTrialContext(db: DbClient, trialId: string, mode: DemoMode = "sample") {
-  // Trials are BE-owned (the FE `trials` table is retired). Resolve the BE
-  // trial UUID via the BE and read its metadata from `/api/trials/by-slug`.
+  // Trials are BE-owned and identified by UUID. Validate the id, then read the
+  // trial's metadata from the BE by UUID.
   const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
   if (!beTrialId) return null;
   let t: any;
   try {
-    t = await callBackend<any>(`/api/trials/by-slug`, {
-      query: { slug: trialId, demo_mode: mode },
-    });
+    t = await callBackend<any>(`/api/trials/${beTrialId}`, {});
   } catch {
     return null;
   }

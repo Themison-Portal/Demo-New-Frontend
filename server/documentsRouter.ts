@@ -135,11 +135,11 @@ export const documentsRouter = router({
         );
       }
 
-      // Resolve the trial the SAME way the read path does (bare UUID → BE
-      // by-slug → FE mapping), so uploads land under the trial the Hub lists.
-      // Trials are BE-owned now: they must already exist in the backend (created
-      // via the trials flow). If there's no BE trial, fail loudly rather than
-      // silently provisioning a stray one.
+      // Resolve the trial the SAME way the read path does (validate the BE
+      // UUID), so uploads land under the trial the Hub lists. Trials are
+      // BE-owned now: they must already exist in the backend (created via the
+      // trials flow). If there's no BE trial, fail loudly rather than silently
+      // provisioning a stray one.
       const beTrialId: string | null = await resolveBeTrialIdForRead(
         db,
         mode,
@@ -484,7 +484,7 @@ export const documentsRouter = router({
             const docs = await client.listTrialDocuments(beTrial.id, token);
             return docs.length > 0
               ? {
-                  id: beTrial.slug ?? beTrial.id,
+                  id: beTrial.id,
                   name: beTrial.name,
                 }
               : null;

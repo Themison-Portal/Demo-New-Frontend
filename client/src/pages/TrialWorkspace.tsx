@@ -469,16 +469,8 @@ export function TrialWorkspace() {
     const selectedProtocolFile = protocolFile;
     const selectedProtocolBase64 = protocolBase64;
     const selectedMemberIds = [...selectedTeamMembers];
-    const slugBase = protocolTitle
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)+/g, "");
-    const trimmedSlug = slugBase.slice(0, 18).replace(/-+$/g, "");
-    const randomSuffix = Math.random().toString(36).slice(2, 7);
-    const trialId = `${trimmedSlug || "trial"}-${randomSuffix}`;
 
     const createdTrial = await createTrialMutation.mutateAsync({
-      id: trialId,
       title: protocolTitle.trim(),
       protocolNumber: protocolNumber.trim() || undefined,
       investigationalProduct: investigationalProduct.trim() || undefined,
@@ -510,10 +502,12 @@ export function TrialWorkspace() {
       entityType: "trial",
       payload: { demoMode: currentDataMode, title: protocolTitle.trim() },
     });
-    const createdTrialIdRaw = createdTrial?.id || trialId;
-    const createdTrialId = createdTrialIdRaw.includes(":")
-      ? createdTrialIdRaw.split(":").slice(1).join(":")
-      : createdTrialIdRaw;
+    // The BE assigns the trial UUID; route + key everything off it.
+    const createdTrialId = String(createdTrial?.id ?? "");
+    if (!createdTrialId) {
+      toast.error("Trial created, but no id was returned. Please refresh.");
+      return;
+    }
     const createdTrialIdLower = createdTrialId.toLowerCase();
 
     if (typeof window !== "undefined") {

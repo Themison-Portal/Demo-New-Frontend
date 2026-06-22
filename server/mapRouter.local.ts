@@ -2026,10 +2026,9 @@ export const mapRouterLocal = router({
         trialCandidateIds.add(String(protocol.trialId));
       }
 
-      // Trials are BE-owned (the FE `trials` table is retired). Read the trial's
-      // metadata/scheduling fields from the BE by slug (+ demo_mode); on a 404
-      // (trial missing) fall through to null, as the old code did for missing rows.
-      const trialMode = (requestedMode as DemoMode) ?? "full";
+      // Trials are BE-owned and identified by UUID. Read the trial's
+      // metadata/scheduling fields from the BE by UUID; on a 404 (trial missing)
+      // fall through to null, as the old code did for missing rows.
       let trial: {
         title: string | null;
         sponsor: string | null;
@@ -2038,9 +2037,7 @@ export const mapRouterLocal = router({
         endDate: string | null;
       } | null = null;
       try {
-        const beTrial = await callBackend<any>(`/api/trials/by-slug`, {
-          query: { slug: input.trialId, demo_mode: trialMode },
-        });
+        const beTrial = await callBackend<any>(`/api/trials/${input.trialId}`, {});
         if (beTrial?.id) {
           trial = {
             title: beTrial.name ?? null,

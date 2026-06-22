@@ -3,6 +3,9 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 import { isConnectionError } from "./_core/fallbackHelper";
+import { getDb } from "./db";
+import { type DemoMode } from "./_core/demoMode";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
 
 // In-memory array to track mock visits scheduled during local dev session,
 // so that newly scheduled visits immediately show up in the UI timeline on refetch.
@@ -10,12 +13,16 @@ const mockScheduledVisitsStore: any[] = [];
 
 export const patientsRouter = router({
     listByTrial: protectedProcedure
-        .input(z.object({ trialId: z.string() }))
+        .input(z.object({ trialId: z.string(), demoMode: z.enum(["sample", "full", "building"]).optional() }))
         .query(async (opts) => {
             const { input, ctx } = opts;
             try {
+                const db = await getDb();
+                const mode = (input.demoMode ?? "sample") as DemoMode;
+                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                if (!beTrialId) return [];
                 const enrollments = await callBackend<any[]>(`/api/trial-patients`, {
-                    query: { trial_id: input.trialId },
+                    query: { trial_id: beTrialId },
                     user: ctx.user,
                 });
                 return enrollments;
@@ -115,6 +122,7 @@ export const patientsRouter = router({
         .input(
             z.object({
                 trialId: z.string(),
+                demoMode: z.enum(["sample", "full", "building"]).optional(),
                 patientCode: z.string(),
                 firstName: z.string(),
                 lastName: z.string(),
@@ -131,6 +139,13 @@ export const patientsRouter = router({
         .mutation(async (opts) => {
             const { input, ctx } = opts;
             try {
+                const db = await getDb();
+                const mode = (input.demoMode ?? "sample") as DemoMode;
+                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                if (!beTrialId) {
+                    throw new TRPCError({ code: "NOT_FOUND", message: "No backend trial for this id" });
+                }
+
                 // Step 1: Create patient in database
                 const patientPayload = {
                     patient_code: input.patientCode,
@@ -153,7 +168,7 @@ export const patientsRouter = router({
 
                 // Step 2: Enroll patient in trial
                 const enrollmentPayload = {
-                    trial_id: input.trialId,
+                    trial_id: beTrialId,
                     patient_id: patient.id,
                     status: "enrolled",
                     notes: input.notes || "",
@@ -190,6 +205,7 @@ export const patientsRouter = router({
                         }
                     };
                 }
+                if (err instanceof TRPCError) throw err;
                 console.error("Error in enrollPatient proxy:", err);
                 throw new TRPCError({
                     code: "INTERNAL_SERVER_ERROR",
@@ -199,12 +215,16 @@ export const patientsRouter = router({
         }),
 
     listVisits: protectedProcedure
-        .input(z.object({ patientId: z.string(), trialId: z.string() }))
+        .input(z.object({ patientId: z.string(), trialId: z.string(), demoMode: z.enum(["sample", "full", "building"]).optional() }))
         .query(async (opts) => {
             const { input, ctx } = opts;
             try {
+                const db = await getDb();
+                const mode = (input.demoMode ?? "sample") as DemoMode;
+                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                if (!beTrialId) return [];
                 const visits = await callBackend<any[]>(`/api/patient-visits/`, {
-                    query: { patient_id: input.patientId, trial_id: input.trialId },
+                    query: { patient_id: input.patientId, trial_id: beTrialId },
                     user: ctx.user,
                 });
                 return visits;
@@ -273,6 +293,7 @@ export const patientsRouter = router({
             z.object({
                 patientId: z.string(),
                 trialId: z.string(),
+                demoMode: z.enum(["sample", "full", "building"]).optional(),
                 visitDate: z.string(),
                 visitTime: z.string().optional(),
                 visitType: z.string().default("follow_up"),
@@ -283,9 +304,15 @@ export const patientsRouter = router({
         .mutation(async (opts) => {
             const { input, ctx } = opts;
             try {
+                const db = await getDb();
+                const mode = (input.demoMode ?? "sample") as DemoMode;
+                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                if (!beTrialId) {
+                    throw new TRPCError({ code: "NOT_FOUND", message: "No backend trial for this id" });
+                }
                 const visitPayload = {
                     patient_id: input.patientId,
-                    trial_id: input.trialId,
+                    trial_id: beTrialId,
                     doctor_id: "00000000-0000-0000-0000-000000000001",
                     visit_date: input.visitDate.split("T")[0],
                     visit_time: input.visitTime || null,
@@ -323,6 +350,7 @@ export const patientsRouter = router({
                     mockScheduledVisitsStore.push(mockVisit);
                     return mockVisit;
                 }
+                if (err instanceof TRPCError) throw err;
                 console.error("Error in createVisit proxy:", err);
                 throw new TRPCError({
                     code: "INTERNAL_SERVER_ERROR",

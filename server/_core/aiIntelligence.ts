@@ -45,11 +45,11 @@ function modeFromTrialId(trialId: string): DemoMode {
 
 /**
  * Map a BE trial row to the shape the snapshot/graph logic expects. `id` is the
- * BE `slug` (the FE trial key) so `stripDemoId`/node keys behave as before.
+ * BE trial UUID (the canonical trial key).
  */
 function mapBeTrialRow(t: any) {
   return {
-    id: t?.slug || t?.id,
+    id: t?.id,
     title: t?.name ?? null,
     investigationalProduct: t?.investigational_product ?? null,
     status: beStatusToFe(t?.status),
@@ -64,13 +64,11 @@ function mapBeTrialRow(t: any) {
   };
 }
 
-/** Fetch a single BE trial (by FE slug + demo mode) and map it, or null. */
-async function fetchBeTrial(slug: string, mode: DemoMode) {
+/** Fetch a single BE trial by its UUID and map it, or null. */
+async function fetchBeTrial(uuid: string, _mode: DemoMode) {
   try {
-    const t = await callBackend<any>("/api/trials/by-slug", {
-      query: { slug, demo_mode: mode },
-    });
-    return t?.id || t?.slug ? mapBeTrialRow(t) : null;
+    const t = await callBackend<any>(`/api/trials/${uuid}`, {});
+    return t?.id ? mapBeTrialRow(t) : null;
   } catch {
     return null;
   }

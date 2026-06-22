@@ -37,7 +37,7 @@ import {
   threads,
   trialInboxes,
 } from "../drizzle/schema";
-import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
+import { toDemoId, type DemoMode } from "./_core/demoMode";
 import { callBackend } from "./_core/backendClient";
 import { eq, inArray, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -64,12 +64,11 @@ function toBeIso(v: unknown): string | null {
   }
 }
 
-// Map a seeded FE trial onto the BE `/api/trials` body. `slug` is the bare
-// trial id (no demo prefix); `demoMode` tags the trial as demo-owned so the
-// BE-sourced trial list surfaces it. Field mapping matches the backfill script.
-function feTrialToBeBody(t: any, slug: string, demoMode: DemoMode) {
+// Map a seeded FE trial onto the BE `/api/trials` body. `demoMode` tags the
+// trial as demo-owned so the BE-sourced trial list surfaces it. The BE assigns
+// the trial UUID. Field mapping matches the backfill script.
+function feTrialToBeBody(t: any, demoMode: DemoMode) {
   return {
-    slug,
     demo_mode: demoMode,
     name: t.title || "Untitled Trial",
     phase: t.phase || "Phase I",
@@ -139,36 +138,11 @@ const TRIAL_KEYED_CHILD_TABLES = [
   collabTelemetryEvents,
 ] as const;
 
-// Resolve the BE trial UUID for each prefixed FE trial id via the BE
-// `/api/trials/by-slug` lookup (BE is the source of truth now; the FE `trials`
-// table is retired). Returns a Map<prefixedId, beUuid>.
-async function resolveSeededBeUuids(
-  _db: DbClient,
-  mode: DemoMode,
-  prefixedIds: string[]
-): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
-  if (prefixedIds.length === 0) return result;
-
-  for (const prefixedId of prefixedIds) {
-    const slug = stripDemoId(prefixedId);
-    try {
-      const found: any = await callBackend(`/api/trials/by-slug`, {
-        query: { slug, demo_mode: mode },
-      });
-      if (found?.id) result.set(prefixedId, found.id);
-    } catch {
-      /* not found in BE — leave unmapped */
-    }
-  }
-
-  return result;
-}
-
-// For each seeded trial, ensure a BE trial exists (look it up by slug+demo_mode;
-// PUT when found, else POST a new one). The BE owns the trial row now — there is
-// no FE `trials` row to persist a mapping onto. Returns a Map<prefixedId, beUuid>
-// for re-keying the just-seeded child data.
+// For each seeded trial, create a BE trial and return a Map<prefixedId, beUuid>
+// for re-keying the just-seeded child data. Trials are UUID-identified (slugs
+// are gone), so the BE assigns the UUID on POST. This always runs after the
+// target mode has been wiped (resetModeToDefault → wipeModeData), so creating
+// fresh rows cannot accumulate duplicates.
 async function ensureBeTrialsForSeed(
   _db: DbClient,
   data: typeof SAMPLE_TRIALS,
@@ -179,35 +153,16 @@ async function ensureBeTrialsForSeed(
 
   for (const trial of data) {
     const prefixedId = toDemoId(mode, trial.id);
-    const slug = trial.id;
-    const body = feTrialToBeBody(trial, slug, mode);
+    const body = feTrialToBeBody(trial, mode);
     try {
-      // Resolve an existing BE trial by slug+demo_mode (covers a prior partial
-      // run). PUT when found, else POST a fresh one.
-      let beId: string | null = null;
-      try {
-        const found: any = await callBackend(`/api/trials/by-slug`, {
-          query: { slug, demo_mode: mode },
-        });
-        if (found?.id) beId = found.id;
-      } catch {
-        /* not found — will create */
-      }
-
-      if (beId) {
-        await callBackend(`/api/trials/${beId}`, { method: "PUT", body });
-      } else {
-        const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
-          method: "POST",
-          body: { ...body, members: [], pending_members: [] },
-        });
-        if (beTrial?.id) beId = beTrial.id;
-      }
-
-      if (beId) beUuidByPrefixed.set(prefixedId, beId);
+      const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+        method: "POST",
+        body: { ...body, members: [], pending_members: [] },
+      });
+      if (beTrial?.id) beUuidByPrefixed.set(prefixedId, beTrial.id);
     } catch (error) {
       console.warn(
-        `[demo] Failed to create/update BE trial for ${prefixedId}; child data stays keyed by the prefixed id.`,
+        `[demo] Failed to create BE trial for ${prefixedId}; child data stays keyed by the prefixed id.`,
         error
       );
     }
@@ -1860,7 +1815,6 @@ async function restoreModeSnapshot(
   const snapshotMode = snapshot.mode;
   for (const sourceRow of asTypedRows<Record<string, any>>(rows.trials)) {
     const sourceBeId = String(sourceRow.id);
-    const slug = String(sourceRow.slug ?? stripDemoId(sourceBeId) ?? sourceBeId);
     const {
       id: _id,
       slug: _slug,
@@ -1871,30 +1825,19 @@ async function restoreModeSnapshot(
       updated_at: _updatedAt,
       ...rest
     } = sourceRow;
-    const body = { ...rest, slug, demo_mode: snapshotMode, name: sourceRow.name ?? "Untitled Trial" };
+    const body = { ...rest, demo_mode: snapshotMode, name: sourceRow.name ?? "Untitled Trial" };
     try {
-      let beId: string | null = null;
-      try {
-        const found: any = await callBackend(`/api/trials/by-slug`, {
-          query: { slug, demo_mode: snapshotMode },
-        });
-        if (found?.id) beId = found.id;
-      } catch {
-        /* not found — will create */
-      }
-      if (beId) {
-        await callBackend(`/api/trials/${beId}`, { method: "PUT", body });
-      } else {
-        const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
-          method: "POST",
-          body: { ...body, members: [], pending_members: [] },
-        });
-        beId = beTrial?.id ?? null;
-      }
+      // The mode was wiped before restore, so always create a fresh BE trial
+      // (UUID assigned by the BE) and map source UUID -> new UUID.
+      const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+        method: "POST",
+        body: { ...body, members: [], pending_members: [] },
+      });
+      const beId: string | null = beTrial?.id ?? null;
       if (beId) restoreTrialIdMap.set(sourceBeId, beId);
     } catch (error) {
       console.warn(
-        `[demo] Failed to recreate BE trial (slug=${slug}) during snapshot restore; its child data keeps the source key.`,
+        `[demo] Failed to recreate BE trial (source=${sourceBeId}) during snapshot restore; its child data keeps the source key.`,
         error
       );
     }
@@ -3611,9 +3554,6 @@ async function cloneModeIntoBuilding(
     const trialRows = asTypedRows<Record<string, any>>(rows.trials);
     for (const sourceRow of trialRows) {
       const sourceBeId = String(sourceRow.id);
-      // Derive a stable building slug from the source trial's slug (or its id).
-      const sourceSlug = String(sourceRow.slug ?? stripDemoId(sourceBeId) ?? sourceBeId);
-      const slug = `building-${sourceSlug}`;
       // Reuse the source BE trial's fields, retagged for the building copy.
       const {
         id: _id,
@@ -3625,26 +3565,15 @@ async function cloneModeIntoBuilding(
         updated_at: _updatedAt,
         ...rest
       } = sourceRow;
-      const body = { ...rest, slug, demo_mode: "building", name: sourceRow.name ?? "Untitled Trial" };
+      const body = { ...rest, demo_mode: "building", name: sourceRow.name ?? "Untitled Trial" };
       try {
-        let beId: string | null = null;
-        try {
-          const found: any = await callBackend(`/api/trials/by-slug`, {
-            query: { slug, demo_mode: "building" },
-          });
-          if (found?.id) beId = found.id;
-        } catch {
-          /* not found — will create */
-        }
-        if (beId) {
-          await callBackend(`/api/trials/${beId}`, { method: "PUT", body });
-        } else {
-          const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
-            method: "POST",
-            body: { ...body, members: [], pending_members: [] },
-          });
-          beId = beTrial?.id ?? null;
-        }
+        // "building" was wiped above, so always create a fresh BE trial (UUID
+        // assigned by the BE) and map source UUID -> building UUID.
+        const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+          method: "POST",
+          body: { ...body, members: [], pending_members: [] },
+        });
+        const beId: string | null = beTrial?.id ?? null;
         if (beId) {
           // Child data is keyed by the SOURCE BE UUID -> building BE UUID.
           trialIdMap.set(sourceBeId, beId);
