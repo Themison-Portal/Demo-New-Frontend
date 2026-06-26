@@ -4,6 +4,9 @@ import { protectedProcedure, router } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 import { mapRouterLocal } from "./mapRouter.local";
 import { isConnectionError, checkBackendOnline, setBackendOffline } from "./_core/fallbackHelper";
+import { getDb } from "./db";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import type { DemoMode } from "./_core/demoMode";
 import type { Task, TaskCategory, TaskPriority, TaskStatus, ExecutionMap, TaskDependency, DependencyType } from "@shared/map";
 
 const TASK_STATUSES = [
@@ -156,7 +159,13 @@ export const mapRouter = router({
     .query(async (opts) => {
       const { input, ctx } = opts;
       try {
-        const trial = await callBackend(`/api/trials/${input.trialId}`, { user: ctx.user });
+        const db = await getDb();
+        if (!db) return null;
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialId) return null;
+
+        const trial = await callBackend(`/api/trials/${beTrialId}`, { user: ctx.user });
         if (!trial) return null;
         return mockMap(input.trialId);
       } catch (err) {
@@ -183,30 +192,50 @@ export const mapRouter = router({
       const { input, ctx } = opts;
       try {
         const backendTasks = await callBackend<any[]>(`/api/tasks`, { user: ctx.user });
-        const trialIds = input.trialIds.length > 0 ? input.trialIds : Array.from(new Set(backendTasks.map(t => t.trial_id)));
+
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrials = await callBackend<any[]>("/api/trials", {
+          query: { demo_mode: mode },
+          user: ctx.user,
+        }).catch(() => []);
+
+        const slugToUuid = new Map<string, string>();
+        const uuidToSlug = new Map<string, string>();
+        for (const t of (beTrials ?? [])) {
+          const clientSlug = t.slug || t.id;
+          const beUuid = t.id;
+          slugToUuid.set(clientSlug, beUuid);
+          uuidToSlug.set(beUuid, clientSlug);
+        }
+
+        const trialSlugs = input.trialIds.length > 0
+          ? input.trialIds
+          : Array.from(new Set(backendTasks.map(t => uuidToSlug.get(t.trial_id) || t.trial_id)));
 
         // Fetch dependencies for each trial
         const dependenciesByTrial = new Map<string, any[]>();
-        for (const trialId of trialIds) {
+        for (const trialSlug of trialSlugs) {
+          const trialUuid = slugToUuid.get(trialSlug) || trialSlug;
           try {
             const deps = await callBackend<any[]>(`/api/task-dependencies`, {
-              query: { trial_id: trialId },
+              query: { trial_id: trialUuid },
               user: ctx.user,
             });
-            dependenciesByTrial.set(trialId, deps);
+            dependenciesByTrial.set(trialUuid, deps);
           } catch (depErr) {
-            console.error(`Error fetching dependencies for trial ${trialId}:`, depErr);
-            dependenciesByTrial.set(trialId, []);
+            console.error(`Error fetching dependencies for trial ${trialSlug} (UUID ${trialUuid}):`, depErr);
+            dependenciesByTrial.set(trialUuid, []);
           }
         }
 
-        return trialIds.map(trialId => {
-          const filtered = backendTasks.filter(t => t.trial_id === trialId);
-          const trialDeps = dependenciesByTrial.get(trialId) || [];
+        return trialSlugs.map(trialSlug => {
+          const trialUuid = slugToUuid.get(trialSlug) || trialSlug;
+          const filtered = backendTasks.filter(t => t.trial_id === trialUuid);
+          const trialDeps = dependenciesByTrial.get(trialUuid) || [];
           return {
-            map: mockMap(trialId),
-            phases: mockPhases(trialId),
-            tasks: filtered.map(t => mapBackendTaskToClient(t, trialId)),
+            map: mockMap(trialSlug),
+            phases: mockPhases(trialSlug),
+            tasks: filtered.map(t => mapBackendTaskToClient(t, trialSlug)),
             dependencies: trialDeps.map(mapBackendDependencyToClient),
             transitions: [],
             protocolMapSections: [],
@@ -225,17 +254,33 @@ export const mapRouter = router({
     }),
 
   load: protectedProcedure
-    .input(z.object({ mapId: z.string() }))
+    .input(
+      z.object({
+        mapId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
     .query(async (opts) => {
       const { input, ctx } = opts;
       try {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.mapId);
+        if (!beTrialId) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Trial not found for mapId: ${input.mapId}`,
+          });
+        }
+
         const [backendTasks, backendDeps] = await Promise.all([
           callBackend<any[]>(`/api/tasks`, {
-            query: { trial_id: input.mapId },
+            query: { trial_id: beTrialId },
             user: ctx.user,
           }),
           callBackend<any[]>(`/api/task-dependencies`, {
-            query: { trial_id: input.mapId },
+            query: { trial_id: beTrialId },
             user: ctx.user,
           }).catch(err => {
             console.error("Failed to load task dependencies:", err);
@@ -256,7 +301,7 @@ export const mapRouter = router({
           setBackendOffline();
           console.warn("[mapRouter] Backend offline. Falling back to local database for load.");
           const caller = mapRouterLocal.createCaller(ctx);
-          return caller.load(input);
+          return caller.load({ mapId: input.mapId });
         }
         console.error("Error in load proxy:", err);
         throw new TRPCError({
@@ -291,15 +336,27 @@ export const mapRouter = router({
           tags: z.any().optional(),
           orderInPhase: z.any().optional(),
         }),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
     .mutation(async (opts) => {
       const { input, ctx } = opts;
       const trialId = input.mapId;
       const category = input.task.category || getCategoryForPhaseId(input.phaseId);
+
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+      if (!beTrialId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Trial not found for mapId: ${trialId}`,
+        });
+      }
       
       const body = {
-        trial_id: trialId,
+        trial_id: beTrialId,
         title: input.task.name,
         description: input.task.description || "",
         status: input.task.status === "waiting" ? "todo" : input.task.status,
@@ -328,7 +385,11 @@ export const mapRouter = router({
           setBackendOffline();
           console.warn("[mapRouter] Backend offline. Falling back to local database for createTask.");
           const caller = mapRouterLocal.createCaller(ctx);
-          return caller.createTask(input as any);
+          return caller.createTask({
+            mapId: input.mapId,
+            phaseId: input.phaseId,
+            task: input.task as any,
+          });
         }
         console.error("Error in createTask proxy:", err);
         throw new TRPCError({
