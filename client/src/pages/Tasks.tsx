@@ -162,6 +162,22 @@ const TASK_STATUS_OPTIONS: TaskStatus[] = [
 
 const TASK_PRIORITY_OPTIONS: TaskPriority[] = ["critical", "high", "medium", "low"];
 
+const getPriorityWeight = (priority?: string | null): number => {
+  if (!priority) return 0;
+  switch (priority.toLowerCase()) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+};
+
 const TASK_CATEGORY_OPTIONS: TaskCategory[] = [
   "consent",
   "eligibility",
@@ -1295,6 +1311,9 @@ export default function Tasks() {
       .slice()
       .sort((a, b) => {
         if (a.phaseId !== b.phaseId) return a.phaseId.localeCompare(b.phaseId);
+        const pA = getPriorityWeight(a.priority);
+        const pB = getPriorityWeight(b.priority);
+        if (pA !== pB) return pB - pA;
         if (a.orderInPhase !== b.orderInPhase) return a.orderInPhase - b.orderInPhase;
         return a.name.localeCompare(b.name);
       });
@@ -1589,6 +1608,15 @@ export default function Tasks() {
       if (!grouped[displayStatus]) grouped[displayStatus] = [];
       grouped[displayStatus].push(task);
     }
+    // Sort each group by priority descending
+    for (const status of statusesForKanban) {
+      grouped[status].sort((a, b) => {
+        const pA = getPriorityWeight(a.priority);
+        const pB = getPriorityWeight(b.priority);
+        if (pA !== pB) return pB - pA;
+        return a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name);
+      });
+    }
     return grouped;
   }, [filteredTasks, statusesForKanban]);
 
@@ -1621,7 +1649,12 @@ export default function Tasks() {
       filteredTasks
         .filter((task) => task.phaseId === phase.id)
         .slice()
-        .sort((a, b) => a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name))
+        .sort((a, b) => {
+          const pA = getPriorityWeight(a.priority);
+          const pB = getPriorityWeight(b.priority);
+          if (pA !== pB) return pB - pA;
+          return a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name);
+        })
         .forEach((task, index) => {
           lookup.set(task.id, index);
         });
@@ -1781,7 +1814,12 @@ export default function Tasks() {
       .map((phase) => {
         const phaseTasks = filteredTasks
           .filter((task) => task.phaseId === phase.id)
-          .sort((a, b) => a.orderInPhase - b.orderInPhase);
+          .sort((a, b) => {
+            const pA = getPriorityWeight(a.priority);
+            const pB = getPriorityWeight(b.priority);
+            if (pA !== pB) return pB - pA;
+            return a.orderInPhase - b.orderInPhase;
+          });
         return {
           phase,
           tasks: phaseTasks,
@@ -3531,7 +3569,7 @@ export default function Tasks() {
   return (
     <>
       {!embeddedTaskModal ? (
-        <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4">
+        <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4 bg-[#F9FAFB]">
         <div className="flex items-baseline justify-between">
           <div>
             <div className="flex items-center gap-3">
