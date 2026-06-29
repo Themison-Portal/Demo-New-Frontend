@@ -4753,11 +4753,10 @@ Output rules:
                                                                                         onClick={() => {
                                                                                             const key = (source as any).fileId || source.filename || "";
                                                                                             const meta = liveSourceMeta[key];
-                                                                                            console.log("meta:", meta, "key:", key);
                                                                                             handleOpenTaskDocument({
                                                                                                 ...source,
-                                                                                                highlightUrl: meta?.highlightUrl,
-                                                                                                bboxes: meta?.bboxes,
+                                                                                                highlightUrl: meta?.highlightUrl || source.highlightUrl,
+                                                                                                bboxes: meta?.bboxes || source.bboxes,
                                                                                             });
                                                                                         }}
                                                                                         className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg mt-2"
@@ -4768,19 +4767,12 @@ Output rules:
                                                                                 ) : entry.canOpenDocument ? (
                                                                                     <button
                                                                                         onClick={() => {
-                                                                                            console.log("button source:", JSON.stringify(source));
                                                                                             const key = (source as any).fileId || source.filename || "";
                                                                                             const meta = liveSourceMeta[key];
-                                                                                            console.log("meta from liveSourceMeta:", meta, "key:", key);
-                                                                                            console.log("[DEBUG] source.fileId:", (source as any).fileId);
-                                                                                            console.log("[DEBUG] source.filename:", source.filename);
-                                                                                            console.log("[DEBUG] liveSourceMeta keys:", Object.keys(liveSourceMeta));
-                                                                                            console.log("[DEBUG] meta:", meta);
-                                                                                            console.log("[DEBUG] highlightUrl being used:", meta?.highlightUrl || source.highlightUrl);
                                                                                             handleOpenTaskDocument({
                                                                                                 ...source,
-                                                                                                highlightUrl: meta?.highlightUrl,
-                                                                                                bboxes: meta?.bboxes,
+                                                                                                highlightUrl: meta?.highlightUrl || source.highlightUrl,
+                                                                                                bboxes: meta?.bboxes || source.bboxes,
                                                                                             });
                                                                                         }}
 
