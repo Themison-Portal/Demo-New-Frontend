@@ -413,16 +413,15 @@ async function queryViaCoreBackend(params: {
             const fileUrl = downloadUrlCache.get(src.fileId) || doc?.document_url;
             const page = typeof src.page === "number" ? src.page : null;
             const bboxes = Array.isArray(src.bboxes) ? src.bboxes : undefined;
-            // When a source carries docling bboxes + a page + a backend-fetchable PDF
-            // URL, precompute the BE highlight-PDF URL so the viewer can show the cited
-            // sentences highlighted (server-burned via /query/highlighted-pdf, which is
-            // public). Falls back to the #search behaviour when bboxes are absent.
+            // Generate highlightUrl if we have bboxes OR an excerpt, plus a page, fileUrl, and FastAPI backend URL
+            const hasHighlights = (bboxes && bboxes.length > 0) || !!src.excerpt;
             const highlightUrl =
-                bboxes && bboxes.length > 0 && page && fileUrl && ENV.fastapiBackendUrl
+                hasHighlights && page && fileUrl && ENV.fastapiBackendUrl
                     ? `${ENV.fastapiBackendUrl.replace(/\/$/, "")}/query/highlighted-pdf` +
                     `?doc=${encodeURIComponent(fileUrl)}` +
                     `&page=${page}` +
-                    `&bboxes=${encodeURIComponent(JSON.stringify(bboxes))}`
+                    (bboxes && bboxes.length > 0 ? `&bboxes=${encodeURIComponent(JSON.stringify(bboxes))}` : "") +
+                    (src.excerpt ? `&exact_text=${encodeURIComponent(src.excerpt)}` : "")
                     : undefined;
             console.log("[BFF highlight debug]", {
                 hasFileUrl: !!fileUrl,
