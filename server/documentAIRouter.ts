@@ -386,11 +386,11 @@ async function queryViaCoreBackend(params: {
         // row (keyed by UUID) so the UI keeps documentId, fileUrl, category, etc.
         const docByBeId = new Map(docs.map((d) => [d.id, d]));
 
-        // Fetch download URLs for all docs that have bboxes in sources
+        // Fetch download URLs for all docs that have bboxes or excerpts in sources
         const downloadUrlCache = new Map<string, string>();
         await Promise.all(
             beResponse.sources
-                .filter((src) => Array.isArray(src.bboxes) && src.bboxes.length > 0)
+                .filter((src) => (Array.isArray(src.bboxes) && src.bboxes.length > 0) || !!src.excerpt)
                 .map(async (src) => {
                     if (!downloadUrlCache.has(src.fileId)) {
                         try {

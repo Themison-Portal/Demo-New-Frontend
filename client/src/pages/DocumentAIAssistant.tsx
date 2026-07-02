@@ -4755,8 +4755,8 @@ Output rules:
                                                                                             const meta = liveSourceMeta[key];
                                                                                             handleOpenTaskDocument({
                                                                                                 ...source,
-                                                                                                highlightUrl: meta?.highlightUrl || source.highlightUrl,
-                                                                                                bboxes: meta?.bboxes || source.bboxes,
+                                                                                                highlightUrl: source.highlightUrl || meta?.highlightUrl,
+                                                                                                bboxes: source.bboxes || meta?.bboxes,
                                                                                             });
                                                                                         }}
                                                                                         className="inline-flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-lg mt-2"
@@ -4771,8 +4771,8 @@ Output rules:
                                                                                             const meta = liveSourceMeta[key];
                                                                                             handleOpenTaskDocument({
                                                                                                 ...source,
-                                                                                                highlightUrl: meta?.highlightUrl || source.highlightUrl,
-                                                                                                bboxes: meta?.bboxes || source.bboxes,
+                                                                                                highlightUrl: source.highlightUrl || meta?.highlightUrl,
+                                                                                                bboxes: source.bboxes || meta?.bboxes,
                                                                                             });
                                                                                         }}
 
