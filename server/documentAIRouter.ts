@@ -398,7 +398,13 @@ async function queryViaCoreBackend(params: {
                             console.log("[highlight] fetching download URL for", src.fileId, "token:", token ? "present" : "MISSING");
                             const result = await getCoreBackendClient().getDownloadUrl(src.fileId, token);
                             console.log("[highlight] download URL result:", result?.url);
-                            if (result?.url) downloadUrlCache.set(src.fileId, result.url);
+                            if (result?.url) {
+                                let resolvedUrl = result.url;
+                                if (resolvedUrl.includes("localhost") || resolvedUrl.includes("127.0.0.1")) {
+                                    resolvedUrl = resolvedUrl.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, ENV.fastapiBackendUrl.replace(/\/$/, ""));
+                                }
+                                downloadUrlCache.set(src.fileId, resolvedUrl);
+                            }
                         } catch (e) {
                             console.error("[highlight] getDownloadUrl failed:", e);
                             // fallback to blob path
@@ -410,7 +416,10 @@ async function queryViaCoreBackend(params: {
 
         const sources: DocumentAISource[] = beResponse.sources.map((src) => {
             const doc = docByBeId.get(src.fileId);
-            const fileUrl = downloadUrlCache.get(src.fileId) || doc?.document_url;
+            let fileUrl = downloadUrlCache.get(src.fileId) || doc?.document_url;
+            if (fileUrl && (fileUrl.includes("localhost") || fileUrl.includes("127.0.0.1"))) {
+                fileUrl = fileUrl.replace(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/, ENV.fastapiBackendUrl.replace(/\/$/, ""));
+            }
             const page = typeof src.page === "number" ? src.page : null;
             const bboxes = Array.isArray(src.bboxes) ? src.bboxes : undefined;
             // Generate highlightUrl if we have bboxes OR an excerpt, plus a page, fileUrl, and FastAPI backend URL
