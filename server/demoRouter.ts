@@ -2254,7 +2254,8 @@ async function seedCategories(dbClient?: DbClient) {
         isDefault: true,
       }))
     )
-    .onDuplicateKeyUpdate({
+    .onConflictDoUpdate({
+      target: documentCategories.name,
       set: {
         isDefault: true,
       },
@@ -3590,12 +3591,7 @@ async function cloneModeIntoBuilding(
     for (const row of protocolRows) {
       const { id: _protocolId, ...protocolInsert } = row;
       const [inserted] = await tx
-        .insert(protocols)
-        .values({
-          ...protocolInsert,
-          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        })
-        .$returningId();
+        .insert(protocols).values({...protocolInsert, trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId)}).returning({ id: protocols.id });
       if (typeof inserted?.id === "number") {
         protocolIdMap.set(Number(row.id), inserted.id);
       }
@@ -3605,13 +3601,7 @@ async function cloneModeIntoBuilding(
     for (const row of protocolSectionRows) {
       const { id: _protocolSectionId, ...protocolSectionInsert } = row;
       const [inserted] = await tx
-        .insert(protocolSections)
-        .values({
-          ...protocolSectionInsert,
-          protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
-          parentSectionId: null,
-        })
-        .$returningId();
+        .insert(protocolSections).values({...protocolSectionInsert, protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)), parentSectionId: null}).returning({ id: protocolSections.id });
       if (typeof inserted?.id === "number") {
         protocolSectionIdMap.set(Number(row.id), inserted.id);
       }
@@ -3641,13 +3631,7 @@ async function cloneModeIntoBuilding(
     for (const row of scaffoldRows) {
       const { id: _scaffoldId, ...scaffoldInsert } = row;
       const [inserted] = await tx
-        .insert(taskScaffolds)
-        .values({
-          ...scaffoldInsert,
-          protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
-          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        })
-        .$returningId();
+        .insert(taskScaffolds).values({...scaffoldInsert, protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)), trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId)}).returning({ id: taskScaffolds.id });
       if (typeof inserted?.id === "number") {
         scaffoldIdMap.set(Number(row.id), inserted.id);
       }
@@ -3657,12 +3641,7 @@ async function cloneModeIntoBuilding(
     for (const row of phaseRows) {
       const { id: _phaseId, ...phaseInsert } = row;
       const [inserted] = await tx
-        .insert(phases)
-        .values({
-          ...phaseInsert,
-          scaffoldId: scaffoldIdMap.get(Number(row.scaffoldId)) ?? Number(row.scaffoldId),
-        })
-        .$returningId();
+        .insert(phases).values({...phaseInsert, scaffoldId: scaffoldIdMap.get(Number(row.scaffoldId)) ?? Number(row.scaffoldId)}).returning({ id: phases.id });
       if (typeof inserted?.id === "number") {
         phaseIdMap.set(Number(row.id), inserted.id);
       }
@@ -3672,12 +3651,7 @@ async function cloneModeIntoBuilding(
     for (const row of taskRows) {
       const { id: _taskId, ...taskInsert } = row;
       const [inserted] = await tx
-        .insert(tasks)
-        .values({
-          ...taskInsert,
-          phaseId: phaseIdMap.get(Number(row.phaseId)) ?? Number(row.phaseId),
-        })
-        .$returningId();
+        .insert(tasks).values({...taskInsert, phaseId: phaseIdMap.get(Number(row.phaseId)) ?? Number(row.phaseId)}).returning({ id: tasks.id });
       if (typeof inserted?.id === "number") {
         taskIdMap.set(Number(row.id), inserted.id);
       }

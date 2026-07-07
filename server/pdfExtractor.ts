@@ -1,6 +1,6 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { PDFParse } = require('pdf-parse');
+const { PDFParse } = require('pdf-parse-new');
 import { storageReadBytes } from "./storage";
 
 /**
