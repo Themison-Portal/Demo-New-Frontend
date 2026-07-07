@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
 import { getCoreBackendClient } from "./_core/coreBackendClient";
@@ -1367,7 +1368,99 @@ ${chunk.chunkText.slice(0, 700)}`;
       scaffoldId: z.number(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // 1. Fetch the scaffold details
+      const scaffold = await db.getTaskScaffoldById(input.scaffoldId);
+      if (!scaffold) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Task scaffold not found",
+        });
+      }
+
+      // 2. Fetch all phases for this scaffold
+      const phases = await db.getPhasesByScaffoldId(input.scaffoldId);
+
+      // 3. The scaffold's trialId is already the backend trial UUID
+      const beTrialId = scaffold.trialId;
+      if (!beTrialId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Scaffold is not linked to a backend trial",
+        });
+      }
+
+      // Map to store local task ID -> backend task UUID
+      const localToBackendTaskIdMap = new Map<number, string>();
+      const dependenciesToCreate: Array<{ localTaskId: number; dependsOnTaskId: number }> = [];
+
+      // 4. Create tasks in the backend PostgreSQL
+      for (const phase of phases) {
+        const phaseTasks = await db.getTasksByPhaseId(phase.id);
+        for (const task of phaseTasks) {
+          // Prepare the task payload for backend
+          const payload = {
+            trial_id: beTrialId,
+            title: task.name,
+            description: "",
+            status: "todo", // active tasks start as todo
+            priority: "medium",
+            category: "custom",
+            phase_id: phase.name, // e.g. "Screening", "Baseline"
+            suggested_date: task.suggestedDate ? task.suggestedDate.toISOString() : null,
+            order_in_phase: task.orderIndex || 0,
+          };
+
+          try {
+            const created = await callBackend<any>("/api/tasks", {
+              method: "POST",
+              body: payload,
+              user: ctx.user,
+            });
+
+            if (created && created.id) {
+              localToBackendTaskIdMap.set(task.id, created.id);
+            }
+          } catch (err) {
+            console.error(`Failed to create task "${task.name}" in backend:`, err);
+            // We continue creating other tasks even if one fails
+          }
+
+          // Fetch local dependencies for this task to create later
+          const taskDeps = await db.getTaskDependencies(task.id);
+          for (const dep of taskDeps) {
+            dependenciesToCreate.push({
+              localTaskId: dep.taskId,
+              dependsOnTaskId: dep.dependsOnTaskId,
+            });
+          }
+        }
+      }
+
+      // 5. Create task dependencies in the backend PostgreSQL
+      for (const dep of dependenciesToCreate) {
+        const targetUuid = localToBackendTaskIdMap.get(dep.localTaskId);
+        const sourceUuid = localToBackendTaskIdMap.get(dep.dependsOnTaskId);
+
+        if (sourceUuid && targetUuid) {
+          try {
+            await callBackend("/api/task-dependencies", {
+              method: "POST",
+              body: {
+                source_task_id: sourceUuid,
+                target_task_id: targetUuid,
+                dependency_type: "finish_to_start",
+              },
+              user: ctx.user,
+            });
+          } catch (err) {
+            console.error(`Failed to create dependency between ${sourceUuid} and ${targetUuid}:`, err);
+          }
+        }
+      }
+
+      // 6. Update local scaffold status
       await db.updateTaskScaffoldStatus(input.scaffoldId, "confirmed", ctx.user.id);
+
       await logTelemetryEvent({
         eventType: "trial_setup_completed",
         action: "completed",
@@ -1375,6 +1468,7 @@ ${chunk.chunkText.slice(0, 700)}`;
         entityType: "task_scaffold",
         entityId: String(input.scaffoldId),
       });
+
       return { success: true };
     }),
 
