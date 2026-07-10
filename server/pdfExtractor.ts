@@ -1,6 +1,14 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { PDFParse } = require('pdf-parse-new');
+
+// Polyfill DOMMatrix for standard pdf-parse support in Node.js 20+
+if (typeof (global as any).DOMMatrix === "undefined") {
+  (global as any).DOMMatrix = class DOMMatrix {
+    constructor() {}
+  };
+}
+
+const { PDFParse } = require('pdf-parse');
 import { storageReadBytes } from "./storage";
 
 /**
