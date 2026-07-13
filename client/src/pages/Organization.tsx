@@ -3,11 +3,12 @@
  * Design: Clinical Modernism
  */
 
-import { useEffect, useRef, useState } from "react";
-import { Building2, LayoutGrid, Users, Settings, Plus, Send, Upload, Save, Globe, Mail, MapPin, Trash2, Home, Brain, Phone } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Building2, LayoutGrid, Users, Settings, Plus, Send, Upload, Save, Globe, Mail, MapPin, Trash2, Home, Brain, Phone, Loader2 } from "lucide-react";
 import { logEvent } from "@/lib/telemetry";
 import { useDemoState } from "@/contexts/DemoStateContext";
 import { AddMemberPanel } from "@/components/AddMemberPanel";
+import { invitationsApi, type Invitation } from "@/lib/invitationsApi";
 import { toast } from "sonner";
 import { useOrganizationProfile } from "@/hooks/useOrganizationProfile";
 import { trpc } from "@/lib/trpc";
@@ -73,6 +74,53 @@ export default function Organization() {
     team: "",
     site: "",
   });
+
+  // ─── Invitations ────────────────────────────────────────────────────
+  const [sendingInvite, setSendingInvite] = useState<string | null>(null);
+  const [pendingInvites, setPendingInvites] = useState<Invitation[]>([]);
+  const pendingEmails = new Set(pendingInvites.map((inv) => inv.email.toLowerCase()));
+
+  const refreshInvites = useCallback(async () => {
+    try {
+      const rows = await invitationsApi.listInvitations("pending");
+      setPendingInvites(rows);
+    } catch (err) {
+      // BE unauthenticated / unreachable — sending still works, so just
+      // clear the pending view rather than surfacing a scary error.
+      console.warn("[Organization] failed to load pending invitations", err);
+      setPendingInvites([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "members") void refreshInvites();
+  }, [activeTab, refreshInvites]);
+
+  const handleSendInvite = async (invitee: { email: string; name?: string; appRole: string }) => {
+    const email = invitee.email?.trim();
+    if (!email) {
+      toast.error("This member has no email address to invite.");
+      return;
+    }
+    setSendingInvite(email);
+    try {
+      await invitationsApi.sendInvitations([
+        { email, name: invitee.name, orgRole: invitee.appRole },
+      ]);
+      toast.success(`Invitation sent to ${email}`);
+      logEvent({
+        eventType: "invitation_sent",
+        action: "sent",
+        entityType: "invitation",
+        entityId: email,
+      });
+      void refreshInvites();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send invitation");
+    } finally {
+      setSendingInvite(null);
+    }
+  };
 
   const openAddMember = () => {
     setEditingMemberId(null);
@@ -427,6 +475,11 @@ export default function Organization() {
               <div className="flex items-baseline gap-3">
                 <h2 className="text-2xl font-semibold text-gray-900">Members</h2>
                 <p className="text-sm text-gray-500">{members.length} members</p>
+                {pendingInvites.length > 0 && (
+                  <p className="text-sm text-amber-600">
+                    {pendingInvites.length} pending invite{pendingInvites.length === 1 ? "" : "s"}
+                  </p>
+                )}
               </div>
               <button
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
@@ -508,15 +561,31 @@ export default function Organization() {
                   <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap">
                     <span className="h-2 w-2 rounded-full bg-emerald-500" />
                     {member.status}
+                    {pendingEmails.has(member.email.toLowerCase()) && (
+                      <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                        Invited
+                      </span>
+                    )}
                   </div>
                       <div className="flex items-center justify-end">
                         <button
-                          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                          disabled={sendingInvite === member.email}
+                          title={`Send invitation to ${member.email}`}
                           onClick={(event) => {
                             event.stopPropagation();
+                            void handleSendInvite({
+                              email: member.email,
+                              name: member.name,
+                              appRole: member.appRole,
+                            });
                           }}
                         >
-                          <Send className="h-4 w-4" />
+                          {sendingInvite === member.email ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Send className="h-4 w-4" />
+                          )}
                         </button>
                       </div>
                       </div>
@@ -540,6 +609,15 @@ export default function Organization() {
         onClose={() => setEditPanelOpen(false)}
         editingMemberId={editingMemberId}
         initialValues={formValues}
+        onMemberSaved={(_memberId, values, isNew) => {
+          if (isNew) {
+            void handleSendInvite({
+              email: values.email,
+              name: values.name,
+              appRole: values.appRole,
+            });
+          }
+        }}
       />
     </div>
   );

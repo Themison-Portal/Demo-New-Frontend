@@ -77,11 +77,19 @@ async function startServer() {
     }
 
     // ─── Proxy /api/be/* → FastAPI BE ───────────────────────────────
-    // Must be AFTER setupVite so Vite middleware does not intercept it
+    // Must be AFTER setupVite so Vite middleware does not intercept it.
+    // Target is env-configurable so a containerized FE can reach the backend
+    // by Docker DNS (e.g. http://backend:8080) instead of localhost, which
+    // inside the container resolves to the FE itself. Defaults to localhost
+    // for host/dev runs.
+    const backendProxyTarget =
+        process.env.FASTAPI_BACKEND_URL ||
+        process.env.CORE_BACKEND_API_URL ||
+        "http://localhost:8080";
     app.use(
         "/api/be",
         createProxyMiddleware({
-            target: "http://localhost:8080",
+            target: backendProxyTarget,
             changeOrigin: true,
             pathRewrite: { "^/api/be": "" },
         })

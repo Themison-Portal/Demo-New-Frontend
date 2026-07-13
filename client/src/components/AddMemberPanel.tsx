@@ -19,7 +19,7 @@ type AddMemberPanelProps = {
   onClose: () => void;
   editingMemberId?: string | null;
   initialValues: MemberFormValues;
-  onMemberSaved?: (memberId: string) => void;
+  onMemberSaved?: (memberId: string, values: MemberFormValues, isNew: boolean) => void;
 };
 
 export function AddMemberPanel({
@@ -43,18 +43,25 @@ export function AddMemberPanel({
       toast.error("Name and email are required.");
       return;
     }
+    const savedValues: MemberFormValues = {
+      ...formValues,
+      name: formValues.name.trim(),
+      email: formValues.email.trim(),
+      team: formValues.team.trim(),
+      site: formValues.site.trim(),
+    };
     if (editingMemberId) {
       updateTeamMember(editingMemberId, {
-        name: formValues.name.trim(),
-        email: formValues.email.trim(),
+        name: savedValues.name,
+        email: savedValues.email,
         clinicalRole: formValues.clinicalRole,
         role: formValues.clinicalRole,
         appRole: formValues.appRole,
-        team: formValues.team.trim(),
-        site: formValues.site.trim(),
+        team: savedValues.team,
+        site: savedValues.site,
       });
       if (onMemberSaved) {
-        onMemberSaved(editingMemberId);
+        onMemberSaved(editingMemberId, savedValues, false);
       }
     } else {
       const newMemberId = `member-${Date.now()}`;
@@ -77,7 +84,7 @@ export function AddMemberPanel({
         initials: initials || "TM",
       });
       if (onMemberSaved) {
-        onMemberSaved(newMemberId);
+        onMemberSaved(newMemberId, savedValues, true);
       }
     }
     onClose();
