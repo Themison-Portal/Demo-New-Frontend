@@ -5,6 +5,7 @@
  */
 
 import { useState } from "react";
+import { getAuth0Client } from "@/auth/auth0Provider";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,9 +102,22 @@ const TEMPLATES: EmailTemplate[] = [
 const API_URL = import.meta.env.DEV ? "/api/be" : (import.meta.env.VITE_API_URL ?? "");
 
 async function postSimulatedEmail(template: EmailTemplate): Promise<void> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    // Attach the Auth0 token so this works when AUTH_DISABLED=false.
+    const auth0 = getAuth0Client();
+    if (auth0) {
+        try {
+            if (await auth0.isAuthenticated()) {
+                const token = await auth0.getTokenSilently();
+                if (token) headers["Authorization"] = `Bearer ${token}`;
+            }
+        } catch (err) {
+            console.warn("[DemoControlsPanel] getTokenSilently failed", err);
+        }
+    }
     const res = await fetch(`${API_URL}/api/inbox/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
             sender_name: template.sender_name,
             sender_email: template.sender_email,

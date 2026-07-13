@@ -78,8 +78,14 @@ export function serveStatic(app: Express) {
 
     app.use(express.static(distPath));
 
-    // fall through to index.html if the file doesn't exist
-    app.use("*", (_req, res) => {
+    // fall through to index.html if the file doesn't exist — but skip the
+    // `/api/be` proxy routes (registered after this in index.ts) so the SPA
+    // fallback doesn't swallow backend API calls in production. Mirrors the
+    // same guard in setupVite for dev.
+    app.use("*", (req, res, next) => {
+        if (req.originalUrl.startsWith("/api/be")) {
+            return next();
+        }
         res.sendFile(path.resolve(distPath, "index.html"));
     });
 }
