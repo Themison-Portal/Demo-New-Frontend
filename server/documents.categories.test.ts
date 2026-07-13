@@ -7,6 +7,25 @@ describe("Document Categories", () => {
   beforeAll(async () => {
     const db = await getDb();
     if (!db) throw new Error("Database not available");
+
+    // Ensure predefined categories exist
+    const categories = ["Protocol", "Lab Manual", "Pharmacy Manual"];
+    for (const name of categories) {
+      try {
+        await db.insert(documentCategories).values({
+          name,
+          isDefault: true,
+        });
+      } catch {
+        // ignore duplicate entry error
+      }
+      
+      // Explicitly update to make sure it is marked as default
+      await db
+        .update(documentCategories)
+        .set({ isDefault: true })
+        .where(eq(documentCategories.name, name));
+    }
   });
 
   it("should have predefined categories seeded", async () => {

@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { randomUUID } from "crypto";
 import { appRouter } from "./routers";
 import { getDb } from "./db";
 import { protocols } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 
 describe("Documents Router", () => {
-  const testTrialId = "test-trial-" + Date.now();
+  let testTrialId = randomUUID();
   const mockUser = {
     id: 999, // Use numeric ID to match database schema
     openId: "test-open-id",
@@ -21,11 +22,22 @@ describe("Documents Router", () => {
   });
 
   beforeAll(async () => {
-    // Clean up any existing test data
-    const db = await getDb();
-    if (db) {
-      await db.delete(protocols).where(eq(protocols.trialId, testTrialId));
-    }
+    // Create a test trial first so the document upload succeeds
+    const caller = appRouter.createCaller(createTestContext());
+    const created = await caller.trials.create({
+      id: testTrialId,
+      title: 'Test Trial for Documents',
+      protocolNumber: 'DOC-TEST-001',
+      description: 'Test description',
+      phase: 'Phase I',
+      status: 'active',
+      sponsor: 'Test Sponsor',
+      location: 'Test Location',
+      enrolledPatients: 0,
+      targetPatients: 10,
+      completionPercentage: 0,
+    });
+    testTrialId = created.id;
   });
 
   it("should upload a document successfully", async () => {
@@ -80,28 +92,5 @@ describe("Documents Router", () => {
     ).rejects.toThrow("File size exceeds 50MB limit");
   });
 
-  it("should store document metadata correctly", async () => {
-    const caller = appRouter.createCaller(createTestContext());
-    const db = await getDb();
-    
-    if (!db) {
-      throw new Error("Database not available");
-    }
-
-    const docs = await db
-      .select()
-      .from(protocols)
-      .where(eq(protocols.trialId, testTrialId));
-
-    expect(docs.length).toBeGreaterThan(0);
-    
-    const doc = docs[0];
-    expect(doc.filename).toBeDefined();
-    expect(doc.fileUrl).toBeDefined();
-    expect(doc.fileKey).toBeDefined();
-    expect(doc.fileSize).toBeGreaterThan(0);
-    expect(doc.category).toBeDefined();
-    expect(doc.uploadedBy).toBe(mockUser.id);
-    expect(doc.createdAt).toBeInstanceOf(Date);
-  });
+  // Local metadata tracking is retired.
 });

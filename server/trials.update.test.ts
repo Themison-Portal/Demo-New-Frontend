@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { randomUUID } from 'crypto';
 import { appRouter } from './routers';
 
 describe('trials.update', () => {
@@ -8,11 +9,11 @@ describe('trials.update', () => {
     res: {} as any,
   });
 
-  const testTrialId = 'test-trial-update-' + Date.now();
+  let testTrialId = randomUUID();
 
   beforeAll(async () => {
     // Create a test trial
-    await caller.trials.create({
+    const created = await caller.trials.create({
       id: testTrialId,
       title: 'Original Title',
       protocolNumber: 'TEST-001',
@@ -25,6 +26,7 @@ describe('trials.update', () => {
       targetPatients: 10,
       completionPercentage: 0,
     });
+    testTrialId = created.id;
   });
 
   it('should update trial title', async () => {
