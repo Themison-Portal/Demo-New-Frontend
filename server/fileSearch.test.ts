@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { createFileSearchStore, uploadToFileSearchStore, queryWithFileSearch } from './_core/fileSearch';
+import { ENV } from './_core/env';
 
 describe('Google File Search API Integration', () => {
   it('should create a File Search Store', async () => {
+    if (!ENV.geminiApiKey || !ENV.geminiApiKey.startsWith('AIza') || ENV.geminiApiKey.includes('placeholder')) {
+      return;
+    }
     const storeName = await createFileSearchStore('Test Store');
     
     expect(storeName).toBeDefined();

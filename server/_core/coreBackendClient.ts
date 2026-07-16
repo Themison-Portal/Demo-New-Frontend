@@ -19,6 +19,7 @@
 import { Buffer } from "node:buffer";
 import {
   CoreBackendError,
+  type CoreBackendDocumentUpdate,
   type CoreBackendDownloadUrl,
   type CoreBackendJobStatus,
   type CoreBackendMultipartUploadInput,
@@ -127,6 +128,17 @@ export class CoreBackendClient {
     form.append("document_name", input.document_name);
     if (input.document_type) form.append("document_type", input.document_type);
     if (input.description) form.append("description", input.description);
+    if (input.category) form.append("category", input.category);
+    if (input.document_version)
+      form.append("document_version", input.document_version);
+    if (input.amendment_version)
+      form.append("amendment_version", input.amendment_version);
+    if (input.release_date) form.append("release_date", input.release_date);
+    if (input.is_current !== undefined)
+      form.append("is_current", String(input.is_current));
+    if (input.source_type) form.append("source_type", input.source_type);
+    if (input.source_reference)
+      form.append("source_reference", input.source_reference);
 
     return this.requestJson<CoreBackendTrialDocument>(
       "POST",
@@ -135,6 +147,18 @@ export class CoreBackendClient {
         auth: { kind: "jwt", token: jwt },
         body: form,
       }
+    );
+  }
+
+  async updateTrialDocument(
+    documentId: string,
+    body: CoreBackendDocumentUpdate,
+    jwt: string
+  ): Promise<CoreBackendTrialDocument> {
+    return this.requestJson<CoreBackendTrialDocument>(
+      "PUT",
+      `/api/trial-documents/${encodeURIComponent(documentId)}`,
+      { auth: { kind: "jwt", token: jwt }, body }
     );
   }
 

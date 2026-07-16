@@ -162,6 +162,22 @@ const TASK_STATUS_OPTIONS: TaskStatus[] = [
 
 const TASK_PRIORITY_OPTIONS: TaskPriority[] = ["critical", "high", "medium", "low"];
 
+const getPriorityWeight = (priority?: string | null): number => {
+  if (!priority) return 0;
+  switch (priority.toLowerCase()) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+};
+
 const TASK_CATEGORY_OPTIONS: TaskCategory[] = [
   "consent",
   "eligibility",
@@ -1295,6 +1311,9 @@ export default function Tasks() {
       .slice()
       .sort((a, b) => {
         if (a.phaseId !== b.phaseId) return a.phaseId.localeCompare(b.phaseId);
+        const pA = getPriorityWeight(a.priority);
+        const pB = getPriorityWeight(b.priority);
+        if (pA !== pB) return pB - pA;
         if (a.orderInPhase !== b.orderInPhase) return a.orderInPhase - b.orderInPhase;
         return a.name.localeCompare(b.name);
       });
@@ -1589,6 +1608,15 @@ export default function Tasks() {
       if (!grouped[displayStatus]) grouped[displayStatus] = [];
       grouped[displayStatus].push(task);
     }
+    // Sort each group by priority descending
+    for (const status of statusesForKanban) {
+      grouped[status].sort((a, b) => {
+        const pA = getPriorityWeight(a.priority);
+        const pB = getPriorityWeight(b.priority);
+        if (pA !== pB) return pB - pA;
+        return a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name);
+      });
+    }
     return grouped;
   }, [filteredTasks, statusesForKanban]);
 
@@ -1621,7 +1649,12 @@ export default function Tasks() {
       filteredTasks
         .filter((task) => task.phaseId === phase.id)
         .slice()
-        .sort((a, b) => a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name))
+        .sort((a, b) => {
+          const pA = getPriorityWeight(a.priority);
+          const pB = getPriorityWeight(b.priority);
+          if (pA !== pB) return pB - pA;
+          return a.orderInPhase - b.orderInPhase || a.name.localeCompare(b.name);
+        })
         .forEach((task, index) => {
           lookup.set(task.id, index);
         });
@@ -1781,7 +1814,12 @@ export default function Tasks() {
       .map((phase) => {
         const phaseTasks = filteredTasks
           .filter((task) => task.phaseId === phase.id)
-          .sort((a, b) => a.orderInPhase - b.orderInPhase);
+          .sort((a, b) => {
+            const pA = getPriorityWeight(a.priority);
+            const pB = getPriorityWeight(b.priority);
+            if (pA !== pB) return pB - pA;
+            return a.orderInPhase - b.orderInPhase;
+          });
         return {
           phase,
           tasks: phaseTasks,
@@ -2001,6 +2039,16 @@ export default function Tasks() {
     const completed = filteredTasks.filter((task) => task.status === "done").length;
     const blocked = filteredTasks.filter((task) => toDisplayStatus(task.status) === "blocked").length;
     const overdue = filteredTasks.filter((task) => Boolean(getDeadlineState(task)?.overdue)).length;
+    const pending = filteredTasks.filter((task) => task.status === "todo" || task.status === "in_progress").length;
+    const dueToday = filteredTasks.filter((task) => {
+      if (TERMINAL_TASK_STATUSES.has(task.status)) return false;
+      const due = getTaskDeadline(task);
+      if (!due) return false;
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const dueDay = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+      return dayDiff(today, dueDay) === 0;
+    }).length;
     const dueSoon = filteredTasks.filter((task) => {
       if (TERMINAL_TASK_STATUSES.has(task.status)) return false;
       const due = getTaskDeadline(task);
@@ -2009,7 +2057,7 @@ export default function Tasks() {
       return delta >= 0 && delta <= 7;
     }).length;
 
-    return { total, completed, blocked, overdue, dueSoon };
+    return { total, completed, blocked, overdue, pending, dueToday, dueSoon };
   }, [filteredTasks]);
 
   const isLoading =
@@ -3521,12 +3569,21 @@ export default function Tasks() {
   return (
     <>
       {!embeddedTaskModal ? (
-        <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground tracking-tight mb-2">Task Manager</h1>
-          <p className="text-sm text-muted-foreground">
-            Unified execution view for tasks created by Study Setup Agent and confirmed for launch.
-          </p>
+        <div className="px-8 pb-4 pt-4 h-[calc(100vh-72px)] overflow-hidden flex flex-col gap-4 bg-[#F9FAFB]">
+        <div className="flex items-baseline justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold text-foreground tracking-tight">Task Manager</h1>
+              {trialScope !== ALL_SCOPE && mapSummaryQuery.data?.status === "active" ? (
+                <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
+                  {mapStatusLabel(mapSummaryQuery.data.status)} map v{mapSummaryQuery.data.version}
+                </span>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Unified execution view for tasks created by Study Setup Agent and confirmed for launch.
+            </p>
+          </div>
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 h-11 pl-5 pr-2 py-0 flex items-center gap-6">
@@ -3699,27 +3756,77 @@ export default function Tasks() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">
-            Total <span className="font-semibold text-[#2F6FED]">{topMetrics.total}</span>
-          </div>
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">
-            Done <span className="font-semibold text-[#2F6FED]">{topMetrics.completed}</span>
-          </div>
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">
-            Blocked <span className="font-semibold text-[#2F6FED]">{topMetrics.blocked}</span>
-          </div>
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-700">
-            Overdue <span className="font-semibold text-red-700">{topMetrics.overdue}</span>
-          </div>
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">
-            Due 7d <span className="font-semibold text-[#2F6FED]">{topMetrics.dueSoon}</span>
-          </div>
-          {trialScope !== ALL_SCOPE && mapSummaryQuery.data?.status === "active" ? (
-            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-700">
-              {mapStatusLabel(mapSummaryQuery.data.status)} map v{mapSummaryQuery.data.version}
+        {/* Statistics Widgets Row */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-200">
+          {/* Task Completion Card */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Task Completion</p>
+              <div className="flex items-baseline gap-2 mt-1.5">
+                <span className="text-2xl font-bold text-gray-900">
+                  {topMetrics.total > 0 ? Math.round((topMetrics.completed / topMetrics.total) * 100) : 0}%
+                </span>
+                <span className="text-xs text-gray-500 font-medium">
+                  {topMetrics.completed}/{topMetrics.total} tasks
+                </span>
+              </div>
             </div>
-          ) : null}
+            <div className="relative flex items-center justify-center h-11 w-11">
+              <svg className="h-11 w-11 transform -rotate-90">
+                <circle cx="22" cy="22" r="18" className="stroke-gray-100" strokeWidth="3" fill="transparent" />
+                <circle
+                  cx="22"
+                  cy="22"
+                  r="18"
+                  className="stroke-indigo-600 transition-all duration-500"
+                  strokeWidth="3"
+                  fill="transparent"
+                  strokeDasharray={113.1}
+                  strokeDashoffset={
+                    113.1 -
+                    (113.1 * (topMetrics.total > 0 ? Math.round((topMetrics.completed / topMetrics.total) * 100) : 0)) / 100
+                  }
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute text-[9px] font-bold text-indigo-600">
+                {topMetrics.total > 0 ? Math.round((topMetrics.completed / topMetrics.total) * 100) : 0}%
+              </div>
+            </div>
+          </div>
+
+          {/* Pending Tasks Card */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Pending Tasks</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1.5">{topMetrics.pending}</p>
+            </div>
+            <div className="p-2.5 bg-blue-50 rounded-lg text-blue-600 flex items-center justify-center">
+              <ListTodo className="h-5 w-5" />
+            </div>
+          </div>
+
+          {/* Due Today Card */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Due Today</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1.5">{topMetrics.dueToday}</p>
+            </div>
+            <div className="p-2.5 bg-amber-50 rounded-lg text-amber-600 flex items-center justify-center">
+              <CalendarRange className="h-5 w-5" />
+            </div>
+          </div>
+
+          {/* Overdue Card */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Overdue Tasks</p>
+              <p className="text-2xl font-bold text-red-600 mt-1.5">{topMetrics.overdue}</p>
+            </div>
+            <div className="p-2.5 bg-red-50 rounded-lg text-red-600 flex items-center justify-center">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1">

@@ -332,6 +332,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
         const base64 = reader.result as string;
         const base64Data = base64.split(",")[1]; // Remove data:...;base64, prefix
 
+        console.log("[doc-hub-upload] document upload", {
+          filename: selectedFile.name,
+          trialId,
+          category,
+        });
         await uploadMutation.mutateAsync({
           trialId,
           filename: selectedFile.name,
@@ -461,6 +466,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const indexedDocumentCount =
     contextDocuments?.indexed ??
     (documents ? documents.filter((doc: any) => !!doc.isIndexed).length : 0);
+  // "Ask Themison AI" needs at least one INDEXED document to retrieve from; while
+  // docs are still processing or failed (or none uploaded), it should be disabled.
+  // Use the per-document list status (matches the row "Indexed" badge), not the
+  // trial-context aggregate which can be stale.
+  const hasIndexedDocument = (documents ?? []).some((doc: any) => !!doc.isIndexed);
   const activeDocumentCount =
     contextDocuments?.active ??
     (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);
@@ -535,7 +545,11 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={() => navigate(`/trial/${trialId}/assistant`)}>
+            <Button
+              onClick={() => navigate(`/trial/${trialId}/assistant`)}
+              disabled={!hasIndexedDocument}
+              title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
+            >
               <Brain className="h-4 w-4 mr-2" />
               Ask Themison AI
             </Button>
@@ -1034,7 +1048,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => retryMutation.mutate({ id: doc.id })}
-                                disabled={retryMutation.isPending}
+                                disabled={doc.indexStatus !== "failed" || retryMutation.isPending}
                                 className="h-6 w-6 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                                 title={doc.indexFailureReason || "Retry processing"}
                               >
@@ -1050,7 +1064,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => retryMutation.mutate({ id: doc.id })}
-                                disabled={retryMutation.isPending}
+                                disabled={doc.indexStatus !== "failed" || retryMutation.isPending}
                                 className="h-6 w-6 p-0 text-yellow-600 hover:text-yellow-700 hover:bg-yellow-50"
                                 title="Retry processing"
                               >
@@ -1185,6 +1199,8 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
               variant="outline"
               className="mt-4"
               onClick={() => navigate(`/trial/${trialId}/assistant`)}
+              disabled={!hasIndexedDocument}
+              title={!hasIndexedDocument ? "Upload a document and wait for it to finish indexing before asking Themison AI" : undefined}
             >
               <Brain className="h-4 w-4 mr-2" />
               Ask Themison AI

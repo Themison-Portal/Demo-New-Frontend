@@ -56,7 +56,7 @@ export type EvalCaseResult = {
 export type EvalHarnessReport = {
   generatedAt: string;
   trialId: string | null;
-  protocolIds: number[];
+  protocolIds: string[];
   totals: {
     cases: number;
     passed: number;
@@ -467,7 +467,8 @@ function asLegacyKind(kind: EvalCaseKind): "criteria" | "schedule" | "general" {
 export async function runUnifiedEvalHarness(params: {
   db: any;
   trialId?: string;
-  protocolIds: number[];
+  beTrialUuid?: string | null;
+  protocolIds: string[];
   cases?: EvalCaseInput[];
 }) {
   const cases = params.cases && params.cases.length > 0 ? params.cases : DEFAULT_EVAL_CASES;
@@ -488,6 +489,7 @@ export async function runUnifiedEvalHarness(params: {
       query: testCase.query,
       protocolIds: params.protocolIds,
       trialId: params.trialId,
+      beTrialUuid: params.beTrialUuid ?? null,
       maxDocChunks: 48,
     });
 

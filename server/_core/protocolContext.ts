@@ -5,10 +5,27 @@ import { tmpdir } from "os";
 import * as path from "path";
 import { promisify } from "util";
 import { and, eq, inArray } from "drizzle-orm";
-import { protocolChunks, protocols } from "../../drizzle/schema";
+import { protocolChunks } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { invokeEmbeddings, invokeLLM } from "./llm";
-import { extractPdfPages, type PdfPageText } from "../pdfExtractor";
+import { extractPdfPagesFromBuffer, type PdfPageText } from "../pdfExtractor";
+import { getCoreBackendClient } from "./coreBackendClient";
+import { ENV } from "./env";
+
+async function fetchBeDocumentBytes(documentId: string, documentUrl: string): Promise<Buffer> {
+  let url = documentUrl;
+  try {
+    const dl = await getCoreBackendClient().getDownloadUrl(documentId, "auth-disabled-bypass");
+    if (dl?.url) url = dl.url;
+  } catch { /* fall back to documentUrl */ }
+  if (!/^https?:\/\//.test(url)) {
+    const base = (ENV.coreBackendApiUrl || "").replace(/\/$/, "");
+    url = `${base}/${url.replace(/^\//, "")}`;
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch BE document bytes (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
 
 type SectionAccumulator = {
   title: string;
@@ -111,7 +128,7 @@ export type ParsedProtocolChunk = {
 
 export type ProtocolContextChunk = {
   id: number;
-  protocolId: number;
+  protocolId: string;
   trialId: string;
   sectionType: string;
   sectionTitle: string | null;
@@ -2900,18 +2917,15 @@ export function buildProtocolChunks(documentText: string): ParsedProtocolChunk[]
 }
 
 export async function ingestProtocolContextChunks(options: {
-  protocolId: number;
+  protocolId: string;
   forceRefresh?: boolean;
 }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const [protocol] = await db
-    .select()
-    .from(protocols)
-    .where(eq(protocols.id, options.protocolId))
-    .limit(1);
-  if (!protocol) throw new Error("Protocol not found");
+  const cbClient = getCoreBackendClient();
+  const beDoc = await cbClient.getTrialDocument(options.protocolId, "auth-disabled-bypass");
+  const protocol = { id: options.protocolId, filename: beDoc.document_name, fileUrl: beDoc.document_url, trialId: beDoc.trial_id ?? "" };
 
   const existingChunkRows = await db
     .select({ id: protocolChunks.id, metadata: protocolChunks.metadata })
@@ -2940,7 +2954,15 @@ export async function ingestProtocolContextChunks(options: {
     );
   }
 
-  const pages: PdfPageText[] = await extractPdfPages(protocol.fileUrl);
+  // Read the PDF bytes directly from storage instead of fetching
+  // protocol.fileUrl over HTTP. The bare URL fetch carries no auth and
+  // breaks on cloud (e.g. Render) — Forge signed URLs or a misconfigured
+  // PUBLIC_BASE_URL make it fail with "fetch failed". storageReadBytes
+  // resolves a fresh authenticated download in Forge mode and reads from
+  // disk in the local-storage fallback, matching how studySetupWizardRouter
+  // already extracts protocol text.
+  const pdfBuffer = await fetchBeDocumentBytes(options.protocolId, beDoc.document_url);
+  const pages: PdfPageText[] = await extractPdfPagesFromBuffer(pdfBuffer);
   const mergedText = pages
     .map((page) => `Page ${page.pageNumber}\n${page.text}`)
     .join("\n\n");
@@ -3300,7 +3322,7 @@ function collectFocusedCoverageRows(
   return included;
 }
 
-export async function getStructuredScheduleOfActivities(protocolId: number): Promise<StructuredSchedule | null> {
+export async function getStructuredScheduleOfActivities(protocolId: string): Promise<StructuredSchedule | null> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -3321,7 +3343,7 @@ export async function getStructuredScheduleOfActivities(protocolId: number): Pro
   return null;
 }
 
-export async function getStructuredEligibilityCriteria(protocolId: number): Promise<StructuredCriteria | null> {
+export async function getStructuredEligibilityCriteria(protocolId: string): Promise<StructuredCriteria | null> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
@@ -3461,7 +3483,7 @@ function scoreChunk(
 }
 
 export async function getProtocolContextChunks(options: {
-  protocolId: number;
+  protocolId: string;
   query?: string;
   expandedQuery?: string;
   preferredChunkTypes?: string[];
@@ -3490,15 +3512,11 @@ export async function getProtocolContextChunks(options: {
     console.warn(`[protocolContext] Pre-retrieval ingest check failed for protocol ${protocolId}`, error);
   }
 
-  const [protocol] = await db
-    .select({
-      id: protocols.id,
-      filename: protocols.filename,
-    })
-    .from(protocols)
-    .where(eq(protocols.id, protocolId))
-    .limit(1);
-  if (!protocol) throw new Error("Protocol not found");
+  let filename = "Document";
+  try {
+    const beDoc = await getCoreBackendClient().getTrialDocument(protocolId, "auth-disabled-bypass");
+    filename = beDoc.document_name || filename;
+  } catch { /* keep default */ }
 
   const filters = [eq(protocolChunks.protocolId, protocolId)];
   if (sectionTypes && sectionTypes.length > 0) {
@@ -3664,7 +3682,7 @@ export async function getProtocolContextChunks(options: {
       tokenEstimate: row.tokenEstimate,
       score,
       citation: {
-        filename: protocol.filename,
+        filename,
         sectionTitle: row.sectionTitle,
         page,
       },

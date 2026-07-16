@@ -7,25 +7,40 @@ import {
   mapTelemetryEvents,
   protocolChunks,
   protocols,
-  trials,
   users,
   type ExecutionMap,
   type MapPhase,
   type MapTask,
   type MapTelemetryEvent,
   type Protocol,
-  type Trial,
 } from "../../drizzle/schema";
 import { invokeLLM } from "./llm";
 import { ENV } from "./env";
-import { stripDemoId } from "./demoMode";
+import { stripDemoId, toDemoId } from "./demoMode";
+import { callBackend } from "./backendClient";
+
+// Trials are BE-owned (the FE MySQL `trials` table is retired). This file
+// sources trial metadata from the BE (`/api/trials*`) and shapes it like the
+// rows it used to read from the FE table. BE list rows carry both the FE key
+// (`slug`) and the BE UUID (`id`); operational/`executionMaps` joins stay keyed
+// by the BE UUID.
+const UQ_BE_TO_FE_STATUS: Record<string, string> = {
+  planning: "not-started",
+  paused: "on-hold",
+  cancelled: "terminated",
+};
+function uqBeStatusToFe(status: string | undefined | null): string {
+  if (!status) return "not-started";
+  return UQ_BE_TO_FE_STATUS[status] ?? status;
+}
 import {
   getProtocolContextChunks,
   getStructuredEligibilityCriteria,
   getStructuredScheduleOfActivities,
   type ProtocolContextChunk,
 } from "./protocolContext";
-import { extractPdfPages } from "../pdfExtractor";
+import { extractPdfPages, extractPdfPagesFromBuffer } from "../pdfExtractor";
+import { storageReadBytes } from "../storage";
 
 const USES_EXTERNAL_RAG = ENV.ragProvider === "external";
 
@@ -53,7 +68,7 @@ export type UnifiedQueryPlan = {
 };
 
 export type DocumentEvidence = {
-  protocolId: number;
+  protocolId: string;
   filename: string;
   fileUrl: string | null;
   section: string;
@@ -106,7 +121,7 @@ export type UnifiedQueryResult = {
   sources: Array<{
     filename: string;
     fileUrl?: string | null;
-    protocolId?: number;
+    protocolId?: string;
     section?: string;
     page?: number | null;
     excerpt?: string;
@@ -131,7 +146,7 @@ export type RetrievalQualityReport = {
   route: UnifiedRoute;
   query: string;
   protocols: Array<{
-    protocolId: number;
+    protocolId: string;
     filename: string;
     retrievedCount: number;
     uniqueSections: number;
@@ -151,7 +166,7 @@ export type RetrievalCandidateDiagnostic = {
   rank: number;
   selected: boolean;
   chunkId: number;
-  protocolId: number;
+  protocolId: string;
   sectionType: string;
   sectionTitle: string | null;
   pageStart: number | null;
@@ -183,7 +198,7 @@ export type UnifiedQueryDiagnostics = {
   plan: UnifiedQueryPlan;
   route: UnifiedRoute;
   protocols: Array<{
-    protocolId: number;
+    protocolId: string;
     filename: string;
     category: string | null;
     isCurrent: boolean;
@@ -197,7 +212,7 @@ export type UnifiedQueryDiagnostics = {
   }>;
   chunkCoverage: Array<{
     chunkId: number;
-    protocolId: number;
+    protocolId: string;
     sectionType: string;
     sectionTitle: string | null;
     pageStart: number | null;
@@ -923,7 +938,7 @@ function isAbstainLanguage(answer: string) {
 
 async function resolveProtocolsForScope(
   db: any,
-  explicitProtocolIds: number[] | undefined,
+  explicitProtocolIds: string[] | undefined,
   trialId: string | undefined,
   queryPlan: UnifiedQueryPlan,
   demoMode?: "sample" | "full" | "building"
@@ -939,7 +954,7 @@ async function resolveProtocolsForScope(
   };
 
   if (explicitProtocolIds && explicitProtocolIds.length > 0) {
-    const rows = (await db.select().from(protocols).where(inArray(protocols.id, explicitProtocolIds))) as Protocol[];
+    const rows = (await db.select().from(protocols).where(inArray(protocols.coreBackendDocumentId, explicitProtocolIds))) as Protocol[];
     return sortByPrecedence(rows);
   }
   if (!trialId) {
@@ -1039,7 +1054,7 @@ async function collectDocumentEvidence(
   const grouped = await Promise.all(
     protocolRows.map(async (protocol) => {
       const requestBase = {
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         query,
         expandedQuery: queryExpansion.expandedQuery,
         preferredChunkTypes: routing.preferredChunkTypes,
@@ -1159,7 +1174,9 @@ async function collectDocumentEvidence(
   const selectedChunks = selectedRanked.map((item) => item.chunk);
   const selectedIds = new Set(selectedChunks.map((chunk) => chunk.id));
 
-  const protocolById = new Map(protocolRows.map((protocol) => [protocol.id, protocol]));
+  const protocolById = new Map(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol])
+  );
   const evidence = selectedRanked.map(({ chunk, score }): DocumentEvidence => {
     const protocol = protocolById.get(chunk.protocolId);
     return {
@@ -2290,14 +2307,14 @@ async function buildDeterministicScheduleAnswer(
   queryPlan: UnifiedQueryPlan,
   query: string,
   chunks: ProtocolContextChunk[],
-  protocolFileUrls?: Map<number, string | null>
+  protocolFileUrls?: Map<string, string | null>
 ) {
   if (queryPlan.focus !== "schedule" || queryPlan.amendmentIntent) return null;
   const best = collectStructuredScheduleEvidence(chunks);
   if (!best) {
     const fallbackProtocolId = chunks[0]?.protocolId;
     const fallbackFileUrl =
-      typeof fallbackProtocolId === "number" ? protocolFileUrls?.get(fallbackProtocolId) ?? null : null;
+      typeof fallbackProtocolId === "string" ? protocolFileUrls?.get(fallbackProtocolId) ?? null : null;
     const assisted = await extractScheduleAnswerAssist(query, chunks, undefined, fallbackFileUrl);
     if (!assisted) return null;
     const fallbackChunk = chunks.find((chunk) => isScheduleLikeChunk(chunk));
@@ -2707,7 +2724,8 @@ async function collectOperationalEvidence(
   trialId?: string,
   userId?: number,
   query?: string,
-  demoMode: "sample" | "full" | "building" = "sample"
+  demoMode: "sample" | "full" | "building" = "sample",
+  beTrialUuid?: string | null
 ) {
   const targetDate = query ? parseOperationalTargetDate(query) : null;
   const targetDateKey = targetDate ? formatLocalDate(targetDate) : null;
@@ -2733,25 +2751,29 @@ async function collectOperationalEvidence(
   };
   if (!trialId) {
     const asOf = formatIsoNow();
-    const prefixedTrialRows = (await db
-      .select()
-      .from(trials)
-      .where(like(trials.id, `${demoMode}:%`))
-      .orderBy(desc(trials.updatedAt))) as Trial[];
-    const trialRows =
-      prefixedTrialRows.length > 0
-        ? prefixedTrialRows
-        : demoMode === "building"
-          ? []
-          : ((await db
-              .select()
-              .from(trials)
-              .where(notLike(trials.id, "%:%"))
-              .orderBy(desc(trials.updatedAt))) as Trial[]);
+    // Trials are BE-owned: list trials for this demo mode from the BE. Keep
+    // `id` as the FE prefixed key (so the FE-keyed `protocols` join below still
+    // matches) and carry the BE UUID for executionMaps (BE-keyed) lookups.
+    let beTrialList: any[] = [];
+    try {
+      beTrialList = await callBackend<any[]>("/api/trials", { query: { demo_mode: demoMode } });
+    } catch {
+      beTrialList = [];
+    }
+    const trialRows = (beTrialList ?? []).map((t: any) => ({
+      id: toDemoId(demoMode, String(t?.id)),
+      beTrialUuid: (t?.id ?? null) as string | null,
+      title: (t?.name ?? null) as string | null,
+      investigationalProduct: (t?.investigational_product ?? null) as string | null,
+      status: uqBeStatusToFe(t?.status),
+      phase: (t?.phase ?? null) as string | null,
+      enrolledPatients: Number(t?.enrolled_patients ?? 0),
+      targetPatients: (t?.target_patients ?? null) as number | null,
+    }));
     if (trialRows.length === 0) return [] as OperationalEvidence[];
 
     const evidence: OperationalEvidence[] = [];
-    const statusCounts = trialRows.reduce((acc: Record<string, number>, trial: Trial) => {
+    const statusCounts = trialRows.reduce((acc: Record<string, number>, trial) => {
       const key = String(trial.status || "unknown");
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
@@ -2794,24 +2816,24 @@ async function collectOperationalEvidence(
 
     const allProtocolRows = (await db.select().from(protocols).orderBy(desc(protocols.updatedAt))) as Protocol[];
     const activeProtocolRows = allProtocolRows.filter((protocol) => !protocol.archivedAt);
-    let indexedProtocolIds = new Set<number>();
+    let indexedProtocolIds = new Set<string>();
     if (activeProtocolRows.length > 0) {
       const indexedRows = USES_EXTERNAL_RAG
         ? ((await db
             .select({ protocolId: protocolChunks.protocolId })
             .from(protocolChunks)
-            .where(inArray(protocolChunks.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
-            protocolId: number;
+            .where(inArray(protocolChunks.protocolId, activeProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+            protocolId: string;
           }>)
         : ((await db
             .select({ protocolId: fileSearchDocuments.protocolId })
             .from(fileSearchDocuments)
-            .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => protocol.id)))) as Array<{
-            protocolId: number;
+            .where(inArray(fileSearchDocuments.protocolId, activeProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+            protocolId: string;
           }>);
       indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
     }
-    const indexedCount = activeProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;
+    const indexedCount = activeProtocolRows.filter((protocol) => indexedProtocolIds.has(String(protocol.id))).length;
     const coverage = activeProtocolRows.length
       ? Math.round((indexedCount / activeProtocolRows.length) * 100)
       : 0;
@@ -2841,11 +2863,21 @@ async function collectOperationalEvidence(
       });
     }
 
-    const mapRows = (await db
-      .select()
-      .from(executionMaps)
-      .where(inArray(executionMaps.trialId, trialRows.map((trial) => trial.id)))
-      .orderBy(desc(executionMaps.updatedAt))) as ExecutionMap[];
+    // executionMaps is BE-keyed: the BE trial list already carries each trial's
+    // BE UUID, so map FE prefixed id -> BE UUID directly (FE trial-name lookups
+    // are re-keyed by BE UUID below so display still resolves).
+    const beUuidByFeId = new Map<string, string>();
+    for (const trial of trialRows) {
+      if (trial.beTrialUuid) beUuidByFeId.set(String(trial.id), trial.beTrialUuid);
+    }
+    const beTrialUuidsForMaps = Array.from(beUuidByFeId.values());
+    const mapRows = beTrialUuidsForMaps.length
+      ? ((await db
+          .select()
+          .from(executionMaps)
+          .where(inArray(executionMaps.trialId, beTrialUuidsForMaps))
+          .orderBy(desc(executionMaps.updatedAt))) as ExecutionMap[])
+      : [];
     const groupedByTrial = new Map<string, ExecutionMap[]>();
     for (const map of mapRows) {
       if (!map.trialId) continue;
@@ -2892,8 +2924,16 @@ async function collectOperationalEvidence(
       const delta = due - now;
       return delta >= 0 && delta <= 7 * 24 * 60 * 60 * 1000;
     });
+    // Re-key trial names by BE UUID so cross-trial map/task lookups (which now
+    // resolve to executionMaps.trialId = BE UUID) still find a display name.
     const trialNameById = new Map(
-      trialRows.map((trial) => [String(trial.id), trial.investigationalProduct || trial.title || trial.id])
+      trialRows
+        .map((trial) => {
+          const be = beUuidByFeId.get(String(trial.id));
+          if (!be) return null;
+          return [be, trial.investigationalProduct || trial.title || trial.id] as const;
+        })
+        .filter((entry): entry is readonly [string, string] => entry !== null)
     );
     const mapTrialById = new Map(activeMaps.map((map) => [String(map.id), String(map.trialId)]));
 
@@ -3078,8 +3118,37 @@ async function collectOperationalEvidence(
   }
   const asOf = formatIsoNow();
 
-  const trialRows = (await db.select().from(trials).where(eq(trials.id, trialId)).limit(1)) as Trial[];
-  const trial = trialRows[0];
+  // Trials are BE-owned and identified by UUID: fetch this trial's metadata from
+  // the BE by UUID instead of the retired FE `trials` table. The FE-keyed
+  // `protocols` read below intentionally still uses the FE trial id; executionMaps
+  // (BE-keyed) uses `beTrialUuid`.
+  let trial: {
+    id: string;
+    title: string | null;
+    investigationalProduct: string | null;
+    status: string;
+    phase: string | null;
+    enrolledPatients: number;
+    targetPatients: number | null;
+  } | null = null;
+  try {
+    const beTrial = await callBackend<any>(`/api/trials/${stripDemoId(String(trialId))}`, {});
+    if (beTrial?.id) {
+      trial = {
+        // Keep the FE prefixed id as the internal join key (mapTrialById <->
+        // trialLabelById), matching the pre-retirement behavior.
+        id: toDemoId(demoMode, String(beTrial?.id)),
+        title: beTrial?.name ?? null,
+        investigationalProduct: beTrial?.investigational_product ?? null,
+        status: uqBeStatusToFe(beTrial?.status),
+        phase: beTrial?.phase ?? null,
+        enrolledPatients: Number(beTrial?.enrolled_patients ?? 0),
+        targetPatients: beTrial?.target_patients ?? null,
+      };
+    }
+  } catch {
+    trial = null;
+  }
   if (!trial) return [] as OperationalEvidence[];
 
   const evidence: OperationalEvidence[] = [];
@@ -3104,24 +3173,24 @@ async function collectOperationalEvidence(
     .from(protocols)
     .where(and(eq(protocols.trialId, trialId), isNull(protocols.archivedAt)))
     .orderBy(desc(protocols.updatedAt))) as Protocol[];
-  let indexedProtocolIds = new Set<number>();
+  let indexedProtocolIds = new Set<string>();
   if (trialProtocolRows.length > 0) {
     const indexedRows = USES_EXTERNAL_RAG
       ? ((await db
           .select({ protocolId: protocolChunks.protocolId })
           .from(protocolChunks)
-          .where(inArray(protocolChunks.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
-          protocolId: number;
+          .where(inArray(protocolChunks.protocolId, trialProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+          protocolId: string;
         }>)
       : ((await db
           .select({ protocolId: fileSearchDocuments.protocolId })
           .from(fileSearchDocuments)
-          .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => protocol.id)))) as Array<{
-          protocolId: number;
+          .where(inArray(fileSearchDocuments.protocolId, trialProtocolRows.map((protocol) => String(protocol.id))))) as Array<{
+          protocolId: string;
         }>);
     indexedProtocolIds = new Set(indexedRows.map((row) => row.protocolId));
   }
-  const indexedTrialDocs = trialProtocolRows.filter((protocol) => indexedProtocolIds.has(protocol.id)).length;
+  const indexedTrialDocs = trialProtocolRows.filter((protocol) => indexedProtocolIds.has(String(protocol.id))).length;
   const docCoverage = trialProtocolRows.length
     ? Math.round((indexedTrialDocs / trialProtocolRows.length) * 100)
     : 0;
@@ -3131,11 +3200,15 @@ async function collectOperationalEvidence(
     asOf,
   });
 
-  const mapRows = (await db
-    .select()
-    .from(executionMaps)
-    .where(eq(executionMaps.trialId, trialId))
-    .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version))) as ExecutionMap[];
+  // executionMaps is BE-keyed: query by the BE trial UUID (the FE `trials` and
+  // `protocols` reads above intentionally still use the FE trial id).
+  const mapRows = beTrialUuid
+    ? ((await db
+        .select()
+        .from(executionMaps)
+        .where(eq(executionMaps.trialId, beTrialUuid))
+        .orderBy(desc(executionMaps.updatedAt), desc(executionMaps.version))) as ExecutionMap[])
+    : [];
   const activeMap = pickPreferredExecutionMap(mapRows, false);
   if (!activeMap) return evidence;
 
@@ -3351,13 +3424,14 @@ async function collectOperationalEvidence(
   return evidence;
 }
 
-async function collectTelemetryEvidence(db: any, trialId?: string) {
-  if (!trialId) return [] as TelemetryEvidence[];
+async function collectTelemetryEvidence(db: any, beTrialUuid?: string | null) {
+  // mapTelemetryEvents is BE-keyed: query by the BE trial UUID only.
+  if (!beTrialUuid) return [] as TelemetryEvidence[];
   const asOf = formatIsoNow();
   const rows = (await db
     .select()
     .from(mapTelemetryEvents)
-    .where(eq(mapTelemetryEvents.trialId, trialId))
+    .where(eq(mapTelemetryEvents.trialId, beTrialUuid))
     .orderBy(desc(mapTelemetryEvents.createdAt))
     .limit(500)) as MapTelemetryEvent[];
   if (rows.length === 0) return [] as TelemetryEvidence[];
@@ -3436,7 +3510,9 @@ function buildDocContext(chunks: ProtocolContextChunk[], query: string, maxItems
 
   return selected
     .sort((a, b) => {
-      if (a.protocolId !== b.protocolId) return a.protocolId - b.protocolId;
+      if (a.protocolId !== b.protocolId) {
+        return String(a.protocolId).localeCompare(String(b.protocolId));
+      }
       const ap = a.pageStart ?? Number.MAX_SAFE_INTEGER;
       const bp = b.pageStart ?? Number.MAX_SAFE_INTEGER;
       if (ap !== bp) return ap - bp;
@@ -3900,8 +3976,10 @@ export async function runUnifiedQuery(params: {
   db: any;
   query: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
-  protocolIds?: number[];
+  protocolIds?: string[];
   trialId?: string;
+  /** BE trial UUID for migrated child tables (executionMaps, mapTelemetryEvents). */
+  beTrialUuid?: string | null;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
@@ -3920,8 +3998,8 @@ export async function runUnifiedQuery(params: {
     provisionalPlan,
     params.demoMode
   );
-  const protocolFileUrls = new Map<number, string | null>(
-    protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
+  const protocolFileUrls = new Map<string, string | null>(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol.fileUrl ?? null])
   );
   const queryPlan = buildUnifiedQueryPlan(query, protocolRows.length > 0, Boolean(params.trialId));
   const route = queryPlan.route;
@@ -3935,9 +4013,9 @@ export async function runUnifiedQuery(params: {
       ? collectDocumentEvidence(params.db, query, protocolRows, queryPlan)
       : Promise.resolve({ evidence: [], chunks: [] }),
     needsOp
-      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode, params.beTrialUuid ?? null)
       : Promise.resolve([]),
-    needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
+    needsTelemetry ? collectTelemetryEvidence(params.db, params.beTrialUuid ?? null) : Promise.resolve([]),
   ]);
 
   const gaps: string[] = [];
@@ -4144,7 +4222,15 @@ export async function runUnifiedQuery(params: {
       extractTextContent(llmResponse.choices[0]?.message?.content) ||
       "I don't have enough evidence to answer that safely from the current trial context.";
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "LLM generation failed.";
+    // Phase 6: when the FE-local LLM is unreachable (no key), don't leak the
+    // raw "[FE LLM deprecated] invokeLLM()…" internals to users — show a clean
+    // note. The verbatim evidence below is still returned.
+    const reason =
+      error instanceof Error
+        ? error.message.includes("[FE LLM deprecated]")
+          ? "AI synthesis isn't available for this scope in the cloud — showing the closest matching evidence instead."
+          : error.message
+        : "LLM generation failed.";
     const fallbackLines: string[] = [
       "Themison AI could not generate a full synthesis right now.",
       `Reason: ${reason}`,
@@ -4324,8 +4410,10 @@ export async function runUnifiedQueryDiagnostics(params: {
   db: any;
   query: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
-  protocolIds?: number[];
+  protocolIds?: string[];
   trialId?: string;
+  /** BE trial UUID for migrated child tables (executionMaps, mapTelemetryEvents). */
+  beTrialUuid?: string | null;
   demoMode?: "sample" | "full" | "building";
   userId?: number;
   maxDocChunks?: number;
@@ -4344,8 +4432,8 @@ export async function runUnifiedQueryDiagnostics(params: {
     provisionalPlan,
     params.demoMode
   );
-  const protocolFileUrls = new Map<number, string | null>(
-    protocolRows.map((protocol) => [protocol.id, protocol.fileUrl ?? null])
+  const protocolFileUrls = new Map<string, string | null>(
+    protocolRows.map((protocol) => [protocol.coreBackendDocumentId ?? String(protocol.id), protocol.fileUrl ?? null])
   );
   const queryPlan = buildUnifiedQueryPlan(query, protocolRows.length > 0, Boolean(params.trialId));
   const route = queryPlan.route;
@@ -4378,9 +4466,9 @@ export async function runUnifiedQueryDiagnostics(params: {
           } satisfies DocumentRetrievalDebug,
         }),
     needsOp
-      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode)
+      ? collectOperationalEvidence(params.db, params.trialId, params.userId, query, params.demoMode, params.beTrialUuid ?? null)
       : Promise.resolve([]),
-    needsTelemetry ? collectTelemetryEvidence(params.db, params.trialId) : Promise.resolve([]),
+    needsTelemetry ? collectTelemetryEvidence(params.db, params.beTrialUuid ?? null) : Promise.resolve([]),
   ]);
 
   const gaps: string[] = [];
@@ -4421,9 +4509,12 @@ export async function runUnifiedQueryDiagnostics(params: {
 
   const primaryProtocol = protocolRows[0];
   let parserPages: Array<{ pageNumber: number; textSnippet: string }> = [];
-  if (primaryProtocol?.fileUrl) {
+  if (primaryProtocol?.fileKey) {
     try {
-      const pages = await extractPdfPages(primaryProtocol.fileUrl);
+      // Read bytes by key (authenticated/disk) rather than fetching the
+      // raw fileUrl, which fails on cloud (Render) with "fetch failed".
+      const pdfBuffer = await storageReadBytes(primaryProtocol.fileKey);
+      const pages = await extractPdfPagesFromBuffer(pdfBuffer);
       const preferred = new Set<number>();
       for (const chunk of docResult.chunks.slice(0, 24)) {
         if (chunk.pageStart) preferred.add(chunk.pageStart);
@@ -4458,7 +4549,7 @@ export async function runUnifiedQueryDiagnostics(params: {
     plan: queryPlan,
     route,
     protocols: protocolRows.map((protocol) => ({
-      protocolId: protocol.id,
+      protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
       filename: protocol.filename,
       category: protocol.category ?? null,
       isCurrent: Boolean(protocol.isCurrent),
@@ -4496,7 +4587,7 @@ export async function runUnifiedQueryDiagnostics(params: {
 export async function evaluateUnifiedRetrievalQuality(params: {
   db: any;
   query: string;
-  protocolIds: number[];
+  protocolIds: string[];
 }) {
   const queryPlan = buildUnifiedQueryPlan(params.query, true, false);
   const protocolRows = await resolveProtocolsForScope(params.db, params.protocolIds, undefined, queryPlan);
@@ -4504,7 +4595,7 @@ export async function evaluateUnifiedRetrievalQuality(params: {
   const grouped = await Promise.all(
     protocolRows.map(async (protocol) => {
       const chunks = await getProtocolContextChunks({
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         query: params.query,
         comprehensive: true,
         limit: 12,
@@ -4530,7 +4621,7 @@ export async function evaluateUnifiedRetrievalQuality(params: {
       }
 
       return {
-        protocolId: protocol.id,
+        protocolId: protocol.coreBackendDocumentId ?? String(protocol.id),
         filename: protocol.filename,
         retrievedCount: chunks.length,
         uniqueSections: uniqueSections.size,

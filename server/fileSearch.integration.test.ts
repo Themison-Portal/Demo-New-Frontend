@@ -2,9 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { getDb } from './db';
 import { protocols } from '../drizzle/schema';
 import { createFileSearchStore, uploadToFileSearchStore, queryWithFileSearch } from './_core/fileSearch';
+import { ENV } from './_core/env';
 
 describe('File Search Integration Test', () => {
   it('should upload a real protocol and query it', async () => {
+    if (!ENV.geminiApiKey || !ENV.geminiApiKey.startsWith('AIza') || ENV.geminiApiKey.includes('placeholder')) {
+      return;
+    }
     const db = await getDb();
     if (!db) {
       throw new Error('Database not available');

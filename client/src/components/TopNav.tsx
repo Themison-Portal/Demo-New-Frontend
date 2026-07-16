@@ -3,7 +3,8 @@
  * Design: Clinical Modernism - Clean horizontal bar with contextual navigation
  */
 
-import { Bell, ChevronDown, ChevronRight, Home, FileText, File, FlaskConical, LayoutGrid, Users, Building2, Puzzle, Settings as SettingsIcon, User, Brain } from "lucide-react";
+import { Bell, ChevronDown, ChevronRight, Home, FileText, File, FlaskConical, LayoutGrid, Users, Building2, Puzzle, Settings as SettingsIcon, User, Brain, Sun, Moon } from "lucide-react";
+import { useTheme } from "../contexts/ThemeContext";
 import { AnalyticsIcon } from "@/components/icons/AnalyticsIcon";
 import { BudgetIntelligenceIcon } from "@/components/icons/BudgetIntelligenceIcon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -62,6 +63,7 @@ function markModeSessionBootstrap(mode: "sample" | "full" | "building") {
 
 export function TopNav() {
   const [location, navigate] = useLocation();
+  const { theme, toggleTheme } = useTheme();
   const { navState, isCollapsed, setIsCollapsed } = useSidebarNav();
   const {
     state,
@@ -414,6 +416,23 @@ export function TopNav() {
 
         {/* Right: Notifications + User Profile */}
         <div className="flex items-center gap-2">
+          {/* Theme Toggle */}
+          {toggleTheme && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9"
+              onClick={toggleTheme}
+              title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            >
+              {theme === "light" ? (
+                <Moon className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <Sun className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+              )}
+            </Button>
+          )}
+
           {/* Notifications */}
           <Button variant="ghost" size="icon" className="relative h-9 w-9">
             <Bell className="h-4 w-4 text-muted-foreground" />

@@ -75,10 +75,11 @@ async function buildDownloadUrl(
     ensureTrailingSlash(baseUrl)
   );
   downloadApiUrl.searchParams.set("path", normalizeKey(relKey));
-  const response = await fetch(downloadApiUrl, {
-    method: "GET",
-    headers: buildAuthHeaders(apiKey),
-  });
+  const response = await fetchOrThrow(
+    downloadApiUrl,
+    { method: "GET", headers: buildAuthHeaders(apiKey) },
+    "storage downloadUrl"
+  );
   return (await response.json()).url;
 }
 
@@ -106,6 +107,25 @@ function toFormData(
 
 function buildAuthHeaders(apiKey: string): HeadersInit {
   return { Authorization: `Bearer ${apiKey}` };
+}
+
+/**
+ * fetch() that rethrows network-level failures (DNS, connection refused,
+ * unreachable host) with the target URL attached. A bare "fetch failed"
+ * with no context makes a misconfigured BUILT_IN_FORGE_API_URL hard to
+ * diagnose; this names the host instead.
+ */
+async function fetchOrThrow(
+  url: string | URL,
+  init: RequestInit | undefined,
+  label: string
+): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}: could not reach ${String(url)} (${message})`);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -151,11 +171,11 @@ export async function storagePut(
   const key = normalizeKey(relKey);
   const uploadUrl = buildUploadUrl(baseUrl, key);
   const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const response = await fetchOrThrow(
+    uploadUrl,
+    { method: "POST", headers: buildAuthHeaders(apiKey), body: formData },
+    "storage upload"
+  );
 
   if (!response.ok) {
     const message = await response.text().catch(() => response.statusText);
@@ -177,4 +197,49 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
     key,
     url: await buildDownloadUrl(baseUrl, key, apiKey),
   };
+}
+
+/**
+ * Read the raw bytes for a stored object. Use this when a downstream
+ * consumer (e.g. pdf-parse) needs the buffer in-process and you want to
+ * skip the public-URL round-trip that `storageGet` -> HTTP fetch would
+ * otherwise require.
+ *
+ * - Local fallback: reads directly from `LOCAL_STORAGE_ROOT`.
+ * - Forge proxy: fetches the signed download URL once and returns the body.
+ */
+export async function storageReadBytes(relKey: string): Promise<Buffer> {
+  const key = normalizeKey(relKey);
+  if (isUsingLocalStorage()) {
+    const filePath = path.join(LOCAL_STORAGE_ROOT, key);
+    return fs.readFile(filePath);
+  }
+  const { baseUrl, apiKey } = getStorageConfig();
+  const downloadUrl = await buildDownloadUrl(baseUrl, key, apiKey);
+  const response = await fetchOrThrow(downloadUrl, undefined, "storage download");
+  if (!response.ok) {
+    throw new Error(
+      `storageReadBytes: failed to fetch ${key} (${response.status} ${response.statusText})`
+    );
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+
+/**
+ * Best-effort delete of a stored object. Used to drop the transient FE copy
+ * after a document has been forwarded to (and is durably stored by) the
+ * core-backend, so the FE is not the store of record. Non-fatal on error.
+ */
+export async function storageDelete(relKey: string): Promise<void> {
+  const key = normalizeKey(relKey);
+  try {
+    if (isUsingLocalStorage()) {
+      await fs.rm(path.join(LOCAL_STORAGE_ROOT, key), { force: true });
+      return;
+    }
+    // Forge proxy mode: no delete API wired here (no-op). The BE is the
+    // store of record once the document is forwarded.
+  } catch (error) {
+    console.warn(`[storage] delete failed for ${key} (non-fatal):`, error);
+  }
 }

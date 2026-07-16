@@ -9,6 +9,8 @@ export interface ChatSessionSource {
   protocolId?: number;
   page?: number;
   category?: string;
+  bboxes?: number[][];
+  highlightUrl?: string;
 }
 
 export interface ChatSessionMessage {
@@ -66,6 +68,8 @@ const normalizeSource = (value: unknown): ChatSessionSource | null => {
     protocolId: typeof source.protocolId === "number" ? source.protocolId : undefined,
     page: typeof source.page === "number" ? source.page : undefined,
     category: source.category ? String(source.category) : undefined,
+    bboxes: Array.isArray(source.bboxes) ? (source.bboxes as number[][]) : undefined,
+    highlightUrl: source.highlightUrl ? String(source.highlightUrl) : undefined,
   };
 };
 

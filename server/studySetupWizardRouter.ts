@@ -1,11 +1,15 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "./_core/trpc";
-import { invokeLLM } from "./_core/llm";
+import { callBackend } from "./_core/backendClient";
+import { getCoreBackendClient } from "./_core/coreBackendClient";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import { getDb } from "./db";
 import * as db from "./studySetupWizard";
 import { extractPdfText } from "./pdfExtractor";
 import { type DemoMode } from "./_core/demoMode";
 import { logTelemetryEvent } from "./_core/telemetry";
-import { storagePut } from "./storage";
+import { storagePut, storageReadBytes } from "./storage";
 import { randomUUID } from "crypto";
 import {
   getProtocolContextChunks,
@@ -768,7 +772,10 @@ export const studySetupWizardRouter = router({
 
       let protocolContent = "";
       try {
-        protocolContent = await extractPdfText(uploaded.url);
+        // Read from the in-memory buffer instead of round-tripping through
+        // <PUBLIC_BASE_URL>/local-storage/... — avoids a network hop and
+        // works even when PUBLIC_BASE_URL is misconfigured (e.g. in cloud).
+        protocolContent = await extractPdfText(fileBuffer);
       } catch (error) {
         throw new Error("Failed to read protocol document. Please ensure it is a valid PDF.");
       }
@@ -778,107 +785,40 @@ export const studySetupWizardRouter = router({
         protocolContent = protocolContent.substring(0, maxLength) + "\n\n[Content truncated due to length...]";
       }
 
-      const systemPrompt = `You are an expert clinical trial coordinator. Extract core trial details from the protocol.
-Preserve the protocol's exact wording for Phase (e.g., "Phase I/II").
-
-Return only JSON matching this schema:
-{
-  "protocolTitle": string | null,
-  "protocolNumber": string | null,
-  "sponsor": string | null,
-  "phase": string | null,
-  "investigationalProduct": string | null,
-  "indication": string | null,
-  "nctNumber": string | null,
-  "currentVersion": string | null,
-  "amendmentVersion": string | null,
-  "releaseDate": string | null,
-  "location": string | null,
-  "sampleSize": string | null,
-  "numberOfSites": string | null,
-  "studyDuration": string | null,
-  "studyDesignType": string | null,
-  "primaryObjective": string | null,
-  "primaryEndpoint": string | null
-}`;
-
-      const userPrompt = `Protocol filename: ${fileName}
-
-Protocol content:
-${protocolContent}`;
-
-      const response = await invokeLLM({
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "protocol_details",
-            strict: true,
-            schema: {
-              type: "object",
-              properties: {
-                protocolTitle: { type: ["string", "null"] },
-                protocolNumber: { type: ["string", "null"] },
-                sponsor: { type: ["string", "null"] },
-                phase: { type: ["string", "null"] },
-                investigationalProduct: { type: ["string", "null"] },
-                indication: { type: ["string", "null"] },
-                nctNumber: { type: ["string", "null"] },
-                currentVersion: { type: ["string", "null"] },
-                amendmentVersion: { type: ["string", "null"] },
-                releaseDate: { type: ["string", "null"] },
-                location: { type: ["string", "null"] },
-                sampleSize: { type: ["string", "null"] },
-                numberOfSites: { type: ["string", "null"] },
-                studyDuration: { type: ["string", "null"] },
-                studyDesignType: { type: ["string", "null"] },
-                primaryObjective: { type: ["string", "null"] },
-                primaryEndpoint: { type: ["string", "null"] },
-              },
-              required: [
-                "protocolTitle",
-                "protocolNumber",
-                "sponsor",
-                "phase",
-                "investigationalProduct",
-                "indication",
-                "nctNumber",
-                "currentVersion",
-                "amendmentVersion",
-                "releaseDate",
-                "location",
-                "sampleSize",
-                "numberOfSites",
-                "studyDuration",
-                "studyDesignType",
-                "primaryObjective",
-                "primaryEndpoint",
-              ],
-              additionalProperties: false,
-            },
-          },
+      // BE owns the prompt + JSON schema (Phase 2 of LLM consolidation).
+      // The FE just ships the protocol text; the BE calls the RAG service's
+      // Generate RPC and returns structured metadata.
+      const response = await callBackend<{
+        extracted: Record<string, string | null>;
+        model: string;
+        promptTokens: number;
+        completionTokens: number;
+      }>("/api/wizard/extract-metadata", {
+        method: "POST",
+        body: {
+          protocolFilename: fileName,
+          protocolContent,
         },
+        user: ctx.user,
       });
-
-      const content = response.choices[0]?.message?.content;
-      if (!content || typeof content !== "string") {
-        throw new Error("Failed to extract protocol details.");
-      }
 
       await logTelemetryEvent({
         eventType: "ai_response_generated",
         action: "generated",
         userId: String(ctx.user.id),
         entityType: "protocol",
-        payload: { demoMode: mode },
+        payload: {
+          demoMode: mode,
+          source: "core-backend.wizard",
+          model: response.model,
+          promptTokens: response.promptTokens,
+          completionTokens: response.completionTokens,
+        },
         aiInvolved: true,
       });
 
       return {
-        extracted: JSON.parse(content),
+        extracted: response.extracted,
         tempFile: uploaded,
       };
     }),
@@ -889,7 +829,7 @@ ${protocolContent}`;
   getProtocolContext: protectedProcedure
     .input(
       z.object({
-        protocolId: z.number(),
+        protocolId: z.string(),
         query: z.string().optional(),
         sectionTypes: z.array(z.string()).optional(),
         limit: z.number().min(1).max(20).optional(),
@@ -899,10 +839,19 @@ ${protocolContent}`;
     )
     .query(async ({ input, ctx }) => {
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const protocol = await db.getProtocolById(input.protocolId);
-      if (!protocol) {
+      // Protocol metadata comes from the BE (FE protocols table retired).
+      // protocolId is the BE document UUID string.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(input.protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) {
         throw new Error("Protocol not found");
       }
+      const protocol = {
+        id: input.protocolId,
+        filename: beDocument.document_name,
+        trialId: beDocument.trial_id ?? "",
+      };
       const protocolTrialId = protocol.trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);
@@ -968,7 +917,7 @@ ${protocolContent}`;
    */
   generateScaffold: protectedProcedure
     .input(z.object({
-      protocolId: z.number(),
+      protocolId: z.string(),
       trialId: z.string(),
       demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
@@ -985,18 +934,37 @@ ${protocolContent}`;
         payload: { protocolId, demoMode: mode },
         aiInvolved: true,
       });
-      
-      // Get protocol details
-      const protocol = await db.getProtocolById(protocolId);
-      if (!protocol) {
+
+      // Get protocol details from the BE (FE protocols table retired).
+      // The BE document is keyed by the UUID string protocolId.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) {
         throw new Error("Protocol not found");
       }
-      const protocolTrialId = protocol.trialId;
+      const protocol = {
+        filename: beDocument.document_name,
+        // document_url is the GCS blob path; used as the storage key below.
+        fileKey: beDocument.document_url,
+      };
+      // The mode-belonging check uses the (mode-prefixed) trialId the client passes.
+      const protocolTrialId = trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);
       const legacyAllowed = mode !== "building";
       if ((hasPrefix && !matchesMode) || (!hasPrefix && !legacyAllowed)) {
         throw new Error("Protocol does not belong to this demo mode");
+      }
+
+      // TRIALS migrated to the BE: the scaffold child tables hold the BE trial
+      // UUID in their `trialId` column (not the prefixed FE id). Resolve it
+      // before any scaffold insert; if there's no BE trial yet, there's nothing
+      // to scaffold against — bail without writing a null trialId.
+      const wizardDb = await getDb();
+      const beTrialUuid = wizardDb ? await resolveBeTrialIdForRead(wizardDb, mode, trialId) : null;
+      if (!beTrialUuid) {
+        throw new Error("No backend trial found for this trial");
       }
 
       // Check if scaffold already exists - if so, delete it and regenerate
@@ -1031,74 +999,18 @@ ${protocolContent}`;
           aiInvolved: true,
         });
       } else {
-        // Use AI to analyze protocol and generate task scaffold
-        const systemPrompt = `You are an expert clinical trial operations planner.
-Analyze the protocol and generate a complete study setup scaffold with actionable tasks.
+        // Use AI to analyze protocol and generate task scaffold.
+        // Prompt + JSON schema live on the BE (/api/wizard/generate-scaffold);
+        // the FE only ships the protocol content + optional context chunks.
 
-Each task must be operationally specific and include:
-- name (must start with an action verb)
-- category
-- assignedRole
-- estimatedDuration (minutes)
-- priority
-- protocolReference.section + protocolReference.page
-- aiConfidence (0-1)
-- conditionalNote (if applicable)
-
-Return ONLY valid JSON in this shape:
-{
-  "protocolSections": [
-    {
-      "name": "Schedule of Events",
-      "dateReference": null,
-      "pageReference": "P.22",
-      "children": []
-    }
-  ],
-  "phases": [
-    {
-      "name": "Screening",
-      "color": "#3B82F6",
-      "tasks": [
-        {
-          "name": "Obtain written informed consent",
-          "suggestedDate": "2026-03-05",
-          "estimatedDuration": 45,
-          "category": "consent",
-          "assignedRole": "pi",
-          "priority": "critical",
-          "protocolReference": {
-            "section": "Schedule of Activities",
-            "page": 22,
-            "extractedText": "Informed Consent must be completed before screening procedures."
-          },
-          "aiConfidence": 0.95,
-          "conditionalNote": null,
-          "dependencies": []
-        }
-      ],
-      "transitions": [
-        { "toPhase": "Visit 1 - Baseline", "condition": "Passed" },
-        { "toPhase": "Screen Fail", "condition": "Failed" }
-      ]
-    }
-  ]
-}
-
-Rules:
-- Use realistic phase names from protocol schedule.
-- Use protocol sections for left-map navigation: Schedule of Events, Inclusion / Exclusion, Enrollment & Randomization, Dosing & Administration, Procedures & Assessments, Lab & Samples, Adverse Events & Safety, Concomitant Medications.
-- Tasks must be precise (no vague labels like "Lab work").
-- Every visit phase must include a data-entry task.
-- Screening must include consent + inclusion/exclusion checks.
-- Include Screen Fail and Early Termination phases with key closeout tasks.
-- If drug administration exists in a phase, include pre-dose checks and post-dose observation.
-- Keep dependencies as task names referencing prior tasks in same phase or previous phases.`;
-
-      // Extract text from the PDF
+      // Extract text from the PDF. Read bytes directly via storageReadBytes
+      // instead of fetching protocol.fileUrl over HTTP — avoids the
+      // <PUBLIC_BASE_URL>/local-storage/... round-trip that breaks when
+      // PUBLIC_BASE_URL isn't set to the FE's public hostname (e.g. cloud).
       let protocolContent = '';
       try {
-        protocolContent = await extractPdfText(protocol.fileUrl);
+        const pdfBuffer = await storageReadBytes(protocol.fileKey);
+        protocolContent = await extractPdfText(pdfBuffer);
         console.log(`Extracted ${protocolContent.length} characters from PDF`);
       } catch (error) {
         console.error('Failed to extract PDF text:', error);
@@ -1157,171 +1069,34 @@ ${chunk.chunkText.slice(0, 1400)}`;
         })
         .join("\n\n");
 
-      const userPrompt = `Protocol Document: ${protocol.filename}
-
-Priority Context Chunks:
-${contextBlock || "[No pre-processed context chunks available]"}
-
-Protocol Content:
-${protocolContent}
-
-Based on the protocol content above, generate a complete task scaffold for this clinical trial. Include all necessary phases, tasks, and dependencies.`;
-
-        const invokeScaffoldLLM = async (prompt: string) =>
-          invokeLLM({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: prompt },
-            ],
-            response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "task_scaffold",
-              strict: true,
-              schema: {
-                type: "object",
-                properties: {
-                  protocolSections: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        dateReference: { type: ["string", "null"] },
-                        pageReference: { type: ["string", "null"] },
-                        children: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              name: { type: "string" },
-                              dateReference: { type: ["string", "null"] },
-                              pageReference: { type: ["string", "null"] },
-                            },
-                            required: ["name"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["name"],
-                      additionalProperties: false,
-                    },
-                  },
-                  phases: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        color: { type: "string" },
-                        tasks: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              name: { type: "string" },
-                              suggestedDate: { type: ["string", "null"] },
-                              estimatedDuration: { type: ["number", "null"] },
-                              category: {
-                                type: "string",
-                                enum: [
-                                  "consent",
-                                  "eligibility",
-                                  "lab_sample",
-                                  "vital_signs",
-                                  "imaging",
-                                  "drug_administration",
-                                  "assessment",
-                                  "questionnaire",
-                                  "data_entry",
-                                  "coordination",
-                                  "documentation",
-                                  "follow_up",
-                                  "safety_reporting",
-                                  "regulatory",
-                                  "custom",
-                                ],
-                              },
-                              assignedRole: {
-                                type: ["string", "null"],
-                                enum: [
-                                  "pi",
-                                  "sub_i",
-                                  "crc",
-                                  "nurse",
-                                  "pharmacist",
-                                  "lab_tech",
-                                  "data_manager",
-                                  "regulatory_coordinator",
-                                  "custom",
-                                  null,
-                                ],
-                              },
-                              priority: {
-                                type: "string",
-                                enum: ["critical", "high", "medium", "low"],
-                              },
-                              protocolReference: {
-                                type: "object",
-                                properties: {
-                                  section: { type: "string" },
-                                  page: { type: ["number", "null"] },
-                                  extractedText: { type: ["string", "null"] },
-                                },
-                                required: ["section", "page", "extractedText"],
-                                additionalProperties: false,
-                              },
-                              aiConfidence: { type: ["number", "null"] },
-                              conditionalNote: { type: ["string", "null"] },
-                              dependencies: {
-                                type: "array",
-                                items: { type: "string" },
-                              },
-                            },
-                            required: [
-                              "name",
-                              "suggestedDate",
-                              "estimatedDuration",
-                              "category",
-                              "assignedRole",
-                              "priority",
-                              "protocolReference",
-                              "aiConfidence",
-                              "conditionalNote",
-                              "dependencies",
-                            ],
-                            additionalProperties: false,
-                          },
-                        },
-                        transitions: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              toPhase: { type: "string" },
-                              condition: { type: ["string", "null"] },
-                            },
-                            required: ["toPhase"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["name", "color", "tasks"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["protocolSections", "phases"],
-                additionalProperties: false,
-              },
-            },
-          },
-        });
-
         const structuredSchedule = await getStructuredScheduleOfActivities(protocolId).catch(() => null);
-        let response;
+
+        // BE owns the system prompt + JSON schema; FE just ships the protocol
+        // content + the optional context block we built above.
+        type ScaffoldBackendResponse = {
+          scaffold: any;
+          model: string;
+          promptTokens: number;
+          completionTokens: number;
+        };
+
+        const callScaffoldBackend = (
+          content: string,
+          contextText: string,
+        ): Promise<ScaffoldBackendResponse> =>
+          callBackend<ScaffoldBackendResponse>("/api/wizard/generate-scaffold", {
+            method: "POST",
+            body: {
+              protocolFilename: protocol.filename,
+              protocolContent: content,
+              contextChunksText: contextText || null,
+            },
+            user: ctx.user,
+          });
+
+        let response: ScaffoldBackendResponse | undefined;
         try {
-          response = await invokeScaffoldLLM(userPrompt);
+          response = await callScaffoldBackend(protocolContent, contextBlock);
         } catch (error) {
           const compactContextBlock = contextChunks
             .slice(0, 3)
@@ -1331,16 +1106,6 @@ Based on the protocol content above, generate a complete task scaffold for this 
 ${chunk.chunkText.slice(0, 700)}`;
             })
             .join("\n\n");
-
-          const compactPrompt = `Protocol Document: ${protocol.filename}
-
-Priority Context Chunks:
-${compactContextBlock || "[No pre-processed context chunks available]"}
-
-Protocol Content (compact fallback):
-${protocolContent.slice(0, 9000)}
-
-Generate the same JSON scaffold format, but prioritize correctness over completeness if content is limited.`;
 
           await logTelemetryEvent({
             eventType: "execution_plan_generation_retried",
@@ -1358,7 +1123,10 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
           });
 
           try {
-            response = await invokeScaffoldLLM(compactPrompt);
+            response = await callScaffoldBackend(
+              protocolContent.slice(0, 9000),
+              compactContextBlock,
+            );
           } catch (compactError) {
             await logTelemetryEvent({
               eventType: "execution_plan_generation_retried",
@@ -1380,24 +1148,20 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
         }
 
         if (!scaffoldData) {
-          const content = response?.choices?.[0]?.message?.content;
-          if (!content || typeof content !== "string") {
+          if (!response || !response.scaffold) {
             scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
           } else {
-            try {
-              scaffoldData = JSON.parse(content);
-            } catch {
-              scaffoldData = buildFallbackScaffold(protocol.filename, structuredSchedule);
-            }
+            scaffoldData = response.scaffold;
           }
         }
         scaffoldData = normalizeScaffoldWithSchedule(scaffoldData, structuredSchedule, protocol.filename);
       }
 
-      // Create task scaffold
+      // Create task scaffold. The child-table `trialId` is the BE trial UUID
+      // (post-TRIALS migration), not the prefixed FE id.
       await db.createTaskScaffold({
         protocolId,
-        trialId: protocolTrialId,
+        trialId: beTrialUuid,
         status: "draft",
       });
 
@@ -1542,13 +1306,22 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
    */
   getScaffold: protectedProcedure
     .input(z.object({
-      protocolId: z.number(),
+      protocolId: z.string(),
       demoMode: z.enum(["sample", "full", "building"]).optional(),
     }))
     .query(async ({ input }) => {
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const protocol = await db.getProtocolById(input.protocolId);
-      if (!protocol) return null;
+      // Protocol metadata comes from the BE (FE protocols table retired).
+      // protocolId is the BE document UUID string.
+      const beDocument = await getCoreBackendClient()
+        .getTrialDocument(input.protocolId, "auth-disabled-bypass")
+        .catch(() => null);
+      if (!beDocument) return null;
+      const protocol = {
+        id: input.protocolId,
+        filename: beDocument.document_name,
+        trialId: beDocument.trial_id ?? "",
+      };
       const protocolTrialId = protocol.trialId;
       const hasPrefix = protocolTrialId.includes(":");
       const matchesMode = protocolTrialId.startsWith(`${mode}:`);
@@ -1595,7 +1368,99 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
       scaffoldId: z.number(),
     }))
     .mutation(async ({ input, ctx }) => {
+      // 1. Fetch the scaffold details
+      const scaffold = await db.getTaskScaffoldById(input.scaffoldId);
+      if (!scaffold) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Task scaffold not found",
+        });
+      }
+
+      // 2. Fetch all phases for this scaffold
+      const phases = await db.getPhasesByScaffoldId(input.scaffoldId);
+
+      // 3. The scaffold's trialId is already the backend trial UUID
+      const beTrialId = scaffold.trialId;
+      if (!beTrialId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Scaffold is not linked to a backend trial",
+        });
+      }
+
+      // Map to store local task ID -> backend task UUID
+      const localToBackendTaskIdMap = new Map<number, string>();
+      const dependenciesToCreate: Array<{ localTaskId: number; dependsOnTaskId: number }> = [];
+
+      // 4. Create tasks in the backend PostgreSQL
+      for (const phase of phases) {
+        const phaseTasks = await db.getTasksByPhaseId(phase.id);
+        for (const task of phaseTasks) {
+          // Prepare the task payload for backend
+          const payload = {
+            trial_id: beTrialId,
+            title: task.name,
+            description: "",
+            status: "todo", // active tasks start as todo
+            priority: "medium",
+            category: "custom",
+            phase_id: phase.name, // e.g. "Screening", "Baseline"
+            suggested_date: task.suggestedDate ? task.suggestedDate.toISOString() : null,
+            order_in_phase: task.orderIndex || 0,
+          };
+
+          try {
+            const created = await callBackend<any>("/api/tasks", {
+              method: "POST",
+              body: payload,
+              user: ctx.user,
+            });
+
+            if (created && created.id) {
+              localToBackendTaskIdMap.set(task.id, created.id);
+            }
+          } catch (err) {
+            console.error(`Failed to create task "${task.name}" in backend:`, err);
+            // We continue creating other tasks even if one fails
+          }
+
+          // Fetch local dependencies for this task to create later
+          const taskDeps = await db.getTaskDependencies(task.id);
+          for (const dep of taskDeps) {
+            dependenciesToCreate.push({
+              localTaskId: dep.taskId,
+              dependsOnTaskId: dep.dependsOnTaskId,
+            });
+          }
+        }
+      }
+
+      // 5. Create task dependencies in the backend PostgreSQL
+      for (const dep of dependenciesToCreate) {
+        const targetUuid = localToBackendTaskIdMap.get(dep.localTaskId);
+        const sourceUuid = localToBackendTaskIdMap.get(dep.dependsOnTaskId);
+
+        if (sourceUuid && targetUuid) {
+          try {
+            await callBackend("/api/task-dependencies", {
+              method: "POST",
+              body: {
+                source_task_id: sourceUuid,
+                target_task_id: targetUuid,
+                dependency_type: "finish_to_start",
+              },
+              user: ctx.user,
+            });
+          } catch (err) {
+            console.error(`Failed to create dependency between ${sourceUuid} and ${targetUuid}:`, err);
+          }
+        }
+      }
+
+      // 6. Update local scaffold status
       await db.updateTaskScaffoldStatus(input.scaffoldId, "confirmed", ctx.user.id);
+
       await logTelemetryEvent({
         eventType: "trial_setup_completed",
         action: "completed",
@@ -1603,6 +1468,7 @@ Generate the same JSON scaffold format, but prioritize correctness over complete
         entityType: "task_scaffold",
         entityId: String(input.scaffoldId),
       });
+
       return { success: true };
     }),
 

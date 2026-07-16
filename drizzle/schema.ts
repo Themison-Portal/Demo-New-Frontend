@@ -1,36 +1,38 @@
 import {
-  int,
-  json,
-  mysqlEnum,
-  mysqlTable,
+  pgSchema,
+  integer,
+  jsonb,
   text,
   timestamp,
   varchar,
   boolean,
-  float,
+  real,
   index,
   uniqueIndex,
-} from "drizzle-orm/mysql-core";
+  serial,
+} from "drizzle-orm/pg-core";
+
+export const bffSchema = pgSchema("bff");
 
 /**
  * Core user table backing auth flow.
  * Extend this file with additional tables as your product grows.
  * Columns use camelCase to match both database fields and generated types.
  */
-export const users = mysqlTable("users", {
+export const users = bffSchema.table("users", {
   /**
    * Surrogate primary key. Auto-incremented numeric value managed by the database.
    * Use this for relations between tables.
    */
-  id: int("id").autoincrement().primaryKey(),
+  id: serial("id").primaryKey(),
   /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  role: text("role").$type<"user" | "admin">().default("user").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
@@ -42,7 +44,7 @@ export type InsertUser = typeof users.$inferInsert;
 /**
  * Trials table - stores clinical trial information
  */
-export const trials = mysqlTable("trials", {
+export const trials = bffSchema.table("trials", {
   id: varchar("id", { length: 50 }).primaryKey(), // e.g., "abc-123", "def-456"
   title: varchar("title", { length: 500 }).notNull(), // e.g., "Diabetes Mellitus (SURPASS J-mono)"
   protocolNumber: varchar("protocolNumber", { length: 100 }), // e.g., "8F-JE-GPGQ(a)"
@@ -60,16 +62,16 @@ export const trials = mysqlTable("trials", {
   primaryEndpoint: text("primaryEndpoint"),
   description: text("description"), // Study description
   phase: varchar("phase", { length: 50 }),
-  status: mysqlEnum("status", ["not-started", "active", "recruiting", "on-hold", "completed", "terminated"]).default("not-started").notNull(),
+  status: text("status").$type<"not-started" | "active" | "recruiting" | "on-hold" | "completed" | "terminated">().default("not-started").notNull(),
   sponsor: varchar("sponsor", { length: 255 }), // e.g., "Novo Nordisk", "Roche"
   location: varchar("location", { length: 255 }), // e.g., "Copenhagen", "Multi-site"
   startDate: timestamp("startDate"),
   endDate: timestamp("endDate"),
   principalInvestigator: varchar("principalInvestigator", { length: 255 }),
-  enrolledPatients: int("enrolledPatients").default(0),
-  targetPatients: int("targetPatients"),
-  completionPercentage: int("completionPercentage").default(0),
-  createdBy: int("createdBy").notNull(), // User ID
+  enrolledPatients: integer("enrolledPatients").default(0),
+  targetPatients: integer("targetPatients"),
+  completionPercentage: integer("completionPercentage").default(0),
+  createdBy: integer("createdBy").notNull(), // User ID
   // UUID of the matching row in core-backend's `trials` table. Required
   // for core-backend's JWT-protected upload endpoint, which needs a
   // valid `trial_id` from its own DB. Nullable while the mapping is
@@ -77,7 +79,7 @@ export const trials = mysqlTable("trials", {
   // is unset.
   coreBackendTrialId: varchar("coreBackendTrialId", { length: 36 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type Trial = typeof trials.$inferSelect;
@@ -86,13 +88,13 @@ export type InsertTrial = typeof trials.$inferInsert;
 /**
  * Protocols table - stores uploaded protocol PDFs
  */
-export const protocols = mysqlTable("protocols", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(), // Reference to trial
+export const protocols = bffSchema.table("protocols", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull(), // Reference to trial
   filename: varchar("filename", { length: 255 }).notNull(),
   fileUrl: text("fileUrl").notNull(), // S3 URL
   fileKey: varchar("fileKey", { length: 512 }).notNull(), // S3 key
-  fileSize: int("fileSize").notNull(), // File size in bytes
+  fileSize: integer("fileSize").notNull(), // File size in bytes
   category: varchar("category", { length: 100 }).notNull(), // Protocols, Amendments, etc.
   documentVersion: varchar("documentVersion", { length: 50 }),
   amendmentVersion: varchar("amendmentVersion", { length: 50 }),
@@ -101,7 +103,7 @@ export const protocols = mysqlTable("protocols", {
   archivedAt: timestamp("archivedAt"),
   sourceType: varchar("sourceType", { length: 32 }).default("manual").notNull(), // manual | integration | system
   sourceReference: varchar("sourceReference", { length: 255 }),
-  uploadedBy: int("uploadedBy").notNull(), // User ID
+  uploadedBy: integer("uploadedBy").notNull(), // User ID
   // Linkage to core-backend's `trial_documents` row. Populated when an
   // upload is proxied through core-backend (Phase 3 of the integration).
   // Null on legacy rows / when the local-only pipeline is still in use.
@@ -113,7 +115,7 @@ export const protocols = mysqlTable("protocols", {
   // Surfaced as the doc's status badge in the FE.
   coreBackendIngestStatus: varchar("coreBackendIngestStatus", { length: 32 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type Protocol = typeof protocols.$inferSelect;
@@ -122,15 +124,16 @@ export type InsertProtocol = typeof protocols.$inferInsert;
 /**
  * Task scaffolds - AI-generated execution plans
  */
-export const taskScaffolds = mysqlTable("taskScaffolds", {
-  id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
-  status: mysqlEnum("status", ["draft", "confirmed", "active"]).default("draft").notNull(),
+export const taskScaffolds = bffSchema.table("taskScaffolds", {
+  id: serial("id").primaryKey(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
+  status: text("status").default("draft").notNull(),
   confirmedAt: timestamp("confirmedAt"),
-  confirmedBy: int("confirmedBy"),
+  confirmedBy: integer("confirmedBy"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type TaskScaffold = typeof taskScaffolds.$inferSelect;
@@ -139,14 +142,14 @@ export type InsertTaskScaffold = typeof taskScaffolds.$inferInsert;
 /**
  * Phases - groups of tasks (Screening, Visit 1, etc.)
  */
-export const phases = mysqlTable("phases", {
-  id: int("id").autoincrement().primaryKey(),
-  scaffoldId: int("scaffoldId").notNull(),
+export const phases = bffSchema.table("phases", {
+  id: serial("id").primaryKey(),
+  scaffoldId: integer("scaffoldId").notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   color: varchar("color", { length: 7 }).notNull(), // Hex color
-  orderIndex: int("orderIndex").notNull(), // For ordering phases
+  orderIndex: integer("orderIndex").notNull(), // For ordering phases
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type Phase = typeof phases.$inferSelect;
@@ -155,19 +158,19 @@ export type InsertPhase = typeof phases.$inferInsert;
 /**
  * Tasks - individual action items within phases
  */
-export const tasks = mysqlTable("tasks", {
-  id: int("id").autoincrement().primaryKey(),
-  phaseId: int("phaseId").notNull(),
+export const tasks = bffSchema.table("tasks", {
+  id: serial("id").primaryKey(),
+  phaseId: integer("phaseId").notNull(),
   name: varchar("name", { length: 500 }).notNull(),
-  suggestedAssigneeId: int("suggestedAssigneeId"),
+  suggestedAssigneeId: integer("suggestedAssigneeId"),
   suggestedDate: timestamp("suggestedDate"),
-  duration: int("duration"), // Duration in days
+  duration: integer("duration"), // Duration in days
   protocolSection: varchar("protocolSection", { length: 255 }),
-  protocolPage: int("protocolPage"),
-  status: mysqlEnum("status", ["pending", "completed", "blocked"]).default("pending").notNull(),
-  orderIndex: int("orderIndex").notNull(), // For ordering tasks within phase
+  protocolPage: integer("protocolPage"),
+  status: text("status").default("pending").notNull(),
+  orderIndex: integer("orderIndex").notNull(), // For ordering tasks within phase
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type Task = typeof tasks.$inferSelect;
@@ -176,11 +179,11 @@ export type InsertTask = typeof tasks.$inferInsert;
 /**
  * Task dependencies - relationships between tasks
  */
-export const taskDependencies = mysqlTable("taskDependencies", {
-  id: int("id").autoincrement().primaryKey(),
-  taskId: int("taskId").notNull(), // The dependent task
-  dependsOnTaskId: int("dependsOnTaskId").notNull(), // The task it depends on
-  type: mysqlEnum("type", ["after", "before", "concurrent"]).default("after").notNull(),
+export const taskDependencies = bffSchema.table("taskDependencies", {
+  id: serial("id").primaryKey(),
+  taskId: integer("taskId").notNull(), // The dependent task
+  dependsOnTaskId: integer("dependsOnTaskId").notNull(), // The task it depends on
+  type: text("status").default("after").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -190,10 +193,10 @@ export type InsertTaskDependency = typeof taskDependencies.$inferInsert;
 /**
  * Phase transitions - workflow paths between phases
  */
-export const phaseTransitions = mysqlTable("phaseTransitions", {
-  id: int("id").autoincrement().primaryKey(),
-  fromPhaseId: int("fromPhaseId").notNull(),
-  toPhaseId: int("toPhaseId").notNull(),
+export const phaseTransitions = bffSchema.table("phaseTransitions", {
+  id: serial("id").primaryKey(),
+  fromPhaseId: integer("fromPhaseId").notNull(),
+  toPhaseId: integer("toPhaseId").notNull(),
   condition: varchar("condition", { length: 255 }), // e.g., "Passed", "Screen Fail"
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -204,14 +207,15 @@ export type InsertPhaseTransition = typeof phaseTransitions.$inferInsert;
 /**
  * Protocol sections - for the Protocol Map sidebar
  */
-export const protocolSections = mysqlTable("protocolSections", {
-  id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
+export const protocolSections = bffSchema.table("protocolSections", {
+  id: serial("id").primaryKey(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   pageReference: varchar("pageReference", { length: 50 }), // e.g., "p. 63-72"
   dateReference: varchar("dateReference", { length: 50 }), // e.g., "Mar 28"
-  orderIndex: int("orderIndex").notNull(),
-  parentSectionId: int("parentSectionId"), // For nested sections
+  orderIndex: integer("orderIndex").notNull(),
+  parentSectionId: integer("parentSectionId"), // For nested sections
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -224,36 +228,10 @@ export type InsertProtocolSection = typeof protocolSections.$inferInsert;
  * ============================================================
  */
 
-export const mapStatusEnum = mysqlEnum("map_status", ["draft", "active", "revised", "archived"]);
-export const phaseTypeEnum = mysqlEnum("phase_type", [
-  "screening",
-  "baseline",
-  "treatment_visit",
-  "follow_up",
-  "end_of_study",
-  "unscheduled",
-  "screen_fail",
-  "early_termination",
-  "custom",
-]);
-export const taskCategoryEnum = mysqlEnum("task_category", [
-  "consent",
-  "eligibility",
-  "lab_sample",
-  "vital_signs",
-  "imaging",
-  "drug_administration",
-  "assessment",
-  "questionnaire",
-  "data_entry",
-  "coordination",
-  "documentation",
-  "follow_up",
-  "safety_reporting",
-  "regulatory",
-  "custom",
-]);
-export const taskPriorityEnum = mysqlEnum("task_priority", ["critical", "high", "medium", "low"]);
+export const mapStatusEnum = text("map_status").$type<"draft" | "active" | "revised" | "archived">();
+export const phaseTypeEnum = text("phase_type");
+export const taskCategoryEnum = text("task_category");
+export const taskPriorityEnum = text("task_priority").$type<"critical" | "high" | "medium" | "low">();
 const taskStatusValues = [
   "suggested",
   "confirmed",
@@ -265,53 +243,28 @@ const taskStatusValues = [
   "skipped",
   "cancelled",
 ] as const;
-export const taskStatusEnum = mysqlEnum("task_status", taskStatusValues);
-export const taskRoleEnum = mysqlEnum("task_role", [
-  "pi",
-  "sub_i",
-  "crc",
-  "nurse",
-  "pharmacist",
-  "lab_tech",
-  "data_manager",
-  "regulatory_coordinator",
-  "study_coordinator",
-  "custom",
-]);
-export const dependencyTypeEnum = mysqlEnum("dependency_type", [
-  "finish_to_start",
-  "start_to_start",
-  "finish_to_finish",
-  "concurrent",
-  "blocked_by",
-]);
-export const protocolMapSectionTypeEnum = mysqlEnum("protocol_map_section_type", [
-  "schedule",
-  "eligibility",
-  "procedure",
-  "safety",
-  "medication",
-  "randomization",
-  "lab",
-  "custom",
-]);
+export const taskStatusEnum = text("task_status").$type<typeof taskStatusValues[number]>();
+export const taskRoleEnum = text("task_role");
+export const dependencyTypeEnum = text("dependency_type");
+export const protocolMapSectionTypeEnum = text("protocol_map_section_type");
 
 /**
  * execution_maps: top-level execution plan container per trial.
  */
-export const executionMaps = mysqlTable(
+export const executionMaps = bffSchema.table(
   "execution_maps",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
-    protocolId: int("protocolId").notNull(),
-    status: mapStatusEnum.default("draft").notNull(),
-    version: int("version").default(1).notNull(),
-    metadata: json("metadata").notNull(),
-    createdBy: int("createdBy").notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
+    // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
+    status: text("status").$type<"draft" | "active" | "revised" | "archived">().default("draft").notNull().default("draft").notNull(),
+    version: integer("version").default(1).notNull(),
+    metadata: jsonb("metadata").notNull(),
+    createdBy: integer("createdBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     launchedAt: timestamp("launchedAt"),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     trialIdx: index("idx_maps_trial").on(table.trialId),
@@ -322,23 +275,23 @@ export const executionMaps = mysqlTable(
 /**
  * phases: grouped trial workflow units.
  */
-export const mapPhases = mysqlTable(
+export const mapPhases = bffSchema.table(
   "map_phases",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     phaseType: phaseTypeEnum.default("custom").notNull(),
-    displayOrder: int("displayOrder").notNull(),
+    displayOrder: integer("displayOrder").notNull(),
     color: varchar("color", { length: 7 }).default("#3B82F6").notNull(),
     estimatedDate: timestamp("estimatedDate"),
     windowStart: timestamp("windowStart"),
     windowEnd: timestamp("windowEnd"),
-    protocolRef: json("protocolRef"),
-    canvasX: float("canvasX"),
-    canvasY: float("canvasY"),
+    protocolRef: jsonb("protocolRef"),
+    canvasX: real("canvasX"),
+    canvasY: real("canvasY"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     mapOrderIdx: index("idx_map_phases_map_order").on(table.mapId, table.displayOrder),
@@ -348,7 +301,7 @@ export const mapPhases = mysqlTable(
 /**
  * phase transitions: patient journey edges between phases.
  */
-export const mapPhaseTransitions = mysqlTable(
+export const mapPhaseTransitions = bffSchema.table(
   "map_phase_transitions",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
@@ -368,7 +321,7 @@ export const mapPhaseTransitions = mysqlTable(
 /**
  * map tasks: sticky notes of execution.
  */
-export const mapTasks = mysqlTable(
+export const mapTasks = bffSchema.table(
   "map_tasks",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
@@ -382,24 +335,24 @@ export const mapTasks = mysqlTable(
     blockedReason: text("blockedReason"),
     blockedSince: timestamp("blockedSince"),
     assignedRole: taskRoleEnum,
-    assignedUserId: int("assignedUserId"),
+    assignedUserId: integer("assignedUserId"),
     suggestedAssignee: varchar("suggestedAssignee", { length: 255 }),
     suggestedDate: timestamp("suggestedDate"),
     dueDate: timestamp("dueDate"),
-    estimatedDuration: int("estimatedDuration"),
+    estimatedDuration: integer("estimatedDuration"),
     startDate: timestamp("startDate"),
     completedDate: timestamp("completedDate"),
-    orderInPhase: int("orderInPhase").default(0).notNull(),
-    canvasX: float("canvasX"),
-    canvasY: float("canvasY"),
-    createdBy: mysqlEnum("map_task_created_by", ["ai", "user"]).default("ai").notNull(),
-    aiConfidence: float("aiConfidence"),
+    orderInPhase: integer("orderInPhase").default(0).notNull(),
+    canvasX: real("canvasX"),
+    canvasY: real("canvasY"),
+    createdBy: text("map_task_created_by").$type<"ai" | "user">().default("ai").notNull().$type<"ai" | "user">().default("ai").notNull().default("ai").notNull(),
+    aiConfidence: real("aiConfidence"),
     conditionalNote: text("conditionalNote"),
     isCustom: boolean("isCustom").default(false).notNull(),
-    tags: json("tags").notNull(),
-    protocolRefs: json("protocolRefs").notNull(),
+    tags: jsonb("tags").notNull(),
+    protocolRefs: jsonb("protocolRefs").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     phaseOrderIdx: index("idx_map_tasks_phase_order").on(table.phaseId, table.orderInPhase),
@@ -413,7 +366,7 @@ export const mapTasks = mysqlTable(
 /**
  * task dependency graph edges.
  */
-export const mapTaskDependencies = mysqlTable(
+export const mapTaskDependencies = bffSchema.table(
   "map_task_dependencies",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
@@ -434,21 +387,22 @@ export const mapTaskDependencies = mysqlTable(
 /**
  * left-side protocol map sections with task/phase links.
  */
-export const protocolMapSections = mysqlTable(
+export const protocolMapSections = bffSchema.table(
   "protocol_map_sections",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    protocolId: int("protocolId").notNull(),
+    // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
     name: varchar("name", { length: 255 }).notNull(),
     sectionType: protocolMapSectionTypeEnum.default("custom").notNull(),
-    pageStart: int("pageStart"),
-    pageEnd: int("pageEnd"),
+    pageStart: integer("pageStart"),
+    pageEnd: integer("pageEnd"),
     dateReference: timestamp("dateReference"),
     parentSectionId: varchar("parentSectionId", { length: 36 }),
-    linkedPhaseIds: json("linkedPhaseIds").notNull(),
-    linkedTaskIds: json("linkedTaskIds").notNull(),
-    displayOrder: int("displayOrder").default(0).notNull(),
+    linkedPhaseIds: jsonb("linkedPhaseIds").notNull(),
+    linkedTaskIds: jsonb("linkedTaskIds").notNull(),
+    displayOrder: integer("displayOrder").default(0).notNull(),
     isChecked: boolean("isChecked").default(true).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -461,17 +415,17 @@ export const protocolMapSections = mysqlTable(
 /**
  * high-resolution map telemetry events (data moat for map interactions).
  */
-export const mapTelemetryEvents = mysqlTable(
+export const mapTelemetryEvents = bffSchema.table(
   "map_telemetry_events",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     eventType: varchar("eventType", { length: 100 }).notNull(),
-    userId: int("userId"),
+    userId: integer("userId"),
     targetId: varchar("targetId", { length: 36 }),
     targetType: varchar("targetType", { length: 32 }),
-    payload: json("payload").notNull(),
+    payload: jsonb("payload").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -484,21 +438,21 @@ export const mapTelemetryEvents = mysqlTable(
 /**
  * durable task status ledger (entered/exited windows per status).
  */
-export const mapTaskStatusHistory = mysqlTable(
+export const mapTaskStatusHistory = bffSchema.table(
   "map_task_status_history",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     mapId: varchar("mapId", { length: 36 }).notNull(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     taskId: varchar("taskId", { length: 36 }).notNull(),
-    fromStatus: mysqlEnum("fromStatus", taskStatusValues),
-    toStatus: mysqlEnum("toStatus", taskStatusValues).notNull(),
+    fromStatus: text("status").$type<typeof taskStatusValues[number]>(),
+    toStatus: text("status").$type<typeof taskStatusValues[number]>().notNull(),
     reason: text("reason"),
     source: varchar("source", { length: 32 }).default("status_change").notNull(),
-    changedBy: int("changedBy"),
+    changedBy: integer("changedBy"),
     enteredAt: timestamp("enteredAt").defaultNow().notNull(),
     exitedAt: timestamp("exitedAt"),
-    durationSeconds: int("durationSeconds"),
+    durationSeconds: integer("durationSeconds"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -535,21 +489,22 @@ export type InsertMapTaskStatusHistory = typeof mapTaskStatusHistory.$inferInser
 /**
  * Protocol chunks - section-aware chunks for local context retrieval and citation grounding.
  */
-export const protocolChunks = mysqlTable("protocolChunks", {
-  id: int("id").autoincrement().primaryKey(),
-  protocolId: int("protocolId").notNull(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
-  chunkIndex: int("chunkIndex").notNull(),
+export const protocolChunks = bffSchema.table("protocolChunks", {
+  id: serial("id").primaryKey(),
+  // Holds the BE `trial_documents` UUID (the FE `protocols` table is retired).
+  protocolId: varchar("protocolId", { length: 36 }).notNull(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
+  chunkIndex: integer("chunkIndex").notNull(),
   sectionType: varchar("sectionType", { length: 64 }).notNull(), // synopsis, visit, criteria, safety, etc.
   sectionTitle: varchar("sectionTitle", { length: 255 }),
-  pageStart: int("pageStart"),
-  pageEnd: int("pageEnd"),
-  tokenEstimate: int("tokenEstimate"),
+  pageStart: integer("pageStart"),
+  pageEnd: integer("pageEnd"),
+  tokenEstimate: integer("tokenEstimate"),
   contentHash: varchar("contentHash", { length: 64 }).notNull(),
   chunkText: text("chunkText").notNull(),
-  metadata: json("metadata"),
+  metadata: jsonb("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type ProtocolChunk = typeof protocolChunks.$inferSelect;
@@ -559,13 +514,13 @@ export type InsertProtocolChunk = typeof protocolChunks.$inferInsert;
  * Vector Stores - tracks OpenAI Vector Stores (one per trial)
  * Each store is a managed vector database in OpenAI's cloud for RAG
  */
-export const fileSearchStores = mysqlTable("fileSearchStores", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull().unique(), // One store per trial
+export const fileSearchStores = bffSchema.table("fileSearchStores", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull().unique(), // One store per trial
   storeName: varchar("storeName", { length: 255 }).notNull().unique(), // OpenAI Vector Store ID (e.g., 'vs_abc123')
   displayName: varchar("displayName", { length: 255 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type FileSearchStore = typeof fileSearchStores.$inferSelect;
@@ -574,10 +529,10 @@ export type InsertFileSearchStore = typeof fileSearchStores.$inferInsert;
 /**
  * Vector Store Documents - tracks documents uploaded to OpenAI Vector Stores
  */
-export const fileSearchDocuments = mysqlTable("fileSearchDocuments", {
-  id: int("id").autoincrement().primaryKey(),
-  storeId: int("storeId").notNull(), // Reference to fileSearchStores
-  protocolId: int("protocolId").notNull(), // Reference to protocols table
+export const fileSearchDocuments = bffSchema.table("fileSearchDocuments", {
+  id: serial("id").primaryKey(),
+  storeId: integer("storeId").notNull(), // Reference to fileSearchStores
+  protocolId: varchar("protocolId", { length: 36 }).notNull(), // BE document UUID (protocols table retired)
   documentName: varchar("documentName", { length: 255 }).notNull(), // OpenAI File ID (e.g., 'file_abc123')
   displayName: varchar("displayName", { length: 255 }).notNull(),
   uploadedAt: timestamp("uploadedAt").defaultNow().notNull(),
@@ -589,8 +544,8 @@ export type InsertFileSearchDocument = typeof fileSearchDocuments.$inferInsert;
 /**
  * Document categories - predefined and custom categories for document uploads
  */
-export const documentCategories = mysqlTable("documentCategories", {
-  id: int("id").autoincrement().primaryKey(),
+export const documentCategories = bffSchema.table("documentCategories", {
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 100 }).notNull().unique(),
   isDefault: boolean("isDefault").default(false).notNull(), // Predefined categories
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -602,7 +557,7 @@ export type InsertDocumentCategory = typeof documentCategories.$inferInsert;
 /**
  * Telemetry events - user actions and AI interactions
  */
-export const telemetryEvents = mysqlTable("telemetry_events", {
+export const telemetryEvents = bffSchema.table("telemetry_events", {
   id: varchar("id", { length: 36 }).primaryKey(),
   eventType: varchar("eventType", { length: 100 }).notNull(),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
@@ -611,11 +566,11 @@ export const telemetryEvents = mysqlTable("telemetry_events", {
   entityType: varchar("entityType", { length: 64 }),
   entityId: varchar("entityId", { length: 128 }),
   action: varchar("action", { length: 64 }).notNull(),
-  payload: json("payload"),
-  durationMs: int("durationMs"),
+  payload: jsonb("payload"),
+  durationMs: integer("durationMs"),
   aiInvolved: boolean("aiInvolved").default(false).notNull(),
   aiOutput: text("aiOutput"),
-  aiSources: json("aiSources"),
+  aiSources: jsonb("aiSources"),
   userCorrection: text("userCorrection"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
@@ -627,15 +582,15 @@ export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;
  * AI feature snapshots - model-ready trial features captured over time.
  * Foundation for offline training and longitudinal analytics.
  */
-export const aiFeatureSnapshots = mysqlTable("ai_feature_snapshots", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+export const aiFeatureSnapshots = bffSchema.table("ai_feature_snapshots", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   snapshotDate: varchar("snapshotDate", { length: 10 }).notNull(), // YYYY-MM-DD
   snapshotVersion: varchar("snapshotVersion", { length: 32 }).default("v1").notNull(),
-  featureVector: json("featureVector").notNull(),
-  readinessScore: int("readinessScore").default(0).notNull(),
-  riskScore: int("riskScore").default(0).notNull(),
-  aiCoverageScore: int("aiCoverageScore").default(0).notNull(),
+  featureVector: jsonb("featureVector").notNull(),
+  readinessScore: integer("readinessScore").default(0).notNull(),
+  riskScore: integer("riskScore").default(0).notNull(),
+  aiCoverageScore: integer("aiCoverageScore").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -645,22 +600,22 @@ export type InsertAiFeatureSnapshot = typeof aiFeatureSnapshots.$inferInsert;
 /**
  * AI analytics rollups - day-level operational rollups for cross-trial insights.
  */
-export const aiAnalyticsRollups = mysqlTable("ai_analytics_rollups", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+export const aiAnalyticsRollups = bffSchema.table("ai_analytics_rollups", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   rollupDate: varchar("rollupDate", { length: 10 }).notNull(), // YYYY-MM-DD
-  documentTotal: int("documentTotal").default(0).notNull(),
-  documentIndexed: int("documentIndexed").default(0).notNull(),
-  taskTotal: int("taskTotal").default(0).notNull(),
-  taskPending: int("taskPending").default(0).notNull(),
-  taskBlocked: int("taskBlocked").default(0).notNull(),
-  taskCompleted: int("taskCompleted").default(0).notNull(),
-  telemetryEvents7d: int("telemetryEvents7d").default(0).notNull(),
-  aiInvolvedEvents7d: int("aiInvolvedEvents7d").default(0).notNull(),
-  aiUsageRateBps: int("aiUsageRateBps").default(0).notNull(), // 0..10000
-  riskScore: int("riskScore").default(0).notNull(), // 0..100
+  documentTotal: integer("documentTotal").default(0).notNull(),
+  documentIndexed: integer("documentIndexed").default(0).notNull(),
+  taskTotal: integer("taskTotal").default(0).notNull(),
+  taskPending: integer("taskPending").default(0).notNull(),
+  taskBlocked: integer("taskBlocked").default(0).notNull(),
+  taskCompleted: integer("taskCompleted").default(0).notNull(),
+  telemetryEvents7d: integer("telemetryEvents7d").default(0).notNull(),
+  aiInvolvedEvents7d: integer("aiInvolvedEvents7d").default(0).notNull(),
+  aiUsageRateBps: integer("aiUsageRateBps").default(0).notNull(), // 0..10000
+  riskScore: integer("riskScore").default(0).notNull(), // 0..100
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type AiAnalyticsRollup = typeof aiAnalyticsRollups.$inferSelect;
@@ -669,16 +624,16 @@ export type InsertAiAnalyticsRollup = typeof aiAnalyticsRollups.$inferInsert;
 /**
  * AI training examples - captures supervised signals from user behavior and corrections.
  */
-export const aiTrainingExamples = mysqlTable("ai_training_examples", {
-  id: int("id").autoincrement().primaryKey(),
+export const aiTrainingExamples = bffSchema.table("ai_training_examples", {
+  id: serial("id").primaryKey(),
   sourceEventId: varchar("sourceEventId", { length: 36 }),
-  trialId: varchar("trialId", { length: 50 }),
+  trialId: varchar("trialId", { length: 36 }),
   userId: varchar("userId", { length: 64 }),
   prompt: text("prompt"),
   response: text("response"),
   label: varchar("label", { length: 32 }).default("unknown").notNull(), // accepted|rejected|edited|unknown
   correction: text("correction"),
-  metadata: json("metadata"),
+  metadata: jsonb("metadata"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -688,15 +643,15 @@ export type InsertAiTrainingExample = typeof aiTrainingExamples.$inferInsert;
 /**
  * Knowledge graph nodes - persisted entities for graph queries.
  */
-export const knowledgeGraphNodes = mysqlTable("knowledge_graph_nodes", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+export const knowledgeGraphNodes = bffSchema.table("knowledge_graph_nodes", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   nodeType: varchar("nodeType", { length: 64 }).notNull(),
   nodeKey: varchar("nodeKey", { length: 191 }).notNull(),
   displayName: varchar("displayName", { length: 255 }),
-  properties: json("properties"),
+  properties: jsonb("properties"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
 });
 
 export type KnowledgeGraphNode = typeof knowledgeGraphNodes.$inferSelect;
@@ -705,13 +660,13 @@ export type InsertKnowledgeGraphNode = typeof knowledgeGraphNodes.$inferInsert;
 /**
  * Knowledge graph edges - persisted relationships between entities.
  */
-export const knowledgeGraphEdges = mysqlTable("knowledge_graph_edges", {
-  id: int("id").autoincrement().primaryKey(),
-  trialId: varchar("trialId", { length: 50 }).notNull(),
+export const knowledgeGraphEdges = bffSchema.table("knowledge_graph_edges", {
+  id: serial("id").primaryKey(),
+  trialId: varchar("trialId", { length: 36 }).notNull(),
   edgeType: varchar("edgeType", { length: 64 }).notNull(),
   fromNodeKey: varchar("fromNodeKey", { length: 191 }).notNull(),
   toNodeKey: varchar("toNodeKey", { length: 191 }).notNull(),
-  properties: json("properties"),
+  properties: jsonb("properties"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
@@ -724,81 +679,32 @@ export type InsertKnowledgeGraphEdge = typeof knowledgeGraphEdges.$inferInsert;
  * ============================================================
  */
 
-export const collabConversationTypeEnum = mysqlEnum("collab_conversation_type", ["direct", "group"]);
-export const collabSenderTypeEnum = mysqlEnum("collab_sender_type", [
-  "user",
-  "ai",
-  "system",
-  "email_external",
-]);
-export const collabMessageContentTypeEnum = mysqlEnum("collab_message_content_type", [
-  "text",
-  "protocol_snippet",
-  "task_card",
-  "ai_response",
-  "email",
-]);
-export const collabThreadCategoryEnum = mysqlEnum("collab_thread_category", [
-  "question",
-  "decision",
-  "issue",
-  "action_required",
-  "approval",
-  "clarification",
-]);
-export const collabThreadStatusEnum = mysqlEnum("collab_thread_status", [
-  "open",
-  "pending",
-  "resolved",
-  "closed",
-]);
-export const collabThreadAnchorTypeEnum = mysqlEnum("collab_thread_anchor_type", [
-  "document_section",
-  "task",
-  "visit",
-  "trial_wide",
-  "therapeutic_area",
-  "team_member",
-]);
-export const collabEmailFolderEnum = mysqlEnum("collab_email_folder", [
-  "inbox",
-  "sent",
-  "drafts",
-  "archived",
-]);
-export const collabEmailPriorityEnum = mysqlEnum("collab_email_priority", ["high", "medium", "low"]);
-export const collabCrossRefSourceEntityTypeEnum = mysqlEnum("collab_cross_ref_source_entity_type", [
-  "message",
-  "thread",
-  "email_chain",
-  "task",
-]);
-export const collabCrossRefTargetEntityTypeEnum = mysqlEnum("collab_cross_ref_target_entity_type", [
-  "message",
-  "thread",
-  "email_chain",
-  "task",
-]);
-export const collabCrossRefTypeEnum = mysqlEnum("collab_cross_ref_type", [
-  "manual",
-  "ai_suggested",
-  "spawned_from",
-]);
-export const collabLayerEnum = mysqlEnum("collab_layer", ["messages", "threads", "inbox"]);
+export const collabConversationTypeEnum = text("collab_conversation_type").$type<"direct" | "group">();
+export const collabSenderTypeEnum = text("collab_sender_type");
+export const collabMessageContentTypeEnum = text("collab_message_content_type");
+export const collabThreadCategoryEnum = text("collab_thread_category");
+export const collabThreadStatusEnum = text("collab_thread_status");
+export const collabThreadAnchorTypeEnum = text("collab_thread_anchor_type");
+export const collabEmailFolderEnum = text("collab_email_folder");
+export const collabEmailPriorityEnum = text("collab_email_priority").$type<"high" | "medium" | "low">();
+export const collabCrossRefSourceEntityTypeEnum = text("collab_cross_ref_source_entity_type");
+export const collabCrossRefTargetEntityTypeEnum = text("collab_cross_ref_target_entity_type");
+export const collabCrossRefTypeEnum = text("collab_cross_ref_type");
+export const collabLayerEnum = text("collab_layer").$type<"messages" | "threads" | "inbox">();
 
 /**
  * Conversations for direct/group collaboration.
  */
-export const conversations = mysqlTable(
+export const conversations = bffSchema.table(
   "conversations",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     type: collabConversationTypeEnum.notNull(),
     name: varchar("name", { length: 255 }),
-    createdBy: int("createdBy").notNull(),
+    createdBy: integer("createdBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     trialIdx: index("idx_collab_conversations_trial").on(table.trialId),
@@ -810,12 +716,12 @@ export const conversations = mysqlTable(
 /**
  * Conversation participants.
  */
-export const conversationParticipants = mysqlTable(
+export const conversationParticipants = bffSchema.table(
   "conversation_participants",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     conversationId: varchar("conversationId", { length: 36 }).notNull(),
-    userId: int("userId").notNull(),
+    userId: integer("userId").notNull(),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
     lastReadAt: timestamp("lastReadAt"),
   },
@@ -829,22 +735,22 @@ export const conversationParticipants = mysqlTable(
 /**
  * Structured threads for decisions/issues.
  */
-export const threads = mysqlTable(
+export const threads = bffSchema.table(
   "threads",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     title: varchar("title", { length: 500 }).notNull(),
     category: collabThreadCategoryEnum.notNull(),
     status: collabThreadStatusEnum.default("open").notNull(),
-    resolvedBy: int("resolvedBy"),
+    resolvedBy: integer("resolvedBy"),
     resolvedAt: timestamp("resolvedAt"),
     resolutionSummary: text("resolutionSummary"),
     aiContributed: boolean("aiContributed").default(false).notNull(),
     aiResolutionSuggested: boolean("aiResolutionSuggested").default(false).notNull(),
-    createdBy: int("createdBy").notNull(),
+    createdBy: integer("createdBy").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     trialIdx: index("idx_collab_threads_trial").on(table.trialId),
@@ -858,7 +764,7 @@ export const threads = mysqlTable(
 /**
  * Thread anchors for traceable context.
  */
-export const threadAnchors = mysqlTable(
+export const threadAnchors = bffSchema.table(
   "thread_anchors",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
@@ -878,12 +784,12 @@ export const threadAnchors = mysqlTable(
 /**
  * Thread participants.
  */
-export const threadParticipants = mysqlTable(
+export const threadParticipants = bffSchema.table(
   "thread_participants",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     threadId: varchar("threadId", { length: 36 }).notNull(),
-    userId: int("userId").notNull(),
+    userId: integer("userId").notNull(),
     joinedAt: timestamp("joinedAt").defaultNow().notNull(),
     lastReadAt: timestamp("lastReadAt"),
   },
@@ -897,11 +803,11 @@ export const threadParticipants = mysqlTable(
 /**
  * Trial-scoped inbox configuration.
  */
-export const trialInboxes = mysqlTable(
+export const trialInboxes = bffSchema.table(
   "trial_inboxes",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
     emailAddress: varchar("emailAddress", { length: 320 }).notNull(),
     isActive: boolean("isActive").default(true).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -915,27 +821,27 @@ export const trialInboxes = mysqlTable(
 /**
  * Email chains in trial inboxes.
  */
-export const emailChains = mysqlTable(
+export const emailChains = bffSchema.table(
   "email_chains",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     inboxId: varchar("inboxId", { length: 36 }).notNull(),
     subject: varchar("subject", { length: 500 }).notNull(),
     folder: collabEmailFolderEnum.default("inbox").notNull(),
-    aiLabels: json("aiLabels"),
+    aiLabels: jsonb("aiLabels"),
     aiPriority: collabEmailPriorityEnum,
     aiSummary: text("aiSummary"),
     aiSuggestedThreadId: varchar("aiSuggestedThreadId", { length: 36 }),
     linkedThreadId: varchar("linkedThreadId", { length: 36 }),
     fromAddress: varchar("fromAddress", { length: 320 }),
     fromName: varchar("fromName", { length: 255 }),
-    toAddresses: json("toAddresses"),
-    ccAddresses: json("ccAddresses"),
-    messageCount: int("messageCount").default(0).notNull(),
+    toAddresses: jsonb("toAddresses"),
+    ccAddresses: jsonb("ccAddresses"),
+    messageCount: integer("messageCount").default(0).notNull(),
     isRead: boolean("isRead").default(false).notNull(),
     isStarred: boolean("isStarred").default(false).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
-    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().$onUpdateFn(() => new Date()).notNull(),
   },
   (table) => ({
     inboxIdx: index("idx_collab_email_chains_inbox").on(table.inboxId),
@@ -950,23 +856,23 @@ export const emailChains = mysqlTable(
 /**
  * Unified message object for messages, threads, and inbox chains.
  */
-export const messages = mysqlTable(
+export const messages = bffSchema.table(
   "messages",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     conversationId: varchar("conversationId", { length: 36 }),
     threadId: varchar("threadId", { length: 36 }),
     emailChainId: varchar("emailChainId", { length: 36 }),
-    senderId: int("senderId"),
+    senderId: integer("senderId"),
     senderType: collabSenderTypeEnum.default("user").notNull(),
     senderName: varchar("senderName", { length: 255 }),
     senderEmail: varchar("senderEmail", { length: 320 }),
     content: text("content").notNull(),
     contentType: collabMessageContentTypeEnum.default("text").notNull(),
-    embeddedContent: json("embeddedContent"),
+    embeddedContent: jsonb("embeddedContent"),
     isAiGenerated: boolean("isAiGenerated").default(false).notNull(),
     aiModel: varchar("aiModel", { length: 100 }),
-    aiLatencyMs: int("aiLatencyMs"),
+    aiLatencyMs: integer("aiLatencyMs"),
     editedAt: timestamp("editedAt"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -982,7 +888,7 @@ export const messages = mysqlTable(
 /**
  * Cross-layer references among collaboration entities.
  */
-export const crossReferences = mysqlTable(
+export const crossReferences = bffSchema.table(
   "cross_references",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
@@ -991,7 +897,7 @@ export const crossReferences = mysqlTable(
     targetType: collabCrossRefTargetEntityTypeEnum.notNull(),
     targetId: varchar("targetId", { length: 36 }).notNull(),
     refType: collabCrossRefTypeEnum.default("manual").notNull(),
-    createdBy: int("createdBy"),
+    createdBy: integer("createdBy"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (table) => ({
@@ -1003,18 +909,18 @@ export const crossReferences = mysqlTable(
 /**
  * Collaboration telemetry events.
  */
-export const collabTelemetryEvents = mysqlTable(
+export const collabTelemetryEvents = bffSchema.table(
   "collab_telemetry_events",
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    trialId: varchar("trialId", { length: 50 }).notNull(),
-    userId: int("userId"),
+    trialId: varchar("trialId", { length: 36 }).notNull(),
+    userId: integer("userId"),
     eventType: varchar("eventType", { length: 120 }).notNull(),
-    eventData: json("eventData").notNull(),
+    eventData: jsonb("eventData").notNull(),
     layer: collabLayerEnum.notNull(),
     aiInvolved: boolean("aiInvolved").default(false).notNull(),
     aiModel: varchar("aiModel", { length: 100 }),
-    aiLatencyMs: int("aiLatencyMs"),
+    aiLatencyMs: integer("aiLatencyMs"),
     aiAccepted: boolean("aiAccepted"),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },

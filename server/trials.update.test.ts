@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { randomUUID } from 'crypto';
 import { appRouter } from './routers';
-import { getDb } from './db';
-import { trials } from '../drizzle/schema';
-import { eq } from 'drizzle-orm';
 
 describe('trials.update', () => {
   const caller = appRouter.createCaller({
@@ -11,11 +9,11 @@ describe('trials.update', () => {
     res: {} as any,
   });
 
-  const testTrialId = 'test-trial-update-' + Date.now();
+  let testTrialId = randomUUID();
 
   beforeAll(async () => {
     // Create a test trial
-    await caller.trials.create({
+    const created = await caller.trials.create({
       id: testTrialId,
       title: 'Original Title',
       protocolNumber: 'TEST-001',
@@ -28,6 +26,7 @@ describe('trials.update', () => {
       targetPatients: 10,
       completionPercentage: 0,
     });
+    testTrialId = created.id;
   });
 
   it('should update trial title', async () => {
@@ -132,24 +131,18 @@ describe('trials.update', () => {
     expect(result?.sponsor).toBe('Multi-Update Sponsor');
   });
 
-  it('should return updated trial from database', async () => {
-    const db = await getDb();
-    if (!db) throw new Error('Database not available');
-
+  it('should persist the updated trial (read-back via the BE)', async () => {
     // Update via tRPC
     await caller.trials.update({
       id: testTrialId,
       title: 'Database Verification Title',
     });
 
-    // Verify in database directly
-    const [trial] = await db
-      .select()
-      .from(trials)
-      .where(eq(trials.id, testTrialId))
-      .limit(1);
+    // Trials are BE-owned now — verify persistence through the read path
+    // (the FE `trials` table is retired) rather than a direct DB read.
+    const trial = await caller.trials.getById({ id: testTrialId });
 
     expect(trial).toBeDefined();
-    expect(trial.title).toBe('Database Verification Title');
+    expect(trial?.title).toBe('Database Verification Title');
   });
 });

@@ -23,6 +23,7 @@ import Home3 from "./pages/Home3";
 import Home4 from "./pages/Home4";
 import { TrialWorkspace } from "./pages/TrialWorkspace";
 import TrialDetail from "./pages/TrialDetail";
+import PatientDetail from "./pages/PatientDetail";
 import DocumentAIAssistant from "./pages/DocumentAIAssistant";
 import Tasks from "./pages/Tasks";
 import Collaboration from "./pages/Collaboration";
@@ -173,10 +174,11 @@ function Router() {
   let breadcrumbs = breadcrumbsMap[locationPath] || [];
   let breadcrumbIcon = iconMap[locationPath];
   
-  // Check if we're on a trial detail page
+  // Check if we're on a trial detail page or patient detail page
   if (locationPath.startsWith('/trial/')) {
+    const parts = locationPath.split('/');
+    const trialId = parts[2];
     if (locationPath.endsWith('/assistant')) {
-      const trialId = locationPath.split('/')[2];
       breadcrumbs = [
         { label: "Workspace", href: "/" },
         { label: "Trial Workspace", href: "/trial-workspace" },
@@ -184,13 +186,21 @@ function Router() {
         { label: "Document AI Assistant" },
       ];
       breadcrumbIcon = FileText;
+    } else if (locationPath.includes('/patient/')) {
+      breadcrumbs = [
+        { label: "Clinical Hub", href: "/" },
+        { label: "Trial Workspace", href: "/trial-workspace" },
+        { label: trialId ? `Trial ${trialId}` : "Trial", href: `/trial/${trialId}` },
+        { label: "Patient Profile" },
+      ];
+      breadcrumbIcon = Home;
     } else {
-    breadcrumbs = [
-      { label: "Clinical Hub", href: "/" },
-      { label: "Trial Workspace", href: "/trial-workspace" },
-      { label: "Trial Details" },
-    ];
-    breadcrumbIcon = TrialElements;
+      breadcrumbs = [
+        { label: "Clinical Hub", href: "/" },
+        { label: "Trial Workspace", href: "/trial-workspace" },
+        { label: "Trial Details" },
+      ];
+      breadcrumbIcon = TrialElements;
     }
   }
 
@@ -207,6 +217,9 @@ function Router() {
         <Route path="/trial-workspace" component={TrialWorkspace} />
         <Route path="/trial/:id/assistant">{(params) => (
           <DocumentAIAssistant trialId={params.id} />
+        )}</Route>
+        <Route path="/trial/:id/patient/:patientId">{(params) => (
+          <PatientDetail trialId={params.id} patientId={params.patientId} />
         )}</Route>
         <Route path="/trial/:id" component={TrialDetail} />
         <Route path="/documents">{() => {
@@ -243,7 +256,7 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider
         defaultTheme="light"
-        // switchable
+        switchable={true}
       >
         <SidebarProvider>
           <SidebarNavProvider>

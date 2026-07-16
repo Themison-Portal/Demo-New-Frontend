@@ -14,7 +14,16 @@
 // Document — mirrors `DocumentResponse` from app/contracts/document.py
 // ---------------------------------------------------------------------------
 
-export type IngestionStatus = "queued" | "processing" | "ready" | "failed" | null;
+// The document column is set to queued/processing/ready/failed, but the RAG
+// job-status vocabulary (complete/error) can surface here too — accept both.
+export type IngestionStatus =
+  | "queued"
+  | "processing"
+  | "ready"
+  | "complete"
+  | "failed"
+  | "error"
+  | null;
 
 export interface CoreBackendTrialDocument {
   id: string;                            // UUID
@@ -35,6 +44,16 @@ export interface CoreBackendTrialDocument {
   warning: boolean | null;
   created_at: string;                    // ISO timestamp
   updated_at: string | null;             // ISO timestamp
+  // FE-only fields migrated from the (retired) FE `protocols` table.
+  category: string | null;               // free-text: 'Protocol' | 'Amendments' | ...
+  document_version: string | null;
+  amendment_version: string | null;
+  release_date: string | null;
+  is_current: boolean | null;
+  archived_at: string | null;            // ISO timestamp
+  source_type: string | null;            // manual | integration | system
+  source_reference: string | null;
+  uploaded_by_name: string | null;       // derived (joined members.name)
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +160,34 @@ export interface CoreBackendMultipartUploadInput {
   document_name: string;
   document_type?: string;                // default 'other' on the BE side
   description?: string;
+  // FE-only fields persisted on the BE document.
+  category?: string;
+  document_version?: string;
+  amendment_version?: string;
+  release_date?: string;
+  is_current?: boolean;
+  source_type?: string;
+  source_reference?: string;
+}
+
+// ---------------------------------------------------------------------------
+// PUT /api/trial-documents/{id} — mirrors DocumentUpdate (all optional)
+// ---------------------------------------------------------------------------
+
+export interface CoreBackendDocumentUpdate {
+  document_name?: string;
+  document_type?: string;
+  status?: string;
+  ingestion_status?: string;
+  description?: string;
+  category?: string;
+  document_version?: string;
+  amendment_version?: string;
+  release_date?: string;
+  is_current?: boolean;
+  archived_at?: string | null;
+  source_type?: string;
+  source_reference?: string;
 }
 
 // ---------------------------------------------------------------------------

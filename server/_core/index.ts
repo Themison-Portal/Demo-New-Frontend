@@ -7,73 +7,96 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import {
-  getLocalStorageRoot,
-  getLocalStorageRoute,
-  isUsingLocalStorage,
+    getLocalStorageRoot,
+    getLocalStorageRoute,
+    isUsingLocalStorage,
 } from "../storage";
+import { createProxyMiddleware } from "http-proxy-middleware";
 
 function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise(resolve => {
-    const server = net.createServer();
-    server.listen(port, () => {
-      server.close(() => resolve(true));
+    return new Promise(resolve => {
+        const server = net.createServer();
+        server.listen(port, "0.0.0.0", () => {
+            server.close(() => resolve(true));
+        });
+        server.on("error", () => resolve(false));
     });
-    server.on("error", () => resolve(false));
-  });
 }
 
 async function findAvailablePort(startPort: number = 3000): Promise<number> {
-  for (let port = startPort; port < startPort + 20; port++) {
-    if (await isPortAvailable(port)) {
-      return port;
+    for (let port = startPort; port < startPort + 20; port++) {
+        if (await isPortAvailable(port)) {
+            return port;
+        }
     }
-  }
-  throw new Error(`No available port found starting from ${startPort}`);
+    throw new Error(`No available port found starting from ${startPort}`);
 }
 
 async function startServer() {
-  const app = express();
-  const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  // OAuth callback under /api/oauth/callback
-  registerOAuthRoutes(app);
-  // Local-filesystem storage fallback (active when BUILT_IN_FORGE_*
-  // env vars aren't set). Serves files written by `storagePut` from
-  // `LOCAL_STORAGE_ROOT` so `extractPdfText(url)` and similar consumers
-  // can fetch them via HTTP. No-op when the Manus Forge proxy is in use.
-  if (isUsingLocalStorage()) {
-    app.use(getLocalStorageRoute(), express.static(getLocalStorageRoot()));
-    console.log(
-      `[Storage] Local-filesystem fallback active — serving ${getLocalStorageRoot()} at ${getLocalStorageRoute()}`
+    const app = express();
+    const server = createServer(app);
+
+    // // Configure body parser with larger size limit for file uploads
+    // app.use(express.json({ limit: "50mb" }));
+    // app.use(express.urlencoded({ limit: "50mb", extended: true }));
+    // Body parser — skip for proxy routes so stream is not consumed
+    app.use((req, res, next) => {
+        if (req.path.startsWith("/api/be")) return next();
+        express.json({ limit: "50mb" })(req, res, next);
+    });
+    app.use((req, res, next) => {
+        if (req.path.startsWith("/api/be")) return next();
+        express.urlencoded({ limit: "50mb", extended: true })(req, res, next);
+    });
+
+    // OAuth callback under /api/oauth/callback
+    registerOAuthRoutes(app);
+
+    // Local-filesystem storage fallback
+    if (isUsingLocalStorage()) {
+        app.use(getLocalStorageRoute(), express.static(getLocalStorageRoot()));
+        console.log(
+            `[Storage] Local-filesystem fallback active — serving ${getLocalStorageRoot()} at ${getLocalStorageRoute()}`
+        );
+    }
+
+    // tRPC API
+    app.use(
+        "/api/trpc",
+        createExpressMiddleware({
+            router: appRouter,
+            createContext,
+        })
     );
-  }
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
-  // development mode uses Vite, production mode uses static files
-  if (process.env.NODE_ENV === "development") {
-    await setupVite(app, server);
-  } else {
-    serveStatic(app);
-  }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+    // development mode uses Vite, production mode uses static files
+    if (process.env.NODE_ENV === "development") {
+        await setupVite(app, server);
+    } else {
+        serveStatic(app);
+    }
 
-  if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
-  }
+    // ─── Proxy /api/be/* → FastAPI BE ───────────────────────────────
+    // Must be AFTER setupVite so Vite middleware does not intercept it
+    app.use(
+        "/api/be",
+        createProxyMiddleware({
+            target: "http://localhost:8080",
+            changeOrigin: true,
+            pathRewrite: { "^/api/be": "" },
+        })
+    );
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
+    const preferredPort = parseInt(process.env.PORT || "3000");
+    const port = await findAvailablePort(preferredPort);
+
+    if (port !== preferredPort) {
+        console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    }
+
+    server.listen(port, "0.0.0.0", () => {
+        console.log(`Server running on http://localhost:${port}/`);
+    });
 }
 
 startServer().catch(console.error);

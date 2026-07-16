@@ -1,7 +1,3 @@
-import { eq } from "drizzle-orm";
-import { trials } from "../../drizzle/schema";
-import type { InferSelectModel } from "drizzle-orm";
-
 export type DemoMode = "sample" | "full" | "building";
 
 export function toDemoId(mode: DemoMode, id: string) {
@@ -47,29 +43,19 @@ function normalizeTargetPatients(rawTarget: unknown, sampleSize: unknown): numbe
 }
 
 export async function resolveTrialId(
-  db: { select: Function },
+  _db: { select: Function },
   mode: DemoMode,
   id: string,
-  allowLegacy = true
+  _allowLegacy = true
 ) {
-  const prefixed = toDemoId(mode, id);
-  const prefixedResult = await db
-    .select()
-    .from(trials)
-    .where(eq(trials.id, prefixed))
-    .limit(1);
-
-  if (prefixedResult.length > 0) return prefixed;
-
-  if (!allowLegacy) return prefixed;
-
-  const legacyResult = await db
-    .select()
-    .from(trials)
-    .where(eq(trials.id, id))
-    .limit(1);
-
-  return legacyResult.length > 0 ? id : prefixed;
+  // Trials are BE-owned; the FE `trials` table is retired. This no longer
+  // queries it — it deterministically returns the demo-prefixed FE trial key
+  // (the canonical string used for telemetry/display). Child tables and trial
+  // resolution use the BE trial UUID via `resolveBeTrialIdForRead`. An
+  // already-prefixed id is returned as-is. Kept async + same signature so the
+  // ~17 call sites don't need to change.
+  if (id.includes(":")) return id;
+  return toDemoId(mode, id);
 }
 
 export function serializeTrial<T extends { id: string }>(trial: T) {

@@ -2,6 +2,11 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "./_core/trpc";
 import { callBackend } from "./_core/backendClient";
+import { mapRouterLocal } from "./mapRouter.local";
+import { isConnectionError, checkBackendOnline, setBackendOffline } from "./_core/fallbackHelper";
+import { getDb } from "./db";
+import { resolveBeTrialIdForRead } from "./_core/coreBackendDocs";
+import type { DemoMode } from "./_core/demoMode";
 import type { Task, TaskCategory, TaskPriority, TaskStatus, ExecutionMap, TaskDependency, DependencyType } from "@shared/map";
 
 const TASK_STATUSES = [
@@ -151,12 +156,25 @@ export const mapRouter = router({
         demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
-        const trial = await callBackend(`/api/trials/${input.trialId}`, { user: ctx.user });
+        const db = await getDb();
+        if (!db) return null;
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        if (!beTrialId) return null;
+
+        const trial = await callBackend(`/api/trials/${beTrialId}`, { user: ctx.user });
         if (!trial) return null;
         return mockMap(input.trialId);
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for getByTrial.");
+          const caller = mapRouterLocal.createCaller(opts.ctx);
+          return caller.getByTrial(input);
+        }
         console.error("Error in getByTrial proxy:", err);
         return null;
       }
@@ -170,55 +188,99 @@ export const mapRouter = router({
         demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
-    .query(async ({ input, ctx }) => {
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
         const backendTasks = await callBackend<any[]>(`/api/tasks`, { user: ctx.user });
-        const trialIds = input.trialIds.length > 0 ? input.trialIds : Array.from(new Set(backendTasks.map(t => t.trial_id)));
+
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrials = await callBackend<any[]>("/api/trials", {
+          query: { demo_mode: mode },
+          user: ctx.user,
+        }).catch(() => []);
+
+        const slugToUuid = new Map<string, string>();
+        const uuidToSlug = new Map<string, string>();
+        for (const t of (beTrials ?? [])) {
+          const clientSlug = t.slug || t.id;
+          const beUuid = t.id;
+          slugToUuid.set(clientSlug, beUuid);
+          uuidToSlug.set(beUuid, clientSlug);
+        }
+
+        const trialSlugs = input.trialIds.length > 0
+          ? input.trialIds
+          : Array.from(new Set(backendTasks.map(t => uuidToSlug.get(t.trial_id) || t.trial_id)));
 
         // Fetch dependencies for each trial
         const dependenciesByTrial = new Map<string, any[]>();
-        for (const trialId of trialIds) {
+        for (const trialSlug of trialSlugs) {
+          const trialUuid = slugToUuid.get(trialSlug) || trialSlug;
           try {
             const deps = await callBackend<any[]>(`/api/task-dependencies`, {
-              query: { trial_id: trialId },
+              query: { trial_id: trialUuid },
               user: ctx.user,
             });
-            dependenciesByTrial.set(trialId, deps);
+            dependenciesByTrial.set(trialUuid, deps);
           } catch (depErr) {
-            console.error(`Error fetching dependencies for trial ${trialId}:`, depErr);
-            dependenciesByTrial.set(trialId, []);
+            console.error(`Error fetching dependencies for trial ${trialSlug} (UUID ${trialUuid}):`, depErr);
+            dependenciesByTrial.set(trialUuid, []);
           }
         }
 
-        return trialIds.map(trialId => {
-          const filtered = backendTasks.filter(t => t.trial_id === trialId);
-          const trialDeps = dependenciesByTrial.get(trialId) || [];
+        return trialSlugs.map(trialSlug => {
+          const trialUuid = slugToUuid.get(trialSlug) || trialSlug;
+          const filtered = backendTasks.filter(t => t.trial_id === trialUuid);
+          const trialDeps = dependenciesByTrial.get(trialUuid) || [];
           return {
-            map: mockMap(trialId),
-            phases: mockPhases(trialId),
-            tasks: filtered.map(t => mapBackendTaskToClient(t, trialId)),
+            map: mockMap(trialSlug),
+            phases: mockPhases(trialSlug),
+            tasks: filtered.map(t => mapBackendTaskToClient(t, trialSlug)),
             dependencies: trialDeps.map(mapBackendDependencyToClient),
             transitions: [],
             protocolMapSections: [],
           };
         });
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for loadWorkspace.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.loadWorkspace(input);
+        }
         console.error("Error in loadWorkspace proxy:", err);
         return [];
       }
     }),
 
   load: protectedProcedure
-    .input(z.object({ mapId: z.string() }))
-    .query(async ({ input, ctx }) => {
+    .input(
+      z.object({
+        mapId: z.string(),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
+      })
+    )
+    .query(async (opts) => {
+      const { input, ctx } = opts;
       try {
+        const db = await getDb();
+        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+        const mode = (input.demoMode ?? "sample") as DemoMode;
+        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.mapId);
+        if (!beTrialId) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Trial not found for mapId: ${input.mapId}`,
+          });
+        }
+
         const [backendTasks, backendDeps] = await Promise.all([
           callBackend<any[]>(`/api/tasks`, {
-            query: { trial_id: input.mapId },
+            query: { trial_id: beTrialId },
             user: ctx.user,
           }),
           callBackend<any[]>(`/api/task-dependencies`, {
-            query: { trial_id: input.mapId },
+            query: { trial_id: beTrialId },
             user: ctx.user,
           }).catch(err => {
             console.error("Failed to load task dependencies:", err);
@@ -235,6 +297,12 @@ export const mapRouter = router({
           protocolMapSections: [],
         };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for load.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.load({ mapId: input.mapId });
+        }
         console.error("Error in load proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -268,14 +336,27 @@ export const mapRouter = router({
           tags: z.any().optional(),
           orderInPhase: z.any().optional(),
         }),
+        demoMode: z.enum(["sample", "full", "building"]).optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       const trialId = input.mapId;
       const category = input.task.category || getCategoryForPhaseId(input.phaseId);
+
+      const db = await getDb();
+      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
+      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+      if (!beTrialId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Trial not found for mapId: ${trialId}`,
+        });
+      }
       
       const body = {
-        trial_id: trialId,
+        trial_id: beTrialId,
         title: input.task.name,
         description: input.task.description || "",
         status: input.task.status === "waiting" ? "todo" : input.task.status,
@@ -300,6 +381,16 @@ export const mapRouter = router({
         });
         return mapBackendTaskToClient(createdTask, trialId);
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for createTask.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.createTask({
+            mapId: input.mapId,
+            phaseId: input.phaseId,
+            task: input.task as any,
+          });
+        }
         console.error("Error in createTask proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -335,7 +426,8 @@ export const mapRouter = router({
         }),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       const updates = input.updates;
       const body: any = {};
       
@@ -364,6 +456,12 @@ export const mapRouter = router({
         });
         return { success: true };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for updateTask.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.updateTask(input as any);
+        }
         console.error("Error in updateTask proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -374,7 +472,8 @@ export const mapRouter = router({
 
   removeTask: protectedProcedure
     .input(z.object({ taskId: z.string() }))
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       try {
         await callBackend(`/api/tasks/${input.taskId}`, {
           method: "DELETE",
@@ -382,6 +481,12 @@ export const mapRouter = router({
         });
         return { success: true };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for removeTask.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.removeTask(input);
+        }
         console.error("Error in removeTask proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -398,7 +503,8 @@ export const mapRouter = router({
         reason: z.string().optional(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       try {
         await callBackend(`/api/tasks/${input.taskId}`, {
           method: "PATCH",
@@ -407,6 +513,12 @@ export const mapRouter = router({
         });
         return { success: true };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for changeTaskStatus.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.changeTaskStatus(input);
+        }
         console.error("Error in changeTaskStatus proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -423,7 +535,8 @@ export const mapRouter = router({
         orderInPhase: z.number().min(0),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       const nextCategory = getCategoryForPhaseId(input.phaseId);
       try {
         await callBackend(`/api/tasks/${input.taskId}`, {
@@ -437,6 +550,12 @@ export const mapRouter = router({
         });
         return { success: true };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for moveTask.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.moveTask(input);
+        }
         console.error("Error in moveTask proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -444,50 +563,6 @@ export const mapRouter = router({
         });
       }
     }),
-
-  reorderTasks: protectedProcedure
-    .input(z.object({ mapId: z.string(), phaseId: z.string(), orderedIds: z.array(z.string()).min(1) }))
-    .mutation(() => ({ success: true })),
-
-  updatePhase: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  removePhase: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  reorderPhases: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  importLegacyScaffold: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true, mapId: "mock-map-id" })),
-
-  create: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  update: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  launch: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  confirmSuggested: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true, updated: 0 })),
-
-  archive: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
-
-  createPhase: protectedProcedure
-    .input(z.any())
-    .mutation(() => ({ success: true })),
 
   addDependency: protectedProcedure
     .input(
@@ -500,7 +575,8 @@ export const mapRouter = router({
         isCrossPhase: z.boolean().default(false),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       try {
         const created = await callBackend(`/api/task-dependencies`, {
           method: "POST",
@@ -515,6 +591,12 @@ export const mapRouter = router({
         });
         return mapBackendDependencyToClient(created);
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for addDependency.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.addDependency(input as any);
+        }
         console.error("Error in addDependency proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -529,7 +611,8 @@ export const mapRouter = router({
         dependencyId: z.string(),
       })
     )
-    .mutation(async ({ input, ctx }) => {
+    .mutation(async (opts) => {
+      const { input, ctx } = opts;
       try {
         await callBackend(`/api/task-dependencies/${input.dependencyId}`, {
           method: "DELETE",
@@ -537,6 +620,12 @@ export const mapRouter = router({
         });
         return { success: true };
       } catch (err) {
+        if (isConnectionError(err)) {
+          setBackendOffline();
+          console.warn("[mapRouter] Backend offline. Falling back to local database for removeDependency.");
+          const caller = mapRouterLocal.createCaller(ctx);
+          return caller.removeDependency(input);
+        }
         console.error("Error in removeDependency proxy:", err);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -545,40 +634,172 @@ export const mapRouter = router({
       }
     }),
 
+  // --- Local Database-only operations wrapped in status check ---
+  reorderTasks: protectedProcedure
+    .input(z.object({ mapId: z.string(), phaseId: z.string(), orderedIds: z.array(z.string()).min(1) }))
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for reorderTasks.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.reorderTasks(opts.input);
+    }),
+
+  updatePhase: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for updatePhase.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.updatePhase(opts.input);
+    }),
+
+  removePhase: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for removePhase.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.removePhase(opts.input);
+    }),
+
+  reorderPhases: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for reorderPhases.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.reorderPhases(opts.input);
+    }),
+
+  importLegacyScaffold: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true, mapId: "mock-map-id" };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for importLegacyScaffold.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.importLegacyScaffold(opts.input);
+    }),
+
+  create: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for create.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.create(opts.input);
+    }),
+
+  update: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for update.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.update(opts.input);
+    }),
+
+  launch: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for launch.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.launch(opts.input);
+    }),
+
+  confirmSuggested: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true, updated: 0 };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for confirmSuggested.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.confirmSuggested(opts.input);
+    }),
+
+  archive: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for archive.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.archive(opts.input);
+    }),
+
+  createPhase: protectedProcedure
+    .input(z.any())
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for createPhase.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.createPhase(opts.input);
+    }),
+
   addTransition: protectedProcedure
     .input(z.any())
-    .mutation(() => ({ success: true })),
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for addTransition.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.addTransition(opts.input);
+    }),
 
   updateTransition: protectedProcedure
     .input(z.any())
-    .mutation(() => ({ success: true })),
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for updateTransition.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.updateTransition(opts.input);
+    }),
 
   removeTransition: protectedProcedure
     .input(z.any())
-    .mutation(() => ({ success: true })),
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for removeTransition.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.removeTransition(opts.input);
+    }),
 
   logTelemetry: protectedProcedure
     .input(z.any())
-    .mutation(() => ({ success: true })),
+    .mutation(async (opts) => {
+      if (await checkBackendOnline()) return { success: true };
+      console.warn("[mapRouter] Backend offline. Falling back to local database for logTelemetry.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.logTelemetry(opts.input);
+    }),
 
   listTelemetry: protectedProcedure
     .input(z.any())
-    .query(() => []),
+    .query(async (opts) => {
+      if (await checkBackendOnline()) return [];
+      console.warn("[mapRouter] Backend offline. Falling back to local database for listTelemetry.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.listTelemetry(opts.input);
+    }),
 
   getTaskStatusDurations: protectedProcedure
     .input(z.any())
-    .query(() => ({
-      rows: [],
-      statusSeconds: {
-        suggested: 0,
-        confirmed: 0,
-        todo: 0,
-        in_progress: 0,
-        blocked: 0,
-        waiting: 0,
-        done: 0,
-        skipped: 0,
-        cancelled: 0,
-      },
-    })),
+    .query(async (opts) => {
+      if (await checkBackendOnline()) {
+        return {
+          rows: [],
+          statusSeconds: {
+            suggested: 0,
+            confirmed: 0,
+            todo: 0,
+            in_progress: 0,
+            blocked: 0,
+            waiting: 0,
+            done: 0,
+            skipped: 0,
+            cancelled: 0,
+          },
+        };
+      }
+      console.warn("[mapRouter] Backend offline. Falling back to local database for getTaskStatusDurations.");
+      const caller = mapRouterLocal.createCaller(opts.ctx);
+      return caller.getTaskStatusDurations(opts.input);
+    }),
 });

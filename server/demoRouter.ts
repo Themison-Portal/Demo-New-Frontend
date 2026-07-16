@@ -36,11 +36,189 @@ import {
   threadParticipants,
   threads,
   trialInboxes,
-  trials,
 } from "../drizzle/schema";
-import { stripDemoId, toDemoId, type DemoMode } from "./_core/demoMode";
+import { toDemoId, type DemoMode } from "./_core/demoMode";
+import { callBackend } from "./_core/backendClient";
 import { eq, inArray, like, or, sql } from "drizzle-orm";
 import { z } from "zod";
+
+// FE UI statuses -> BE CHECK (planning|active|completed|paused|cancelled).
+// Mirrors scripts/backfill-trials-to-be.ts so demo-seeded BE trials match.
+const FE_TO_BE_STATUS: Record<string, string> = {
+  "not-started": "planning",
+  recruiting: "active",
+  "on-hold": "paused",
+  terminated: "cancelled",
+};
+function beStatus(s: string | null | undefined): string {
+  if (!s) return "planning";
+  return FE_TO_BE_STATUS[s] ?? s;
+}
+
+function toBeIso(v: unknown): string | null {
+  if (!v) return null;
+  try {
+    return new Date(v as any).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+// Map a seeded FE trial onto the BE `/api/trials` body. `demoMode` tags the
+// trial as demo-owned so the BE-sourced trial list surfaces it. The BE assigns
+// the trial UUID. Field mapping matches the backfill script.
+function feTrialToBeBody(t: any, demoMode: DemoMode) {
+  return {
+    demo_mode: demoMode,
+    name: t.title || "Untitled Trial",
+    phase: t.phase || "Phase I",
+    location: t.location || "",
+    sponsor: t.sponsor || "",
+    status: beStatus(t.status),
+    description: t.description ?? null,
+    indication: t.indication ?? null,
+    study_start: toBeIso(t.startDate),
+    estimated_close_out: toBeIso(t.endDate),
+    protocol_number: t.protocolNumber ?? null,
+    investigational_product: t.investigationalProduct ?? null,
+    nct_number: t.nctNumber ?? null,
+    current_version: t.currentVersion ?? null,
+    amendment_version: t.amendmentVersion ?? null,
+    release_date: t.releaseDate ?? null,
+    sample_size: t.sampleSize ?? null,
+    number_of_sites: t.numberOfSites ?? null,
+    study_duration: t.studyDuration ?? null,
+    study_design_type: t.studyDesignType ?? null,
+    primary_objective: t.primaryObjective ?? null,
+    primary_endpoint: t.primaryEndpoint ?? null,
+    principal_investigator: t.principalInvestigator ?? null,
+    enrolled_patients: t.enrolledPatients ?? null,
+    target_patients: t.targetPatients ?? null,
+    completion_percentage: t.completionPercentage ?? null,
+  };
+}
+
+// BE is now the source of truth for trials. List the demo-owned trials for a
+// mode (or every demo-owned trial when `mode === "all"`). The returned `id` is
+// the BE UUID — the key every FE child table is now re-keyed by (Phase D).
+async function listBeTrials(mode: DemoMode | "all"): Promise<any[]> {
+  if (mode === "all") {
+    const all = await callBackend<any[]>(`/api/trials`).catch(() => []);
+    return (all ?? []).filter(
+      (t) => t?.demo_mode === "sample" || t?.demo_mode === "full" || t?.demo_mode === "building"
+    );
+  }
+  const list = await callBackend<any[]>(`/api/trials`, {
+    query: { demo_mode: mode },
+  }).catch(() => []);
+  // Defend against a BE that ignores the demo_mode filter.
+  return (list ?? []).filter((t) => t?.demo_mode === mode);
+}
+
+// Child tables whose `trialId` column carries the (now BE-UUID) trial key.
+// Mirrors scripts/rekey-child-trialid.sql. `protocols` is intentionally
+// excluded (document logic retired). Used by both the re-key (seed) and the
+// BE-UUID-scoped clear (wipe) paths. `trialId` is an untyped string column on
+// each of these, so these are traced manually rather than type-checked.
+const TRIAL_KEYED_CHILD_TABLES = [
+  taskScaffolds,
+  executionMaps,
+  mapTelemetryEvents,
+  mapTaskStatusHistory,
+  protocolChunks,
+  fileSearchStores,
+  aiFeatureSnapshots,
+  aiAnalyticsRollups,
+  aiTrainingExamples,
+  knowledgeGraphNodes,
+  knowledgeGraphEdges,
+  conversations,
+  threads,
+  trialInboxes,
+  collabTelemetryEvents,
+] as const;
+
+// For each seeded trial, create a BE trial and return a Map<prefixedId, beUuid>
+// for re-keying the just-seeded child data. Trials are UUID-identified (slugs
+// are gone), so the BE assigns the UUID on POST. This always runs after the
+// target mode has been wiped (resetModeToDefault → wipeModeData), so creating
+// fresh rows cannot accumulate duplicates.
+async function ensureBeTrialsForSeed(
+  _db: DbClient,
+  data: typeof SAMPLE_TRIALS,
+  mode: DemoMode
+): Promise<Map<string, string>> {
+  const beUuidByPrefixed = new Map<string, string>();
+  if (data.length === 0) return beUuidByPrefixed;
+
+  for (const trial of data) {
+    const prefixedId = toDemoId(mode, trial.id);
+    const body = feTrialToBeBody(trial, mode);
+    try {
+      const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+        method: "POST",
+        body: { ...body, members: [], pending_members: [] },
+      });
+      if (beTrial?.id) beUuidByPrefixed.set(prefixedId, beTrial.id);
+    } catch (error) {
+      console.warn(
+        `[demo] Failed to create BE trial for ${prefixedId}; child data stays keyed by the prefixed id.`,
+        error
+      );
+    }
+  }
+
+  return beUuidByPrefixed;
+}
+
+// Re-key just-seeded child rows from the prefixed FE id to the BE UUID across
+// every trial-keyed child table. Scoped to the seeded trials only; skips any
+// trial that has no resolved BE UUID (its child rows stay prefixed). Mirrors
+// scripts/rekey-child-trialid.sql in code.
+async function rekeySeededChildData(
+  db: DbClient,
+  beUuidByPrefixed: Map<string, string>
+) {
+  for (const [prefixedId, beUuid] of Array.from(beUuidByPrefixed.entries())) {
+    if (!beUuid || beUuid === prefixedId) continue;
+    for (const table of TRIAL_KEYED_CHILD_TABLES) {
+      try {
+        await db
+          .update(table as never)
+          .set({ trialId: beUuid } as never)
+          .where(eq((table as any).trialId, prefixedId));
+      } catch (error) {
+        console.warn(
+          `[demo] Re-key skipped for a child table (${prefixedId} -> ${beUuid}) due to schema compatibility issue.`,
+          error
+        );
+      }
+    }
+  }
+}
+
+// Delete BE-UUID-keyed child rows for the given prefixed trials. Prior seeds
+// left child rows keyed by the BE UUID, so the prefixed-id deletes in
+// wipeModeData would miss them and duplicate on re-seed. Resolve the BE UUIDs
+// and delete every trial-keyed child table by them.
+async function clearBeKeyedChildData(
+  tx: DbTransaction,
+  beUuids: string[]
+) {
+  if (beUuids.length === 0) return;
+  for (const table of TRIAL_KEYED_CHILD_TABLES) {
+    try {
+      await tx
+        .delete(table as never)
+        .where(inArray((table as any).trialId, beUuids));
+    } catch (error) {
+      console.warn(
+        "[demo] BE-UUID-keyed child clear skipped for a table due to schema compatibility issue.",
+        error
+      );
+    }
+  }
+}
 
 const DEFAULT_CATEGORIES = [
   "Protocol",
@@ -920,6 +1098,7 @@ type ModeRowCollection = {
   rows: SnapshotRows;
   trialIds: string[];
   protocolIds: number[];
+  protocolDocIds: string[];
   scaffoldIds: number[];
   phaseIds: number[];
   taskIds: number[];
@@ -1169,19 +1348,18 @@ async function collectModeRows(
   tx: DbTransaction,
   mode: DemoMode | "all"
 ): Promise<ModeRowCollection> {
-  const trialRows = mode === "all"
-    ? await tx.select().from(trials)
-    : await tx
-        .select()
-        .from(trials)
-        .where(like(trials.id, `${mode}:%`));
-  const trialIds = trialRows.map((row) => row.id);
+  // Trials are BE-owned now. Source the trial list from the BE; its `id` is the
+  // BE UUID that every FE child table is keyed by, so use it to scope all the
+  // child-table reads below.
+  const trialRows = await listBeTrials(mode);
+  const trialIds = trialRows.map((row) => String(row.id));
 
   if (trialIds.length === 0) {
     return {
       rows: emptySnapshotRows(),
       trialIds: [],
       protocolIds: [],
+      protocolDocIds: [],
       scaffoldIds: [],
       phaseIds: [],
       taskIds: [],
@@ -1203,19 +1381,20 @@ async function collectModeRows(
     .from(protocols)
     .where(inArray(protocols.trialId, trialIds));
   const protocolIds = protocolRows.map((row) => row.id);
+  const protocolDocIds = protocolRows.map((row) => String(row.id));
 
   const protocolSectionRows = protocolIds.length > 0
     ? await tx
         .select()
         .from(protocolSections)
-        .where(inArray(protocolSections.protocolId, protocolIds))
+        .where(inArray(protocolSections.protocolId, protocolDocIds))
     : [];
 
   const protocolChunkRows = protocolIds.length > 0
     ? await tx
         .select()
         .from(protocolChunks)
-        .where(inArray(protocolChunks.protocolId, protocolIds))
+        .where(inArray(protocolChunks.protocolId, protocolDocIds))
     : [];
 
   const scaffoldRows = await tx
@@ -1277,7 +1456,7 @@ async function collectModeRows(
           .from(fileSearchDocuments)
           .where(
             or(
-              inArray(fileSearchDocuments.protocolId, protocolIds),
+              inArray(fileSearchDocuments.protocolId, protocolDocIds),
               inArray(fileSearchDocuments.storeId, storeIds)
             )
           )
@@ -1285,7 +1464,7 @@ async function collectModeRows(
       ? await tx
           .select()
           .from(fileSearchDocuments)
-          .where(inArray(fileSearchDocuments.protocolId, protocolIds))
+          .where(inArray(fileSearchDocuments.protocolId, protocolDocIds))
       : storeIds.length > 0
       ? await tx
           .select()
@@ -1583,6 +1762,7 @@ async function collectModeRows(
     },
     trialIds,
     protocolIds,
+    protocolDocIds,
     scaffoldIds,
     phaseIds,
     taskIds,
@@ -1626,10 +1806,77 @@ async function restoreModeSnapshot(
   if (!db) throw new Error("Database not available");
   await ensureMapTaskStatusHistoryTable(db);
   const rows = normalizeSnapshotRows(snapshot.rows);
+
+  // Trials are BE-owned. The snapshot's `rows.trials` holds the SOURCE BE trial
+  // objects; child rows are keyed by the source BE UUID. Recreate each trial in
+  // the BE (a POST assigns a fresh UUID), build a source->new UUID map, and
+  // re-key every trial-keyed child row array before it is inserted.
+  const restoreTrialIdMap = new Map<string, string>();
+  const snapshotMode = snapshot.mode;
+  for (const sourceRow of asTypedRows<Record<string, any>>(rows.trials)) {
+    const sourceBeId = String(sourceRow.id);
+    const {
+      id: _id,
+      slug: _slug,
+      demo_mode: _demoMode,
+      organization_id: _org,
+      created_by: _createdBy,
+      created_at: _createdAt,
+      updated_at: _updatedAt,
+      ...rest
+    } = sourceRow;
+    const body = { ...rest, demo_mode: snapshotMode, name: sourceRow.name ?? "Untitled Trial" };
+    try {
+      // The mode was wiped before restore, so always create a fresh BE trial
+      // (UUID assigned by the BE) and map source UUID -> new UUID.
+      const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+        method: "POST",
+        body: { ...body, members: [], pending_members: [] },
+      });
+      const beId: string | null = beTrial?.id ?? null;
+      if (beId) restoreTrialIdMap.set(sourceBeId, beId);
+    } catch (error) {
+      console.warn(
+        `[demo] Failed to recreate BE trial (source=${sourceBeId}) during snapshot restore; its child data keeps the source key.`,
+        error
+      );
+    }
+  }
+
+  // Re-key the `trialId` of every trial-keyed snapshot row array to the new BE
+  // UUID before inserting the child data.
+  const remapTrialId = (list: unknown[]) => {
+    for (const row of list as Array<Record<string, unknown>>) {
+      if (!row || typeof row !== "object") continue;
+      const current = row.trialId;
+      if (typeof current === "string") {
+        const next = restoreTrialIdMap.get(current);
+        if (next) row.trialId = next;
+      }
+    }
+  };
+  for (const key of [
+    "protocols",
+    "protocolChunks",
+    "fileSearchStores",
+    "taskScaffolds",
+    "executionMaps",
+    "mapTelemetryEvents",
+    "mapTaskStatusHistory",
+    "conversations",
+    "threads",
+    "trialInboxes",
+    "collabTelemetryEvents",
+    "aiFeatureSnapshots",
+    "aiAnalyticsRollups",
+    "aiTrainingExamples",
+    "knowledgeGraphNodes",
+    "knowledgeGraphEdges",
+  ] as const) {
+    remapTrialId(rows[key]);
+  }
+
   await db.transaction(async (tx) => {
-    await insertSnapshotRows(tx, trials, rows.trials, {
-      dateFields: ["startDate", "endDate", "createdAt", "updatedAt"],
-    });
     await insertSnapshotRows(tx, protocols, rows.protocols, {
       dateFields: ["archivedAt", "createdAt", "updatedAt"],
     });
@@ -1763,6 +2010,7 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
     const {
       trialIds,
       protocolIds,
+      protocolDocIds,
       scaffoldIds,
       phaseIds,
       taskIds,
@@ -1778,6 +2026,11 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
       crossReferenceIds,
     } = collected;
     if (trialIds.length === 0) return;
+
+    // `trialIds` are the BE trial UUIDs (the key every FE child table is now
+    // keyed by). Clear every BE-UUID-keyed child table by them first; the
+    // id-scoped deletes below then remove the rest of the child graph.
+    await clearBeKeyedChildData(tx, trialIds);
 
     if (crossReferenceIds.length > 0) {
       await tx
@@ -1955,13 +2208,13 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
     if (protocolIds.length > 0) {
       await tx
         .delete(protocolSections)
-        .where(inArray(protocolSections.protocolId, protocolIds));
+        .where(inArray(protocolSections.protocolId, protocolDocIds));
       await tx
         .delete(protocolChunks)
-        .where(inArray(protocolChunks.protocolId, protocolIds));
+        .where(inArray(protocolChunks.protocolId, protocolDocIds));
       await tx
         .delete(fileSearchDocuments)
-        .where(inArray(fileSearchDocuments.protocolId, protocolIds));
+        .where(inArray(fileSearchDocuments.protocolId, protocolDocIds));
       await tx
         .delete(protocols)
         .where(inArray(protocols.id, protocolIds));
@@ -1976,7 +2229,16 @@ async function wipeModeData(mode: DemoMode | "all", dbClient?: DbClient) {
         .where(inArray(fileSearchStores.id, storeIds));
     }
 
-    await tx.delete(trials).where(inArray(trials.id, trialIds));
+    // Trials are BE-owned: delete each demo trial in the BE (cascades BE docs /
+    // members). `trialIds` are BE UUIDs. Best-effort per trial so one failure
+    // doesn't abort the wipe; the FE child rows are already cleared above.
+    for (const beTrialId of trialIds) {
+      try {
+        await callBackend(`/api/trials/${beTrialId}`, { method: "DELETE" });
+      } catch (error) {
+        console.warn(`[demo] Failed to delete BE trial ${beTrialId} during wipe.`, error);
+      }
+    }
   });
 }
 
@@ -1992,29 +2254,26 @@ async function seedCategories(dbClient?: DbClient) {
         isDefault: true,
       }))
     )
-    .onDuplicateKeyUpdate({
+    .onConflictDoUpdate({
+      target: documentCategories.name,
       set: {
         isDefault: true,
       },
     });
 }
 
+// Trials are BE-owned now; there is no FE `trials` table to seed. The BE trial
+// rows are created by `ensureBeTrialsForSeed` (called from seedBaseModeData),
+// and the seeded child data is keyed by the prefixed id then re-keyed to the BE
+// UUID. This is kept as an intentional no-op so the seed orchestration reads
+// the same and a future change can hook trial-level seeding back in here.
 async function seedTrials(
-  data: typeof SAMPLE_TRIALS,
-  createdBy: number,
-  mode: DemoMode,
-  dbClient?: DbClient
+  _data: typeof SAMPLE_TRIALS,
+  _createdBy: number,
+  _mode: DemoMode,
+  _dbClient?: DbClient
 ) {
-  const db = dbClient ?? await getDb();
-  if (!db) throw new Error("Database not available");
-
-  await db.insert(trials).values(
-    data.map((trial) => ({
-      ...trial,
-      id: toDemoId(mode, trial.id),
-      createdBy,
-    }))
-  );
+  /* no-op: BE owns the trial row (see ensureBeTrialsForSeed) */
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -2453,68 +2712,14 @@ async function seedModeOperationalData(
     primary: boolean;
   }> = [];
 
-  for (const trial of seededTrials) {
-    const currentVersion = (trial.seed.currentVersion || "1.0").trim() || "1.0";
-    const amendmentVersion = (trial.seed.amendmentVersion || "0.1").trim() || "0.1";
-    const releaseDate = trial.seed.releaseDate || toYyyyMmDd(addDays(now, -(trial.index % 45)));
-    const shouldIndexPrimary = trial.seed.status !== "not-started" && trial.index % 5 !== 0;
-    const primaryFileKey = `seed/${mode}/${trial.seed.id}/protocol-${currentVersion}.pdf`;
-
-    protocolInserts.push({
-      trialId: trial.trialId,
-      filename: `${trial.seed.id.toUpperCase()}_Protocol_${currentVersion}.pdf`,
-      fileUrl: `https://demo.themison.ai/${primaryFileKey}`,
-      fileKey: primaryFileKey,
-      fileSize: 1_100_000 + trial.index * 8_000,
-      category: "Protocol",
-      documentVersion: currentVersion,
-      amendmentVersion,
-      releaseDate,
-      isCurrent: true,
-      archivedAt: null,
-      sourceType: "manual",
-      sourceReference: `seed-${mode}-${trial.seed.id}-protocol`,
-      uploadedBy: createdBy,
-      createdAt: addDays(now, -(15 + trial.index)),
-      updatedAt: addDays(now, -(15 + trial.index)),
-    });
-    protocolSeedMeta.push({
-      trialId: trial.trialId,
-      fileKey: primaryFileKey,
-      category: "Protocol",
-      shouldIndex: shouldIndexPrimary,
-      primary: true,
-    });
-
-    if (trial.index % 2 === 0 || trial.seed.status !== "not-started") {
-      const amendmentFileKey = `seed/${mode}/${trial.seed.id}/amendment-${amendmentVersion}.pdf`;
-      protocolInserts.push({
-        trialId: trial.trialId,
-        filename: `${trial.seed.id.toUpperCase()}_Amendment_${amendmentVersion}.pdf`,
-        fileUrl: `https://demo.themison.ai/${amendmentFileKey}`,
-        fileKey: amendmentFileKey,
-        fileSize: 540_000 + trial.index * 4_000,
-        category: "Amendment",
-        documentVersion: currentVersion,
-        amendmentVersion,
-        releaseDate,
-        isCurrent: false,
-        archivedAt: trial.index % 6 === 0 ? addDays(now, -(3 + (trial.index % 4))) : null,
-        sourceType: trial.index % 3 === 0 ? "integration" : "manual",
-        sourceReference: `seed-${mode}-${trial.seed.id}-amendment`,
-        uploadedBy: createdBy,
-        createdAt: addDays(now, -(9 + trial.index)),
-        updatedAt: addDays(now, -(9 + trial.index)),
-      });
-      protocolSeedMeta.push({
-        trialId: trial.trialId,
-        fileKey: amendmentFileKey,
-        category: "Amendment",
-        shouldIndex: trial.index % 3 === 0,
-        primary: false,
-      });
-    }
-  }
+  // Documents are now owned by the BE (`trial_documents`); the FE `protocols`
+  // table is retired. The demo was a content-less UI mock (placeholder PDF URLs
+  // + synthetic one-line chunks) with no real documents to seed into the BE, so
+  // demo trials intentionally seed NO documents. Consequently every block below
+  // that is anchored to a protocol (file-search docs, protocol sections/chunks,
+  // task scaffolds, phases/tasks, execution maps + children) no-ops via its
+  // existing `if (!primaryProtocol) continue` / `if (!scaffold) continue` guard.
+  // Leaving `protocolInserts` / `protocolSeedMeta` empty is deliberate.
 
   if (protocolInserts.length > 0) {
     await db.insert(protocols).values(protocolInserts);
@@ -2567,7 +2772,7 @@ async function seedModeOperationalData(
     if (!protocolRow || !storeRow) continue;
     fileDocInserts.push({
       storeId: storeRow.id,
-      protocolId: protocolRow.id,
+      protocolId: String(protocolRow.id),
       documentName: `seed-file-${mode}-${protocolRow.id}`,
       displayName: protocolRow.filename,
       uploadedAt: addDays(now, -(2 + (protocolRow.id % 4))),
@@ -2595,7 +2800,7 @@ async function seedModeOperationalData(
     ];
     sectionSeed.forEach((section, sectionIndex) => {
       protocolSectionInserts.push({
-        protocolId: primaryProtocol.id,
+        protocolId: String(primaryProtocol.id),
         name: section.name,
         pageReference: section.pageReference,
         dateReference: null,
@@ -2615,7 +2820,7 @@ async function seedModeOperationalData(
     ];
     chunkSeed.forEach((chunk, chunkIndex) => {
       protocolChunkInserts.push({
-        protocolId: primaryProtocol.id,
+        protocolId: String(primaryProtocol.id),
         trialId: trial.trialId,
         chunkIndex,
         sectionType: chunk.sectionType,
@@ -2650,7 +2855,7 @@ async function seedModeOperationalData(
     const scaffoldStatus = resolveScaffoldStatus(trial.seed.status);
     const confirmedAt = scaffoldStatus === "draft" ? null : addDays(now, -(6 + (trial.index % 7)));
     scaffoldInserts.push({
-      protocolId: primaryProtocol.id,
+      protocolId: String(primaryProtocol.id),
       trialId: trial.trialId,
       status: scaffoldStatus,
       confirmedAt,
@@ -2787,7 +2992,7 @@ async function seedModeOperationalData(
     mapInserts.push({
       id: mapId,
       trialId: trial.trialId,
-      protocolId: primaryProtocol.id,
+      protocolId: String(primaryProtocol.id),
       status: mapStatus,
       version: 1,
       metadata: {
@@ -3196,6 +3401,15 @@ async function seedBaseModeData(
     } catch (error) {
       console.warn("[demo] Sample mode operational seed skipped due to schema compatibility issue.", error);
     }
+    // Create BE-owned trials and re-key the just-seeded child data by the BE
+    // UUID so the BE-sourced trial list + child lookups resolve. Best-effort:
+    // failures leave child data keyed by the prefixed id (logged inside).
+    try {
+      const beUuids = await ensureBeTrialsForSeed(db, SAMPLE_TRIALS, "sample");
+      await rekeySeededChildData(db, beUuids);
+    } catch (error) {
+      console.warn("[demo] Sample mode BE trial sync / re-key skipped.", error);
+    }
     return;
   }
   if (mode === "full") {
@@ -3204,6 +3418,12 @@ async function seedBaseModeData(
       await seedModeOperationalData(FULL_TRIALS, createdBy, "full", db);
     } catch (error) {
       console.warn("[demo] Full mode operational seed skipped due to schema compatibility issue.", error);
+    }
+    try {
+      const beUuids = await ensureBeTrialsForSeed(db, FULL_TRIALS, "full");
+      await rekeySeededChildData(db, beUuids);
+    } catch (error) {
+      console.warn("[demo] Full mode BE trial sync / re-key skipped.", error);
     }
     return;
   }
@@ -3220,13 +3440,13 @@ async function ensureModeOperationalSeed(
   const db = dbClient ?? await getDb();
   if (!db) throw new Error("Database not available");
 
-  const trialRows = await db
-    .select({ id: trials.id })
-    .from(trials)
-    .where(like(trials.id, `${mode}:%`));
-  if (trialRows.length === 0) return false;
+  // Trials are BE-owned. If the BE has no demo trials for this mode there is
+  // nothing to backfill operational data against.
+  const beTrials = await listBeTrials(mode);
+  if (beTrials.length === 0) return false;
 
-  const trialIds = trialRows.map((row) => row.id);
+  // Child data is keyed by the BE trial UUID; check for an existing map by it.
+  const trialIds = beTrials.map((row) => String(row.id));
   const existingMap = await db
     .select({ id: executionMaps.id })
     .from(executionMaps)
@@ -3327,26 +3547,51 @@ async function cloneModeIntoBuilding(
     const mapTaskIdMap = new Map<string, string>();
     const protocolMapSectionIdMap = new Map<string, string>();
 
-    const trialRows = asTypedRows<typeof trials.$inferSelect>(rows.trials);
-    for (const row of trialRows) {
-      const nextTrialId = toDemoId("building", stripDemoId(String(row.id)));
-      trialIdMap.set(String(row.id), nextTrialId);
-      await tx.insert(trials).values({
-        ...row,
-        id: nextTrialId,
-      });
+    // Trials are BE-owned. `rows.trials` now holds the SOURCE BE trial objects
+    // (from collectModeRows -> listBeTrials). Source child rows are keyed by the
+    // SOURCE BE UUID (`row.id`). For each source trial we create a fresh BE trial
+    // under demo_mode "building" and re-key child trialId from the source BE UUID
+    // -> the new building BE UUID. No FE `trials` row is written.
+    const trialRows = asTypedRows<Record<string, any>>(rows.trials);
+    for (const sourceRow of trialRows) {
+      const sourceBeId = String(sourceRow.id);
+      // Reuse the source BE trial's fields, retagged for the building copy.
+      const {
+        id: _id,
+        slug: _slug,
+        demo_mode: _demoMode,
+        organization_id: _org,
+        created_by: _createdBy,
+        created_at: _createdAt,
+        updated_at: _updatedAt,
+        ...rest
+      } = sourceRow;
+      const body = { ...rest, demo_mode: "building", name: sourceRow.name ?? "Untitled Trial" };
+      try {
+        // "building" was wiped above, so always create a fresh BE trial (UUID
+        // assigned by the BE) and map source UUID -> building UUID.
+        const beTrial: any = await callBackend(`/api/trials/with-assignments`, {
+          method: "POST",
+          body: { ...body, members: [], pending_members: [] },
+        });
+        const beId: string | null = beTrial?.id ?? null;
+        if (beId) {
+          // Child data is keyed by the SOURCE BE UUID -> building BE UUID.
+          trialIdMap.set(sourceBeId, beId);
+        }
+      } catch (error) {
+        console.warn(
+          `[demo] Failed to create BE trial for building copy of ${sourceBeId}; child data keeps its source key.`,
+          error
+        );
+      }
     }
 
     const protocolRows = asTypedRows<typeof protocols.$inferSelect>(rows.protocols);
     for (const row of protocolRows) {
       const { id: _protocolId, ...protocolInsert } = row;
       const [inserted] = await tx
-        .insert(protocols)
-        .values({
-          ...protocolInsert,
-          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        })
-        .$returningId();
+        .insert(protocols).values({...protocolInsert, trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId)}).returning({ id: protocols.id });
       if (typeof inserted?.id === "number") {
         protocolIdMap.set(Number(row.id), inserted.id);
       }
@@ -3356,13 +3601,7 @@ async function cloneModeIntoBuilding(
     for (const row of protocolSectionRows) {
       const { id: _protocolSectionId, ...protocolSectionInsert } = row;
       const [inserted] = await tx
-        .insert(protocolSections)
-        .values({
-          ...protocolSectionInsert,
-          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
-          parentSectionId: null,
-        })
-        .$returningId();
+        .insert(protocolSections).values({...protocolSectionInsert, protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)), parentSectionId: null}).returning({ id: protocolSections.id });
       if (typeof inserted?.id === "number") {
         protocolSectionIdMap.set(Number(row.id), inserted.id);
       }
@@ -3383,7 +3622,7 @@ async function cloneModeIntoBuilding(
       const { id: _protocolChunkId, ...protocolChunkInsert } = row;
       await tx.insert(protocolChunks).values({
         ...protocolChunkInsert,
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
         trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
       });
     }
@@ -3392,13 +3631,7 @@ async function cloneModeIntoBuilding(
     for (const row of scaffoldRows) {
       const { id: _scaffoldId, ...scaffoldInsert } = row;
       const [inserted] = await tx
-        .insert(taskScaffolds)
-        .values({
-          ...scaffoldInsert,
-          protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
-          trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        })
-        .$returningId();
+        .insert(taskScaffolds).values({...scaffoldInsert, protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)), trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId)}).returning({ id: taskScaffolds.id });
       if (typeof inserted?.id === "number") {
         scaffoldIdMap.set(Number(row.id), inserted.id);
       }
@@ -3408,12 +3641,7 @@ async function cloneModeIntoBuilding(
     for (const row of phaseRows) {
       const { id: _phaseId, ...phaseInsert } = row;
       const [inserted] = await tx
-        .insert(phases)
-        .values({
-          ...phaseInsert,
-          scaffoldId: scaffoldIdMap.get(Number(row.scaffoldId)) ?? Number(row.scaffoldId),
-        })
-        .$returningId();
+        .insert(phases).values({...phaseInsert, scaffoldId: scaffoldIdMap.get(Number(row.scaffoldId)) ?? Number(row.scaffoldId)}).returning({ id: phases.id });
       if (typeof inserted?.id === "number") {
         phaseIdMap.set(Number(row.id), inserted.id);
       }
@@ -3423,12 +3651,7 @@ async function cloneModeIntoBuilding(
     for (const row of taskRows) {
       const { id: _taskId, ...taskInsert } = row;
       const [inserted] = await tx
-        .insert(tasks)
-        .values({
-          ...taskInsert,
-          phaseId: phaseIdMap.get(Number(row.phaseId)) ?? Number(row.phaseId),
-        })
-        .$returningId();
+        .insert(tasks).values({...taskInsert, phaseId: phaseIdMap.get(Number(row.phaseId)) ?? Number(row.phaseId)}).returning({ id: tasks.id });
       if (typeof inserted?.id === "number") {
         taskIdMap.set(Number(row.id), inserted.id);
       }
@@ -3462,7 +3685,7 @@ async function cloneModeIntoBuilding(
         ...row,
         id: nextMapId,
         trialId: trialIdMap.get(String(row.trialId)) ?? String(row.trialId),
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
       });
     }
 
@@ -3516,7 +3739,7 @@ async function cloneModeIntoBuilding(
       await tx.insert(protocolMapSections).values({
         ...row,
         id: nextSectionId,
-        protocolId: protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId),
+        protocolId: String(protocolIdMap.get(Number(row.protocolId)) ?? Number(row.protocolId)),
         mapId: mapIdMap.get(String(row.mapId)) ?? String(row.mapId),
         parentSectionId: null,
         linkedPhaseIds: remapLinkedIds(row.linkedPhaseIds, mapPhaseIdMap),
@@ -3608,7 +3831,7 @@ async function cloneModeIntoBuilding(
   return {
     ok: true,
     sourceMode,
-    copiedTrials: asTypedRows<typeof trials.$inferSelect>(rows.trials).length,
+    copiedTrials: asTypedRows<Record<string, unknown>>(rows.trials).length,
     copiedProtocols: asTypedRows<typeof protocols.$inferSelect>(rows.protocols).length,
     copiedMaps: asTypedRows<typeof executionMaps.$inferSelect>(rows.executionMaps).length,
     skippedFileSearchStores: asTypedRows<typeof fileSearchStores.$inferSelect>(rows.fileSearchStores).length,
@@ -3664,11 +3887,8 @@ export const demoRouter = router({
         };
       }
 
-      const existing = await db
-        .select({ id: trials.id })
-        .from(trials)
-        .where(like(trials.id, "sample:%"))
-        .limit(1);
+      // Trials are BE-owned: check the BE for any seeded demo trial in this mode.
+      const existing = await listBeTrials("sample");
 
       if (existing.length === 0) {
         const result = await resetModeToDefault("sample", ctx.user.id, db);
@@ -3729,11 +3949,8 @@ export const demoRouter = router({
         };
       }
 
-      const existing = await db
-        .select({ id: trials.id })
-        .from(trials)
-        .where(like(trials.id, "full:%"))
-        .limit(1);
+      // Trials are BE-owned: check the BE for any seeded demo trial in this mode.
+      const existing = await listBeTrials("full");
 
       if (existing.length === 0) {
         const result = await resetModeToDefault("full", ctx.user.id, db);
