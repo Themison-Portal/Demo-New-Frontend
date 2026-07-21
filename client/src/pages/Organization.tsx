@@ -520,77 +520,83 @@ export default function Organization() {
                   </div>
                 </div>
                 <div>
-                  {members.map((member) => (
-                    <div
-                      key={member.email}
-                      className="border-b border-gray-100 hover:bg-gray-50 transition-colors w-full cursor-pointer"
-                      onClick={() => openEditMember(member)}
-                    >
-                      <div className="grid grid-cols-[1.6fr_2fr_1.2fr_1fr_1fr_1fr_90px_52px] gap-4 px-6 py-4 text-sm text-gray-700">
-                      <div className="flex items-center gap-3">
-                        <div className="h-9 w-9 overflow-hidden rounded-md bg-gray-100 flex items-center justify-center border border-gray-200">
-                          {member.avatar ? (
-                            <img src={member.avatar} alt={member.name} className="h-full w-full object-cover" />
-                          ) : (
-                            <Users className="h-4 w-4 text-gray-400" />
-                          )}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="font-semibold text-gray-900 truncate">{member.name}</div>
-                        </div>
-                      </div>
-                  <div className="flex items-center text-gray-600 min-w-0">
-                    <span className="truncate" title={member.email}>{member.email}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="inline-flex items-center rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">
-                      {member.clinicalRole}
-                    </span>
-                  </div>
-                  <div className="flex items-center">
-                    <span className="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
-                      {member.appRole}
-                    </span>
-                  </div>
-                  <div className="flex items-center text-gray-600 text-xs whitespace-nowrap">
-                    {member.team}
-                  </div>
-                  <div className="flex items-center text-gray-600 text-xs whitespace-nowrap">
-                    {member.site}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
-                    {member.status}
-                    {pendingEmails.has(member.email.toLowerCase()) && (
-                      <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                        Invited
-                      </span>
-                    )}
-                  </div>
-                      <div className="flex items-center justify-end">
-                        <button
-                          className="h-8 w-8 inline-flex items-center justify-center rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 disabled:opacity-50"
-                          disabled={sendingInvite === member.email}
-                          title={`Send invitation to ${member.email}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleSendInvite({
-                              email: member.email,
-                              name: member.name,
-                              appRole: member.appRole,
-                            });
-                          }}
-                        >
-                          {sendingInvite === member.email ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Send className="h-4 w-4" />
-                          )}
-                        </button>
-                      </div>
-                      </div>
+                  {members.length === 0 ? (
+                    <div className="py-12 text-center text-sm text-gray-500">
+                      No team members added yet. Click <span className="font-medium text-blue-600">Add</span> to invite a new member.
                     </div>
-                  ))}
+                  ) : (
+                    members.map((member) => (
+                      <div
+                        key={member.email}
+                        className="border-b border-gray-100 hover:bg-gray-50 transition-colors w-full cursor-pointer"
+                        onClick={() => openEditMember(member)}
+                      >
+                        <div className="grid grid-cols-[1.6fr_2fr_1.2fr_1fr_1fr_1fr_90px_52px] gap-4 px-6 py-4 text-sm text-gray-700">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 overflow-hidden rounded-md bg-gray-100 flex items-center justify-center border border-gray-200">
+                            {member.avatar ? (
+                              <img src={member.avatar} alt={member.name} className="h-full w-full object-cover" />
+                            ) : (
+                              <Users className="h-4 w-4 text-gray-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-gray-900 truncate">{member.name}</div>
+                          </div>
+                        </div>
+                    <div className="flex items-center text-gray-600 min-w-0">
+                      <span className="truncate" title={member.email}>{member.email}</span>
+                    </div>
+                    <div className="flex items-center">
+                      <span className="inline-flex items-center rounded-md bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">
+                        {member.clinicalRole}
+                      </span>
+                    </div>
+                    <div className="flex items-center">
+                      <span className="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                        {member.appRole}
+                      </span>
+                    </div>
+                    <div className="flex items-center text-gray-600 text-xs whitespace-nowrap">
+                      {member.team}
+                    </div>
+                    <div className="flex items-center text-gray-600 text-xs whitespace-nowrap">
+                      {member.site}
+                    </div>
+                    <div className="flex items-center gap-2 text-sm text-gray-600 whitespace-nowrap">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      {member.status}
+                      {pendingEmails.has(member.email.toLowerCase()) && (
+                        <span className="inline-flex items-center rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                          Invited
+                        </span>
+                      )}
+                    </div>
+                        <div className="flex items-center justify-end">
+                          <button
+                            className="h-8 w-8 inline-flex items-center justify-center rounded-md text-blue-600 hover:text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+                            disabled={sendingInvite === member.email}
+                            title={`Send invitation to ${member.email}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleSendInvite({
+                                email: member.email,
+                                name: member.name,
+                                appRole: member.appRole,
+                              });
+                            }}
+                          >
+                            {sendingInvite === member.email ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Send className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

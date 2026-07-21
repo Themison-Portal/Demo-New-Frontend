@@ -428,36 +428,7 @@ function getTeamMembersFromDemoState(): DemoTeamMemberSeed[] {
 }
 
 function getFallbackTeamMembers(): DemoTeamMemberSeed[] {
-    return [
-        {
-            id: "member-2",
-            name: "Ava Patel",
-            email: "ava.patel@azorg.be",
-            role: "Sub-Investigator",
-            initials: "AP",
-        },
-        {
-            id: "member-3",
-            name: "Liam Chen",
-            email: "liam.chen@azorg.be",
-            role: "Clinical Research Coordinator",
-            initials: "LC",
-        },
-        {
-            id: "member-4",
-            name: "Maya Rodriguez",
-            email: "maya.rodriguez@azorg.be",
-            role: "Research Nurse",
-            initials: "MR",
-        },
-        {
-            id: "member-5",
-            name: "Noah Brooks",
-            email: "noah.brooks@azorg.be",
-            role: "Data Manager",
-            initials: "NB",
-        },
-    ];
+    return [];
 }
 
 function getSeedMembers(runtimeUser: ReturnType<typeof getRuntimeUserIdentity>): DemoTeamMemberSeed[] {
