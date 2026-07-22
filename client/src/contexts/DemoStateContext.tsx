@@ -478,6 +478,7 @@ const mergeUniqueTeamMembers = (primary: TeamMember[], secondary: TeamMember[]):
     const seen = new Set<string>();
 
     const pushUnique = (member: TeamMember) => {
+        if (isHardcodedMockMember(member)) return;
         const keys = getMemberIdentityKeys(member);
         if (keys.length === 0) {
             merged.push(member);
@@ -630,6 +631,14 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
     });
 
     useEffect(() => {
+        const sanitized = (state.teamMembers || []).filter((m) => !isHardcodedMockMember(m));
+        if (sanitized.length !== (state.teamMembers || []).length) {
+            setState((prev) => ({
+                ...prev,
+                teamMembers: sanitized,
+            }));
+            return;
+        }
         const aligned = alignStateToActiveOrganization(state);
         if (aligned !== state) {
             setState(aligned);
