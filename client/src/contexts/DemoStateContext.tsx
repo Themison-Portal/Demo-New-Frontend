@@ -330,6 +330,13 @@ export const isHardcodedMockMember = (member: any) => {
     if (/^member-\d+$/i.test(id)) return true;
     const name = String(member.name || "").trim().toLowerCase();
     if (HARDCODED_MOCK_NAMES.has(name)) return true;
+    for (const mockName of Array.from(HARDCODED_MOCK_NAMES)) {
+        if (name.includes(mockName)) return true;
+    }
+    const email = String(member.email || "").trim().toLowerCase();
+    if (/^(ava\.patel|liam\.chen|maya\.rodriguez|noah\.brooks|kaleb|olivia\.hart|sofia\.alvarez|daniel\.nguyen|priya\.nair|lucas\.meyer|isabelle\.laurent|jordan\.reed|zara\.malik|hannah\.park|marco\.silva|rina\.sato|owen\.price|camila\.duarte|isaac\.walker)/i.test(email)) {
+        return true;
+    }
     return false;
 };
 
