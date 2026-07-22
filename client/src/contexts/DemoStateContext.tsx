@@ -111,164 +111,7 @@ const initialDemoState: DemoState = {
     ],
     documents: [],
     milestones: [],
-    teamMembers: [
-        {
-            id: "member-1",
-            name: "Kaleb Sanders",
-            email: "kaleb.s@azorg.be",
-            role: "Principal Investigator",
-            clinicalRole: "Principal Investigator",
-            appRole: "Superadmin",
-            team: "Clinical",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "KS",
-        },
-        {
-            id: "member-2",
-            name: "Ava Patel",
-            email: "ava.patel@azorg.be",
-            role: "Sub-Investigator",
-            clinicalRole: "Sub-Investigator",
-            appRole: "Admin",
-            team: "Clinical",
-            site: "Brussels",
-            status: "Active",
-            initials: "AP",
-        },
-        {
-            id: "member-3",
-            name: "Liam Chen",
-            email: "liam.chen@azorg.be",
-            role: "Clinical Research Coordinator",
-            clinicalRole: "CRC",
-            appRole: "Editor",
-            team: "Study Team",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "LC",
-        },
-        {
-            id: "member-4",
-            name: "Maya Rodriguez",
-            email: "maya.rodriguez@azorg.be",
-            role: "Research Nurse",
-            clinicalRole: "Nurse",
-            appRole: "Editor",
-            team: "Nursing",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "MR",
-        },
-        {
-            id: "member-5",
-            name: "Noah Brooks",
-            email: "noah.brooks@azorg.be",
-            role: "Data Manager",
-            clinicalRole: "Data Manager",
-            appRole: "Editor",
-            team: "Data",
-            site: "Amsterdam",
-            status: "Active",
-            initials: "NB",
-        },
-        {
-            id: "member-6",
-            name: "Olivia Hart",
-            email: "olivia.hart@azorg.be",
-            role: "Regulatory Specialist",
-            clinicalRole: "Regulatory",
-            appRole: "Admin",
-            team: "Regulatory",
-            site: "London",
-            status: "Active",
-            initials: "OH",
-        },
-        {
-            id: "member-7",
-            name: "Sofia Alvarez",
-            email: "sofia.alvarez@azorg.be",
-            role: "Clinical Operations",
-            clinicalRole: "CRC",
-            appRole: "Editor",
-            team: "Study Team",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "SA",
-        },
-        {
-            id: "member-8",
-            name: "Daniel Nguyen",
-            email: "daniel.nguyen@azorg.be",
-            role: "Lab Lead",
-            clinicalRole: "Lab",
-            appRole: "Admin",
-            team: "Lab",
-            site: "Copenhagen",
-            status: "Active",
-            initials: "DN",
-        },
-        {
-            id: "member-9",
-            name: "Priya Nair",
-            email: "priya.nair@azorg.be",
-            role: "Safety Lead",
-            clinicalRole: "Safety",
-            appRole: "Editor",
-            team: "Safety",
-            site: "London",
-            status: "Active",
-            initials: "PN",
-        },
-        {
-            id: "member-10",
-            name: "Lucas Meyer",
-            email: "lucas.meyer@azorg.be",
-            role: "Site Manager",
-            clinicalRole: "Site Manager",
-            appRole: "Admin",
-            team: "Operations",
-            site: "Berlin",
-            status: "Active",
-            initials: "LM",
-        },
-        {
-            id: "member-11",
-            name: "Isabelle Laurent",
-            email: "isabelle.laurent@azorg.be",
-            role: "Quality Lead",
-            clinicalRole: "Quality",
-            appRole: "Editor",
-            team: "Quality",
-            site: "Paris",
-            status: "Active",
-            initials: "IL",
-        },
-        {
-            id: "member-12",
-            name: "Jordan Reed",
-            email: "jordan.reed@azorg.be",
-            role: "Regulatory",
-            clinicalRole: "Regulatory",
-            appRole: "Editor",
-            team: "Regulatory",
-            site: "Brussels",
-            status: "Active",
-            initials: "JR",
-        },
-        {
-            id: "member-13",
-            name: "Zara Malik",
-            email: "zara.malik@azorg.be",
-            role: "Pharmacovigilance",
-            clinicalRole: "Pharmacovigilance",
-            appRole: "Editor",
-            team: "Safety",
-            site: "London",
-            status: "Active",
-            initials: "ZM",
-        },
-    ],
+    teamMembers: [],
     trials: [
         {
             id: '1',
@@ -457,25 +300,54 @@ const migrateMemberEmailDomain = (email: string) => {
     return `${trimmed.slice(0, -LEGACY_MEMBER_EMAIL_DOMAIN.length)}${CURRENT_MEMBER_EMAIL_DOMAIN}`;
 };
 
+const HARDCODED_MOCK_NAMES = new Set([
+    "kaleb sanders",
+    "ava patel",
+    "liam chen",
+    "maya rodriguez",
+    "noah brooks",
+    "olivia hart",
+    "sofia alvarez",
+    "daniel nguyen",
+    "priya nair",
+    "lucas meyer",
+    "isabelle laurent",
+    "jordan reed",
+    "zara malik",
+    "hannah park",
+    "marco silva",
+    "rina sato",
+    "owen price",
+    "camila duarte",
+    "isaac walker",
+    "jordan de boer",
+    "daniel van dijk",
+]);
+
+export const isHardcodedMockMember = (member: any) => {
+    if (!member) return false;
+    const id = String(member.id || "").trim();
+    if (/^member-\d+$/i.test(id)) return true;
+    const name = String(member.name || "").trim().toLowerCase();
+    if (HARDCODED_MOCK_NAMES.has(name)) return true;
+    return false;
+};
+
 const migrateDemoStateMemberEmails = (value: DemoState): DemoState => {
     if (!Array.isArray(value.teamMembers) || value.teamMembers.length === 0) {
         return value;
     }
 
-    let didChange = false;
-    const migratedTeamMembers = value.teamMembers.map((member) => {
-        const nextEmail = migrateMemberEmailDomain(member.email ?? "");
-        if (nextEmail !== member.email) {
-            didChange = true;
-            return { ...member, email: nextEmail };
-        }
-        return member;
-    });
+    const filteredTeamMembers = value.teamMembers
+        .filter((member) => !isHardcodedMockMember(member))
+        .map((member) => {
+            const nextEmail = migrateMemberEmailDomain(member.email ?? "");
+            return nextEmail !== member.email ? { ...member, email: nextEmail } : member;
+        });
 
-    if (!didChange) return value;
     return {
         ...value,
-        teamMembers: migratedTeamMembers,
+        teamMembers: filteredTeamMembers,
     };
 };
 
@@ -757,6 +629,23 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
             setState((prev) => alignStateToActiveOrganization(prev));
         };
 
+        try {
+            [STORAGE_KEY_BUILDING, STORAGE_KEY_SAMPLE, STORAGE_KEY_FULL, STORAGE_KEY_DEFAULT_BUILDING, STORAGE_KEY_DEFAULT_SAMPLE, STORAGE_KEY_DEFAULT_FULL].forEach((k) => {
+                const raw = localStorage.getItem(k);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (Array.isArray(parsed.teamMembers)) {
+                        const cleaned = parsed.teamMembers.filter((m: any) => !isHardcodedMockMember(m));
+                        if (cleaned.length !== parsed.teamMembers.length) {
+                            parsed.teamMembers = cleaned;
+                            localStorage.setItem(k, JSON.stringify(parsed));
+                        }
+                    }
+                }
+            });
+            clearCollaborationDemoStorage();
+        } catch {}
+
         window.addEventListener("storage", alignFromProfile);
         window.addEventListener(ORGANIZATION_PROFILE_UPDATED_EVENT, alignFromProfile as EventListener);
         return () => {
@@ -900,15 +789,7 @@ export function DemoStateProvider({ children }: { children: ReactNode }) {
             { id: "task-7", name: "Patient consent forms", status: "due_today", completed: false },
             { id: "task-8", name: "Data entry verification", status: "need_answers", completed: false },
         ],
-        teamMembers: [
-            ...initialDemoState.teamMembers,
-            { id: "member-14", name: "Hannah Park", email: "hannah.park@azorg.be", role: "Project Manager", clinicalRole: "Project Manager", appRole: "Admin", team: "Operations", site: "Brussels", status: "Active", initials: "HP" },
-            { id: "member-15", name: "Marco Silva", email: "marco.silva@azorg.be", role: "Clinical Operations", clinicalRole: "Clinical Ops", appRole: "Editor", team: "Clinical", site: "Lisbon", status: "Active", initials: "MS" },
-            { id: "member-16", name: "Rina Sato", email: "rina.sato@azorg.be", role: "eTMF Lead", clinicalRole: "eTMF", appRole: "Editor", team: "Regulatory", site: "Berlin", status: "Active", initials: "RS" },
-            { id: "member-17", name: "Owen Price", email: "owen.price@azorg.be", role: "Medical Monitor", clinicalRole: "Medical Monitor", appRole: "Admin", team: "Medical", site: "London", status: "Active", initials: "OP" },
-            { id: "member-18", name: "Camila Duarte", email: "camila.duarte@azorg.be", role: "Site Coordinator", clinicalRole: "CRC", appRole: "Editor", team: "Study Team", site: "Paris", status: "Active", initials: "CD" },
-            { id: "member-19", name: "Isaac Walker", email: "isaac.walker@azorg.be", role: "Principal Investigator", clinicalRole: "Principal Investigator", appRole: "Admin", team: "Clinical", site: "Copenhagen", status: "Active", initials: "IW" },
-        ],
+        teamMembers: [],
         trials: [
             ...initialDemoState.trials,
             { id: 'yza-567', name: 'Trial YZA-567', phase: 'Phase II', status: 'active', sponsor: 'Merck', enrolled: 15, target: 45, color: '#14b8a6' },

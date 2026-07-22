@@ -160,17 +160,7 @@ function readCurrentConversationDatasetMode(): DemoDataMode {
 }
 
 // Demo team profile IDs — match DB seed data
-const DEMO_PROFILE_MAP: Record<string, string> = {
-    "ava patel": "11111111-1111-1111-1111-111111111111",
-    "liam chen": "22222222-2222-2222-2222-222222222222",
-    "jordan de boer": "33333333-3333-3333-3333-333333333333",
-    "daniel van dijk": "44444444-4444-4444-4444-444444444444",
-    "isabelle laurent": "55555555-5555-5555-5555-555555555555",
-    "noah brooks": "66666666-6666-6666-6666-666666666666",
-    "maya rodriguez": "77777777-7777-7777-7777-777777777777",
-    "olivia hart": "88888888-8888-8888-8888-888888888888",
-    "sofia alvarez": "99999999-9999-9999-9999-999999999999",
-};
+const DEMO_PROFILE_MAP: Record<string, string> = {};
 
 function getDemoProfileId(name: string): string | null {
     return DEMO_PROFILE_MAP[name.toLowerCase().trim()] ?? null;
@@ -382,6 +372,39 @@ function toInitials(value: string) {
     return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "TM";
 }
 
+const HARDCODED_MOCK_NAMES = new Set([
+    "kaleb sanders",
+    "ava patel",
+    "liam chen",
+    "maya rodriguez",
+    "noah brooks",
+    "olivia hart",
+    "sofia alvarez",
+    "daniel nguyen",
+    "priya nair",
+    "lucas meyer",
+    "isabelle laurent",
+    "jordan reed",
+    "zara malik",
+    "hannah park",
+    "marco silva",
+    "rina sato",
+    "owen price",
+    "camila duarte",
+    "isaac walker",
+    "jordan de boer",
+    "daniel van dijk",
+]);
+
+function isHardcodedMockMember(member: { id?: unknown; name?: unknown }) {
+    if (!member) return false;
+    const id = String(member.id || "").trim();
+    if (/^member-\d+$/i.test(id)) return true;
+    const name = String(member.name || "").trim().toLowerCase();
+    if (HARDCODED_MOCK_NAMES.has(name)) return true;
+    return false;
+}
+
 function getTeamMembersFromDemoState(): DemoTeamMemberSeed[] {
     if (typeof window === "undefined") return [];
     try {
@@ -398,6 +421,8 @@ function getTeamMembersFromDemoState(): DemoTeamMemberSeed[] {
             .map((item, index) => {
                 if (!item || typeof item !== "object") return null;
                 const member = item as Record<string, unknown>;
+                if (isHardcodedMockMember(member)) return null;
+
                 const name = typeof member.name === "string" ? member.name.trim() : "";
                 if (!name) return null;
 
@@ -421,43 +446,14 @@ function getTeamMembersFromDemoState(): DemoTeamMemberSeed[] {
                     initials,
                 } as DemoTeamMemberSeed;
             })
-            .filter((member): member is DemoTeamMemberSeed => Boolean(member));
+            .filter((member): member is DemoTeamMemberSeed => Boolean(member) && !isHardcodedMockMember(member!));
     } catch {
         return [];
     }
 }
 
 function getFallbackTeamMembers(): DemoTeamMemberSeed[] {
-    return [
-        {
-            id: "member-2",
-            name: "Ava Patel",
-            email: "ava.patel@azorg.be",
-            role: "Sub-Investigator",
-            initials: "AP",
-        },
-        {
-            id: "member-3",
-            name: "Liam Chen",
-            email: "liam.chen@azorg.be",
-            role: "Clinical Research Coordinator",
-            initials: "LC",
-        },
-        {
-            id: "member-4",
-            name: "Maya Rodriguez",
-            email: "maya.rodriguez@azorg.be",
-            role: "Research Nurse",
-            initials: "MR",
-        },
-        {
-            id: "member-5",
-            name: "Noah Brooks",
-            email: "noah.brooks@azorg.be",
-            role: "Data Manager",
-            initials: "NB",
-        },
-    ];
+    return [];
 }
 
 function getSeedMembers(runtimeUser: ReturnType<typeof getRuntimeUserIdentity>): DemoTeamMemberSeed[] {
