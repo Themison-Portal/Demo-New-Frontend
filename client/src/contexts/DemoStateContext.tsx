@@ -425,12 +425,17 @@ const readOrganizationMemberRules = () => {
 };
 
 const alignStateToActiveOrganization = (targetState: DemoState): DemoState => {
+    const sanitizedMembers = (targetState.teamMembers || []).filter((m) => !isHardcodedMockMember(m));
+    const targetWithSanitized = sanitizedMembers.length !== (targetState.teamMembers || []).length
+        ? { ...targetState, teamMembers: sanitizedMembers }
+        : targetState;
+
     const rules = readOrganizationMemberRules();
-    if (!rules) return targetState;
-    if (!Array.isArray(targetState.teamMembers) || targetState.teamMembers.length === 0) return targetState;
+    if (!rules) return targetWithSanitized;
+    if (!Array.isArray(targetWithSanitized.teamMembers) || targetWithSanitized.teamMembers.length === 0) return targetWithSanitized;
 
     let changed = false;
-    const nextTeamMembers = targetState.teamMembers.map((member) => {
+    const nextTeamMembers = targetWithSanitized.teamMembers.map((member) => {
         const nextEmail = (() => {
             if (!rules.domain) return member.email;
             const current = String(member.email || "").trim();
@@ -450,9 +455,9 @@ const alignStateToActiveOrganization = (targetState: DemoState): DemoState => {
         };
     });
 
-    if (!changed) return targetState;
+    if (!changed) return targetWithSanitized;
     return {
-        ...targetState,
+        ...targetWithSanitized,
         teamMembers: nextTeamMembers,
     };
 };
@@ -564,10 +569,17 @@ const getSampleMembersForBuilding = (): TeamMember[] => {
 const syncBuildingTeamMembersFromSample = (targetState: DemoState): DemoState => {
     if (targetState.dataMode !== "building") return targetState;
 
-    const sampleMembers = getSampleMembersForBuilding();
-    if (sampleMembers.length === 0) return targetState;
+    const sampleMembers = getSampleMembersForBuilding().filter((m) => !isHardcodedMockMember(m));
+    const currentMembers = (targetState.teamMembers || []).filter((m) => !isHardcodedMockMember(m));
 
-    const mergedMembers = mergeUniqueTeamMembers(sampleMembers, targetState.teamMembers || []);
+    if (sampleMembers.length === 0) {
+        return {
+            ...targetState,
+            teamMembers: currentMembers,
+        };
+    }
+
+    const mergedMembers = mergeUniqueTeamMembers(sampleMembers, currentMembers).filter((m) => !isHardcodedMockMember(m));
     return {
         ...targetState,
         teamMembers: mergedMembers,
