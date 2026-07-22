@@ -8,6 +8,7 @@
  */
 
 import type { CreateThreadInput, DraftResult, ThreadFilters, Conversation, CollaborationMessage } from "@/types/collaboration";
+import { getAuth0Client } from "@/auth/auth0Provider";
 
 // ─────────────────────────────────────────
 // Config
@@ -172,15 +173,25 @@ async function apiFetch<T>(
     path: string,
     options: RequestInit = {}
 ): Promise<T> {
-    const token = null; // AUTH_DISABLED=true — no token needed for demo
-
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(options.headers as Record<string, string> ?? {}),
     };
 
-    if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
+    // Attach the logged-in user's Auth0 token so the BE resolves the real
+    // member/org (required once AUTH_DISABLED=false). Mirrors invitationsApi.ts.
+    // Fails open: if there's no session the request goes out unauthenticated
+    // and the BE returns 401 where it needs auth.
+    const auth0 = getAuth0Client();
+    if (auth0) {
+        try {
+            if (await auth0.isAuthenticated()) {
+                const token = await auth0.getTokenSilently();
+                if (token) headers["Authorization"] = `Bearer ${token}`;
+            }
+        } catch (err) {
+            console.warn("[apiClient] getTokenSilently failed", err);
+        }
     }
 
     const response = await fetch(`${API_URL}${path}`, {

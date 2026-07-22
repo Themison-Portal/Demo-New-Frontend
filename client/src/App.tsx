@@ -3,6 +3,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import AuthCallback from "@/pages/AuthCallback";
+import SignupComplete from "@/pages/SignupComplete";
 import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { AuthBanner } from "./auth/AuthBanner";
@@ -168,6 +169,13 @@ function Router() {
   // match what's registered in the Auth0 dashboard's Allowed Callback URLs.
   if (locationPath === "/callback") {
     return <AuthCallback />;
+  }
+
+  // Invitation-acceptance / signup page — rendered full-screen, outside the
+  // dashboard chrome, since the invitee isn't authenticated yet. Path must
+  // match the link the BE builds in invitation emails (`{FRONTEND_URL}/signup`).
+  if (locationPath === "/signup") {
+    return <SignupComplete />;
   }
 
   // Handle dynamic breadcrumbs for trial detail pages

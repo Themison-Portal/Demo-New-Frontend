@@ -1,0 +1,39 @@
+# Dependencies & build output — installed/produced inside the image.
+# Excluding host node_modules is REQUIRED: the host is win32, the image is
+# alpine/linux, so native binaries (esbuild, etc.) must not be copied over.
+**/node_modules
+.pnpm-store/
+dist/
+build/
+*.dist
+*.tsbuildinfo
+
+# VCS & local tooling
+.git
+.gitignore
+.vscode/
+.idea/
+
+# Runtime/log artifacts
+.manus-logs/
+uploads/
+*.log
+logs/
+
+# Large binary artifacts at the repo root not needed to build or run.
+# Anchored with a leading `/` so client/public and drizzle/*.sql are kept.
+/VdPKSTxjIzkMKWpj.sql
+/molecules.png
+/molecules2.png
+/5504306_20793.jpg
+/themison-prototype.zip
+/Genetics_lottie.html
+/*.docx
+/Loader_10/
+/vision-ui-dashboard-pro-react-main/
+/backup-next-root/
+/reference/
+
+# Note: `.env` is intentionally NOT ignored — Vite reads VITE_* from it at
+# build time and the server reads secrets from it at runtime (compose env
+# overrides the container-specific values).
