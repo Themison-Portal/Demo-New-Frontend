@@ -1,0 +1,148 @@
+# Task Manager — Backend Integration Plan
+
+Connect the Task Manager frontend (`Tasks.tsx`) to the FastAPI backend via the existing tRPC→FastAPI proxy pattern.
+
+## Current State
+
+The integration is **already partially done**. Here's what exists:
+
+| Layer | Status | Details |
+|-------|--------|---------|
+| **Frontend** ([Tasks.tsx](file:///c:/Users/JONAATH/Demo-New-Frontend/client/src/pages/Tasks.tsx)) | ✅ Complete UI | 4,382-line Kanban/Timeline/List/Wall views, task CRUD modals, drag-and-drop, filtering |
+| **Server Proxy** ([mapRouter.ts](file:///c:/Users/JONAATH/Demo-New-Frontend/server/mapRouter.ts)) | ⚠️ Partial | Core CRUD works via `callBackend()`. Mock phases, no dependencies, some stubs |
+| **Backend Client** ([backendClient.ts](file:///c:/Users/JONAATH/Demo-New-Frontend/server/_core/backendClient.ts)) | ✅ Done | Proxy with JIT auth headers |
+| **Backend API** ([tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/api/routes/api/tasks.py)) | ⚠️ Basic | List/Create/Update/Delete — missing: `assigned_role`, `blocked_reason`, `phase_id`, `order_in_phase`, dependencies |
+| **Backend Model** ([tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/models/tasks.py)) | ⚠️ Basic | Core columns exist, missing several fields the frontend expects |
+| **Backend Contracts** ([tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/contracts/tasks.py)) | ⚠️ Basic | Missing fields that frontend uses |
+
+## Key Gaps
+
+### 1. Backend Model Missing Fields
+The frontend `Task` type has fields the backend model doesn't:
+- `phase_id` — which phase/visit the task belongs to
+- `assigned_role` — role-based assignment (PI, CRC, Nurse, etc.)
+- `blocked_reason` — structured JSON for blocker metadata
+- `blocked_since` — when the task was blocked
+- `order_in_phase` — display ordering
+- `suggested_date` — AI-suggested due date
+- `suggested_assignee` — AI-suggested person
+
+### 2. Dependencies Not Stored
+The frontend has a full dependency system (`TaskDependency` with source/target/type), but the backend has no `task_dependencies` table. The `mapRouter.ts` stubs return empty arrays.
+
+### 3. Mock Phases
+The `mapRouter.ts` generates 4 hardcoded phases (Screening, Baseline, Treatment, Follow-up) instead of reading from the backend. Real phase management doesn't exist in the backend.
+
+---
+
+## Proposed Changes
+
+### Phase 1: Backend Model & API Enhancements (Demo-New-Backend)
+
+#### [MODIFY] [tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/models/tasks.py) (Model)
+Add missing columns to the `Task` model:
+```python
+phase_id = Column(String, nullable=True)           # e.g. "screening", "treatment"
+assigned_role = Column(String, nullable=True)       # e.g. "pi", "crc", "nurse"
+blocked_reason = Column(String, nullable=True)      # JSON-encoded blocker metadata
+blocked_since = Column(DateTime, nullable=True)
+order_in_phase = Column(Integer, default=0)
+suggested_date = Column(DateTime, nullable=True)
+suggested_assignee = Column(String, nullable=True)
+```
+
+> [!IMPORTANT]
+> These are **nullable additive columns** — no migration breakage. We can add them via Alembic migration or directly via SQL `ALTER TABLE`.
+
+---
+
+#### [MODIFY] [tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/contracts/tasks.py) (Contracts)
+Update `TaskResponse`, `TaskCreate`, `TaskUpdate` to include the new fields.
+
+---
+
+#### [MODIFY] [tasks.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/api/routes/api/tasks.py) (API Routes)
+- Return new fields in `TaskResponse`
+- Accept new fields in `TaskCreate` and `TaskUpdate`
+- Add `phase_id` filter to list endpoint
+
+---
+
+#### [NEW] [task_dependencies.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/models/task_dependencies.py) (Model)
+New model for task dependency relationships:
+```python
+class TaskDependency(Base):
+    __tablename__ = "task_dependencies"
+    id = Column(UUID, primary_key=True)
+    source_task_id = Column(UUID, ForeignKey("tasks.id"))
+    target_task_id = Column(UUID, ForeignKey("tasks.id"))
+    dependency_type = Column(String, default="finish_to_start")
+    condition_label = Column(String, nullable=True)
+    is_cross_phase = Column(Boolean, default=False)
+```
+
+---
+
+#### [NEW] [task_dependencies.py](file:///c:/Users/JONAATH/Demo-New-Backend/app/api/routes/api/task_dependencies.py) (API Routes)
+CRUD endpoints for task dependencies:
+- `GET /api/task-dependencies/?task_id=...` — list dependencies for a task
+- `POST /api/task-dependencies/` — create dependency
+- `DELETE /api/task-dependencies/{id}` — remove dependency
+
+---
+
+### Phase 2: Server Proxy Enhancements (Demo-New-Frontend)
+
+#### [MODIFY] [mapRouter.ts](file:///c:/Users/JONAATH/Demo-New-Frontend/server/mapRouter.ts)
+- **`mapBackendTaskToClient()`**: Map new backend fields (`phase_id`, `assigned_role`, `blocked_reason`, etc.) into the frontend `Task` type instead of using defaults
+- **`loadWorkspace` & `load`**: Fetch dependencies from backend alongside tasks
+- **`createTask`**: Send all fields to backend (not just title/status/priority/category)
+- **`updateTask`**: Forward `assigned_role`, `blocked_reason`, `phase_id`, etc.
+- **`addDependency` / `removeDependency`**: Call real backend API instead of returning stubs
+- **`moveTask`**: Update `phase_id` and `order_in_phase` on backend
+
+---
+
+### Phase 3: Alembic Migration (Demo-New-Backend)
+
+#### [NEW] Migration file
+Generate Alembic migration to add the new columns and `task_dependencies` table:
+```bash
+alembic revision --autogenerate -m "add task manager fields and dependencies"
+```
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Database Access**: Do you have access to run Alembic migrations against the development database? Or should we do manual `ALTER TABLE` statements?
+
+> [!IMPORTANT]
+> **Phase Management**: Should we keep the 4 hardcoded phases (Screening, Baseline, Treatment, Follow-up) for now, or do you want to create a `phases` table in the backend? Keeping hardcoded phases is simpler for the demo.
+
+> [!NOTE]
+> **Scope**: This plan focuses on making the existing frontend fully functional with real backend data. It does NOT change the Tasks.tsx UI — just ensures data flows end-to-end.
+
+## Verification Plan
+
+### Automated Tests
+1. Run `npx tsc --noEmit` on the frontend to verify no TypeScript errors
+2. Start the backend and test each endpoint:
+   ```bash
+   # List tasks
+   curl http://localhost:8000/api/tasks/
+   
+   # Create task with new fields
+   curl -X POST http://localhost:8000/api/tasks/ -H "Content-Type: application/json" \
+     -d '{"trial_id": "...", "title": "Test", "phase_id": "screening", "assigned_role": "crc"}'
+   
+   # Update with blocked_reason
+   curl -X PATCH http://localhost:8000/api/tasks/{id} \
+     -d '{"status": "blocked", "blocked_reason": "..."}'
+   ```
+
+### Manual Verification
+- Start the frontend dev server (`npm run dev`)
+- Navigate to the Task Manager page
+- Verify: tasks load in Kanban view, create/edit/delete works, drag-and-drop status changes persist, dependencies can be added/removed
