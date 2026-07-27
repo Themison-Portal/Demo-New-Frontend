@@ -13,23 +13,38 @@ import { useLocation } from "wouter";
 import { useAuth0 } from "../auth/auth0Provider";
 
 export default function AuthCallback() {
-  const { isLoading, isAuthenticated } = useAuth0();
-  const [, navigate] = useLocation();
+    const { isLoading, isAuthenticated, appState, bootstrapError } = useAuth0();
+    const [, navigate] = useLocation();
 
-  useEffect(() => {
-    if (isLoading) return;
-    // Auth0Provider has finished its bootstrap; we can safely redirect.
-    // appState.returnTo would be ideal but Auth0Provider doesn't expose
-    // it yet — for now, send the user to the workspace landing.
-    navigate(isAuthenticated ? "/" : "/", { replace: true });
-  }, [isLoading, isAuthenticated, navigate]);
+    useEffect(() => {
+        if (bootstrapError) return;
+        const returnTo =
+            typeof appState?.returnTo === "string" && appState.returnTo
+                ? appState.returnTo
+                : "/";
+        navigate(isAuthenticated ? returnTo : "/", { replace: true });
+    }, [isLoading, isAuthenticated, appState, bootstrapError, navigate]);
+    if (bootstrapError) {
+        return (
+            <div className="flex h-screen w-screen items-center justify-center bg-background px-4">
+                <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+                    <p className="text-sm font-medium text-red-600">
+                        Sign-in isn&apos;t working right now.
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                        Please try again in a moment, or contact support if this keeps happening.
+                    </p>
+                </div>
+            </div>
+        );
+    }
 
-  return (
-    <div className="flex h-screen w-screen items-center justify-center bg-background">
-      <div className="flex flex-col items-center gap-3 text-muted-foreground">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-        <p className="text-sm">Signing you in…</p>
-      </div>
-    </div>
-  );
+    return (
+        <div className="flex h-screen w-screen items-center justify-center bg-background">
+            <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                <p className="text-sm">Signing you in…</p>
+            </div>
+        </div>
+    );
 }
