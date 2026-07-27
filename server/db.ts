@@ -11,7 +11,11 @@ let _client: ReturnType<typeof postgres> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _client = postgres(process.env.DATABASE_URL, { max: 10 });
+      const isProd = process.env.NODE_ENV === "production" || process.env.DATABASE_URL.includes("render.com");
+      const ssl = isProd || process.env.DATABASE_URL.includes("sslmode=require")
+        ? { rejectUnauthorized: false }
+        : false;
+      _client = postgres(process.env.DATABASE_URL, { max: 10, ssl: ssl as any });
       _db = drizzle(_client);
     } catch (error) {
       console.warn("[Database] Failed to connect to PostgreSQL:", error);
