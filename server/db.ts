@@ -11,8 +11,11 @@ let _client: ReturnType<typeof postgres> | null = null;
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
+      // Explicit `sslmode=disable` wins, so a non-SSL Postgres (e.g. the local
+      // docker `db`, which has ssl=off) works even under NODE_ENV=production.
+      const noSsl = process.env.DATABASE_URL.includes("sslmode=disable");
       const isProd = process.env.NODE_ENV === "production" || process.env.DATABASE_URL.includes("render.com");
-      const ssl = isProd || process.env.DATABASE_URL.includes("sslmode=require")
+      const ssl = !noSsl && (isProd || process.env.DATABASE_URL.includes("sslmode=require"))
         ? { rejectUnauthorized: false }
         : false;
       _client = postgres(process.env.DATABASE_URL, { max: 10, ssl: ssl as any });

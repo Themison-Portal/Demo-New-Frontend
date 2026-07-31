@@ -37,6 +37,7 @@ import { ThreadStatusBadge } from "@/components/collaboration/threads/ThreadStat
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { useDemoState, type TeamMember } from "@/contexts/DemoStateContext";
+import { useAuth0 } from "@/auth/auth0Provider";
 import { toast } from "sonner";
 
 interface CollaborationHubProps {
@@ -690,8 +691,34 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
         }
     }, [activeConversationId, isNewConversationDraft, setActiveConversation, visibleConversations]);
 
+    // Real org members from the BE (GET /api/members/). This is the source of
+    // truth for the member pickers; demoState.teamMembers is only a fallback for
+    // demo/offline mode where the BE isn't reachable.
+    const { isAuthenticated } = useAuth0();
+    const [backendMembers, setBackendMembers] = useState<TeamMember[]>([]);
+    useEffect(() => {
+        // Fetch only once authenticated — firing on mount races the Auth0
+        // token bootstrap and 401s (with no retry). Gating on isAuthenticated
+        // guarantees the request carries a Bearer token.
+        if (!isAuthenticated) return;
+        let cancelled = false;
+        collabApi
+            .listMembers()
+            .then((rows) => {
+                if (!cancelled) setBackendMembers(rows as TeamMember[]);
+            })
+            .catch((err) => {
+                console.warn("[CollaborationHub] listMembers failed", err);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isAuthenticated]);
+
     const availableMembers = useMemo(() => {
-        return (demoState.teamMembers || [])
+        const source =
+            backendMembers.length > 0 ? backendMembers : demoState.teamMembers || [];
+        return source
             .filter((member) => {
                 const selfName = normalizeLookupKey(runtimeUser?.name);
                 const selfEmail = normalizeLookupKey(runtimeUser?.email);
@@ -703,7 +730,7 @@ export function CollaborationHub({ trialId, dataMode }: CollaborationHubProps) {
                 return true;
             })
             .sort((a, b) => a.name.localeCompare(b.name));
-    }, [demoState.teamMembers, runtimeUser?.email, runtimeUser?.name]);
+    }, [backendMembers, demoState.teamMembers, runtimeUser?.email, runtimeUser?.name]);
 
     const filteredMembers = useMemo(() => {
         const normalized = newConversationQuery.trim().toLowerCase();

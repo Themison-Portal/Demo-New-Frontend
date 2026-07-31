@@ -31,6 +31,19 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   if (!(error instanceof TRPCClientError)) return;
   if (typeof window === "undefined") return;
 
+  // Never start a new login redirect while an Auth0 callback is being processed.
+  // On the /callback page the app's queries fire before handleRedirectCallback
+  // finishes, so they 401; triggering loginWithRedirect here overwrites the
+  // in-flight PKCE transaction (a0.spajs.txs.*) and the code exchange then fails
+  // with `invalid_grant: Invalid authorization code`, leaving the user logged
+  // out. Let the callback complete; queries refetch with a token afterwards.
+  if (
+    window.location.pathname === "/callback" ||
+    window.location.search.includes("code=")
+  ) {
+    return;
+  }
+
   const isUnauthorized = error.message === UNAUTHED_ERR_MSG;
 
   if (!isUnauthorized) return;

@@ -352,9 +352,10 @@ async function queryViaCoreBackend(params: {
     resolvedTrialId: string | undefined;
     sessionId: string | undefined;
     user: unknown;
+    authToken: string | null;
     questionType: string;
 }): Promise<{ message: string; thinking?: string; sources: DocumentAISource[] } | null> {
-    const { docs, messages, resolvedTrialId, sessionId, user, questionType } = params;
+    const { docs, messages, resolvedTrialId, sessionId, user, authToken, questionType } = params;
     try {
         const beResponse = await callBackend<{
             message: string;
@@ -380,6 +381,9 @@ async function queryViaCoreBackend(params: {
                 sessionId: sessionId ?? null,
             },
             user: user as any,
+            // Forward the real bearer token so the BE attributes the chat to the
+            // logged-in user instead of the proxy-header demo fallback.
+            authToken,
         });
 
         // Map BE sources back to the FE source shape, joining with the BE document
@@ -563,33 +567,25 @@ export const documentAIRouter = router({
             if (!input.documentIds || input.documentIds.length === 0) {
                 // "All Documents": list the trial's BE documents (prefer indexed, cap
                 // the fan-out). No FE-local fallback — the FE-local RAG is retired.
+                // If the trial can't be resolved (building/cross-trial mode) or has
+                // no indexed docs, we deliberately fall through with docs=[] so the
+                // query still reaches the BE and gets recorded; the BE returns its
+                // own no-documents guidance message.
                 const beTrialId = input.trialId
                     ? await resolveBeTrialIdForRead(db, mode, input.trialId)
                     : null;
-                if (!beTrialId) {
-                    return {
-                        message:
-                            "Select a trial with indexed documents to ask questions. (Sandbox/building-mode trials without backend documents don't support AI chat.)",
-                        sources: [],
-                    };
-                }
-                const ALL_DOCS_CAP = 10;
-                try {
-                    const all = await client.listTrialDocuments(beTrialId, token);
-                    const indexed = all.filter(
-                        (d) =>
-                            d.ingestion_status === "ready" || d.ingestion_status === "complete"
-                    );
-                    docs = (indexed.length > 0 ? indexed : all).slice(0, ALL_DOCS_CAP);
-                } catch (error) {
-                    console.warn("[Document AI] BE list failed in All-Documents mode.", error);
-                }
-                if (docs.length === 0) {
-                    return {
-                        message:
-                            "There are no indexed documents in this trial yet. Upload protocol documents and wait for indexing to finish, then ask again.",
-                        sources: [],
-                    };
+                if (beTrialId) {
+                    const ALL_DOCS_CAP = 10;
+                    try {
+                        const all = await client.listTrialDocuments(beTrialId, token);
+                        const indexed = all.filter(
+                            (d) =>
+                                d.ingestion_status === "ready" || d.ingestion_status === "complete"
+                        );
+                        docs = (indexed.length > 0 ? indexed : all).slice(0, ALL_DOCS_CAP);
+                    } catch (error) {
+                        console.warn("[Document AI] BE list failed in All-Documents mode.", error);
+                    }
                 }
             } else {
                 // Selected documents: the ids ARE BE document UUIDs (the FE document
@@ -605,13 +601,6 @@ export const documentAIRouter = router({
                         })
                     )
                 ).filter((d): d is CoreBackendTrialDocument => d !== null);
-                if (docs.length === 0) {
-                    return {
-                        message:
-                            "These documents aren't available in the AI knowledge base yet. Please re-upload and wait for indexing to finish.",
-                        sources: [],
-                    };
-                }
             }
 
             const beResult = await queryViaCoreBackend({
@@ -620,6 +609,9 @@ export const documentAIRouter = router({
                 resolvedTrialId,
                 sessionId: input.sessionId,
                 user: ctx.user,
+                // Raw bearer token (null when unauthenticated) — lets the BE
+                // attribute the chat to the real logged-in user.
+                authToken: ctx.authToken ?? null,
                 questionType,
             });
             if (beResult) return beResult;

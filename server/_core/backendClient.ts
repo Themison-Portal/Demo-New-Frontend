@@ -6,6 +6,14 @@ export type RequestOptions = {
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
   user?: User | null;
+  /**
+   * The caller's Auth0 bearer token. When present it is forwarded as
+   * `Authorization: Bearer …` and the BE resolves the real logged-in user
+   * from it. Without it we fall back to the trusted-proxy `x-user-email`
+   * header, which defaults to a demo identity — so pass this whenever the
+   * request is made on behalf of an authenticated user.
+   */
+  authToken?: string | null;
 };
 
 export async function callBackend<T = any>(
@@ -37,12 +45,17 @@ export async function callBackend<T = any>(
     Accept: "application/json",
   };
 
-  // Attach trusted proxy headers based on tRPC user context
-  const email = options.user?.email || "test@themison.com";
-  const name = options.user?.name || "Demo User";
-  
-  headers["x-user-email"] = email;
-  headers["x-user-name"] = name;
+  // Prefer the caller's real Auth0 bearer token so the BE resolves the actual
+  // logged-in user (the BE checks x-user-email *before* the bearer token, so we
+  // must NOT send the proxy header when we have a token). Fall back to the
+  // trusted-proxy header — which defaults to a demo identity — only when no
+  // token is available (dev/demo mode).
+  if (options.authToken) {
+    headers["Authorization"] = `Bearer ${options.authToken}`;
+  } else {
+    headers["x-user-email"] = options.user?.email || "test@themison.com";
+    headers["x-user-name"] = options.user?.name || "Demo User";
+  }
 
   const fetchOptions: RequestInit = {
     method,
