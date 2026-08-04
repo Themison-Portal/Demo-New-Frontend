@@ -19,7 +19,7 @@ export const patientsRouter = router({
             try {
                 const db = await getDb();
                 const mode = (input.demoMode ?? "sample") as DemoMode;
-                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                const beTrialId = db ? await resolveBeTrialIdForRead(mode, input.trialId) : input.trialId;
                 if (!beTrialId) return [];
                 const enrollments = await callBackend<any[]>(`/api/trial-patients`, {
                     query: { trial_id: beTrialId },
@@ -141,7 +141,7 @@ export const patientsRouter = router({
             try {
                 const db = await getDb();
                 const mode = (input.demoMode ?? "sample") as DemoMode;
-                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                const beTrialId = db ? await resolveBeTrialIdForRead(mode, input.trialId) : input.trialId;
                 if (!beTrialId) {
                     throw new TRPCError({ code: "NOT_FOUND", message: "No backend trial for this id" });
                 }
@@ -221,7 +221,7 @@ export const patientsRouter = router({
             try {
                 const db = await getDb();
                 const mode = (input.demoMode ?? "sample") as DemoMode;
-                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                const beTrialId = db ? await resolveBeTrialIdForRead(mode, input.trialId) : input.trialId;
                 if (!beTrialId) return [];
                 const visits = await callBackend<any[]>(`/api/patient-visits/`, {
                     query: { patient_id: input.patientId, trial_id: beTrialId },
@@ -306,7 +306,7 @@ export const patientsRouter = router({
             try {
                 const db = await getDb();
                 const mode = (input.demoMode ?? "sample") as DemoMode;
-                const beTrialId = db ? await resolveBeTrialIdForRead(db, mode, input.trialId) : input.trialId;
+                const beTrialId = db ? await resolveBeTrialIdForRead(mode, input.trialId) : input.trialId;
                 if (!beTrialId) {
                     throw new TRPCError({ code: "NOT_FOUND", message: "No backend trial for this id" });
                 }

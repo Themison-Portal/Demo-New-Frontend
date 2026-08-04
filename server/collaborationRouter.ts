@@ -130,7 +130,7 @@ function shouldInvokeAI(content: string, forceForThread = false) {
 async function getTrialContext(db: DbClient, trialId: string, mode: DemoMode = "sample") {
   // Trials are BE-owned and identified by UUID. Validate the id, then read the
   // trial's metadata from the BE by UUID.
-  const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+  const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
   if (!beTrialId) return null;
   let t: any;
   try {
@@ -173,7 +173,7 @@ async function getProtocolChunksForTrial(
   // Documents are BE-owned (the FE `protocols` table is retired). Trials are
   // also BE-owned, so resolve the BE trial UUID via the BE (no FE `trials`
   // read) and take its top documents (current first, then newest).
-  const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+  const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
   if (!beTrialId) return [];
 
   let beDocs;
@@ -665,7 +665,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return [];
 
         const items = await db
@@ -756,7 +756,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const conversationId = randomUUID();
@@ -947,7 +947,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return [];
 
         const filters = [eq(threads.trialId, beTrialUuid)];
@@ -1009,7 +1009,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const threadId = randomUUID();
@@ -1368,7 +1368,7 @@ export const collaborationRouter = router({
         const db = await getDb();
         if (!db) throw new Error("Database not available");
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return null;
         return await ensureTrialInbox(db, beTrialUuid);
       }),
@@ -1388,7 +1388,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return [];
 
         const inbox = await ensureTrialInbox(db, beTrialUuid);
@@ -1445,7 +1445,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const inbox = await ensureTrialInbox(db, beTrialUuid);
@@ -2034,7 +2034,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         return await createAiMessage({
@@ -2164,7 +2164,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const taskCard = buildTaskCardFromPrompt(input.content);
@@ -2275,7 +2275,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return [];
 
         const tokenized = input.query
@@ -2329,7 +2329,7 @@ export const collaborationRouter = router({
         if (!db) throw new Error("Database not available");
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialUuid) return { success: true } as const;
 
         await logCollabEvent(db, {
@@ -2355,7 +2355,7 @@ export const collaborationRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
       if (!beTrialUuid) {
         throw new Error("No backend trial found for this trial id; cannot seed collaboration data");
       }

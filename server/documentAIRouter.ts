@@ -515,15 +515,10 @@ export const documentAIRouter = router({
             })
         )
         .mutation(async ({ input, ctx }) => {
-            const db = await getDb();
-            if (!db) {
-                throw new Error("Database not available");
-            }
-
             const mode = (input.demoMode ?? "sample") as DemoMode;
             let resolvedTrialId: string | undefined;
             if (input.trialId && input.trialId !== "all") {
-                resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+                resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
             }
 
             // Get the latest user message
@@ -572,7 +567,7 @@ export const documentAIRouter = router({
                 // query still reaches the BE and gets recorded; the BE returns its
                 // own no-documents guidance message.
                 const beTrialId = input.trialId
-                    ? await resolveBeTrialIdForRead(db, mode, input.trialId)
+                    ? await resolveBeTrialIdForRead(mode, input.trialId)
                     : null;
                 if (beTrialId) {
                     const ALL_DOCS_CAP = 10;
@@ -814,12 +809,8 @@ ${contextText}
             })
         )
         .mutation(async ({ input, ctx }) => {
-            const db = await getDb();
-            if (!db) {
-                throw new Error("Database not available");
-            }
             const mode = (input.demoMode ?? "sample") as DemoMode;
-            const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+            const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
             if (!beTrialId) {
                 return { success: false, message: "No backend trial found for this trial" };
             }

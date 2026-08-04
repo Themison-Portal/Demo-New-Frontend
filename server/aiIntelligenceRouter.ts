@@ -52,12 +52,12 @@ export const aiIntelligenceRouter = router({
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedTrialId =
         input.trialId && input.trialId !== "all"
-          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          ? await resolveTrialId(mode, input.trialId, mode !== "building")
           : undefined;
       // BE trial UUID for migrated child tables (executionMaps, mapTelemetryEvents).
       const beTrialUuid =
         input.trialId && input.trialId !== "all"
-          ? await resolveBeTrialIdForRead(db, mode, input.trialId)
+          ? await resolveBeTrialIdForRead(mode, input.trialId)
           : undefined;
 
       await logTelemetryEvent({
@@ -152,11 +152,11 @@ export const aiIntelligenceRouter = router({
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedTrialId =
         input.trialId && input.trialId !== "all"
-          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          ? await resolveTrialId(mode, input.trialId, mode !== "building")
           : undefined;
       const beTrialUuid =
         input.trialId && input.trialId !== "all"
-          ? await resolveBeTrialIdForRead(db, mode, input.trialId)
+          ? await resolveBeTrialIdForRead(mode, input.trialId)
           : undefined;
 
       const diagnostics = await runUnifiedQueryDiagnostics({
@@ -243,11 +243,11 @@ export const aiIntelligenceRouter = router({
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedTrialId =
         input.trialId && input.trialId !== "all"
-          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          ? await resolveTrialId(mode, input.trialId, mode !== "building")
           : undefined;
       const beTrialUuid =
         input.trialId && input.trialId !== "all"
-          ? await resolveBeTrialIdForRead(db, mode, input.trialId)
+          ? await resolveBeTrialIdForRead(mode, input.trialId)
           : undefined;
 
       const report = await runUnifiedEvalHarness({
@@ -291,8 +291,8 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
       const signalResult = await getTelemetryDrivenSignals({
         db,
         trialId: resolvedTrialId,
@@ -345,8 +345,8 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
       const result = await runOrchestratedAgent({
         db,
         trialId: resolvedTrialId,
@@ -395,7 +395,7 @@ export const aiIntelligenceRouter = router({
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const resolvedTrialId =
         input.trialId && input.trialId !== "all"
-          ? await resolveTrialId(db, mode, input.trialId, mode !== "building")
+          ? await resolveTrialId(mode, input.trialId, mode !== "building")
           : undefined;
 
       const rows = listPendingApprovals({
@@ -487,8 +487,8 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
       const snapshot = await computeTrialIntelligenceSnapshot(db, resolvedTrialId, beTrialUuid);
       if (!snapshot) return null;
 
@@ -527,8 +527,8 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
       const result = await syncTrialKnowledgeGraph(db, resolvedTrialId, beTrialUuid);
 
       await logTelemetryEvent({
@@ -565,9 +565,9 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
       // knowledgeGraphNodes/Edges are BE-keyed: query by the BE trial UUID.
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
 
       const nodeLimit = input.maxNodes ?? 1000;
       const edgeLimit = input.maxEdges ?? 2500;
@@ -686,9 +686,9 @@ export const aiIntelligenceRouter = router({
       if (!db) throw new Error("Database not available");
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const resolvedTrialId = await resolveTrialId(db, mode, input.trialId, mode !== "building");
+      const resolvedTrialId = await resolveTrialId(mode, input.trialId, mode !== "building");
       // aiTrainingExamples is BE-keyed: store the BE trial UUID (nullable column).
-      const beTrialUuid = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
 
       await db.insert(aiTrainingExamples).values({
         sourceEventId: null,

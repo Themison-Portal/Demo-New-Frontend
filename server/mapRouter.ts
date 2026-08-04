@@ -162,7 +162,7 @@ export const mapRouter = router({
         const db = await getDb();
         if (!db) return null;
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+        const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialId) return null;
 
         const trial = await callBackend(`/api/trials/${beTrialId}`, { user: ctx.user });
@@ -266,7 +266,7 @@ export const mapRouter = router({
         const db = await getDb();
         if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
         const mode = (input.demoMode ?? "sample") as DemoMode;
-        const beTrialId = await resolveBeTrialIdForRead(db, mode, input.mapId);
+        const beTrialId = await resolveBeTrialIdForRead(mode, input.mapId);
         if (!beTrialId) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -347,7 +347,7 @@ export const mapRouter = router({
       const db = await getDb();
       if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+      const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
       if (!beTrialId) {
         throw new TRPCError({
           code: "NOT_FOUND",

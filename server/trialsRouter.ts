@@ -276,7 +276,7 @@ export const trialsRouter = router({
       let beTrialUuid: string | null = null;
       try {
         const db = await getDb();
-        beTrialUuid = db ? await resolveBeTrialIdForRead(db, mode, input.id) : null;
+        beTrialUuid = db ? await resolveBeTrialIdForRead(mode, input.id) : null;
       } catch {
         beTrialUuid = beTrial?.id ?? null;
       }
