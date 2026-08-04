@@ -48,6 +48,20 @@ type WorksheetGeneratedOutput = {
   generatedBy?: string | null;
 };
 
+const DEFAULT_DOCUMENT_CATEGORIES = [
+  "Protocol",
+  "Lab Manual",
+  "Pharmacy Manual",
+  "Schedule of Assessments (SoA)",
+  "Informed Consent Form (ICF)",
+  "EDC/CRF Completion Guide",
+  "Safety Reporting Manual",
+  "Monitoring Plan",
+  "Amendments",
+  "Regulatory Submission",
+  "Other",
+];
+
 const WORKSHEET_STORAGE_KEY = "themison-worksheet-drafts:v1";
 const WORKSHEET_OPEN_REQUEST_KEY = "themison-open-worksheet-request:v1";
 
@@ -66,6 +80,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const [typeFilter, setTypeFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"latest" | "oldest" | "name-asc" | "name-desc">("latest");
   const [generatedOutputs, setGeneratedOutputs] = useState<WorksheetGeneratedOutput[]>([]);
+
 
   const loadGeneratedOutputs = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -181,6 +196,28 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
 
   // Query categories
   const { data: categories } = trpc.documents.getCategories.useQuery();
+
+  // Helper to build list of category options guaranteed never to be empty
+  const getCategoryOptions = useCallback(
+    (currentDocCategory?: string) => {
+      const names = new Set<string>();
+
+      if (categories && categories.length > 0) {
+        categories.forEach((cat) => {
+          if (cat.name?.trim()) names.add(cat.name.trim());
+        });
+      }
+
+      DEFAULT_DOCUMENT_CATEGORIES.forEach((name) => names.add(name));
+
+      if (currentDocCategory?.trim()) {
+        names.add(currentDocCategory.trim());
+      }
+
+      return Array.from(names);
+    },
+    [categories]
+  );
 
   // Upload mutation
   const uploadMutation = trpc.documents.upload.useMutation({
@@ -695,9 +732,9 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                         }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
                       >
-                        {categories?.map((cat) => (
-                          <option key={cat.id} value={cat.name}>
-                            {cat.name}
+                        {getCategoryOptions().map((name) => (
+                          <option key={name} value={name}>
+                            {name}
                           </option>
                         ))}
                         <option value="__add_new__">+ Add New Category</option>
@@ -980,7 +1017,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
 
                       <td className="px-4 py-4 align-middle">
                         <select
-                          value={doc.category}
+                          value={doc.category || "Protocol"}
                           onChange={(e) => {
                             updateCategoryMutation.mutate({
                               id: doc.id,
@@ -990,9 +1027,9 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                           className="w-full min-w-0 max-w-[130px] px-2 py-1 bg-blue-50 text-blue-700 text-xs rounded-md border border-blue-100 focus:ring-2 focus:ring-blue-500 cursor-pointer truncate overflow-hidden text-ellipsis whitespace-nowrap"
                           disabled={updateCategoryMutation.isPending}
                         >
-                          {categories?.map((cat) => (
-                            <option key={cat.id} value={cat.name}>
-                              {cat.name}
+                          {getCategoryOptions(doc.category).map((name) => (
+                            <option key={name} value={name}>
+                              {name}
                             </option>
                           ))}
                         </select>

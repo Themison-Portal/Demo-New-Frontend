@@ -32,6 +32,20 @@ const parseVersionNumber = (value?: string | null) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const DEFAULT_DOCUMENT_CATEGORIES = [
+  "Protocol",
+  "Lab Manual",
+  "Pharmacy Manual",
+  "Schedule of Assessments (SoA)",
+  "Informed Consent Form (ICF)",
+  "EDC/CRF Completion Guide",
+  "Safety Reporting Manual",
+  "Monitoring Plan",
+  "Amendments",
+  "Regulatory Submission",
+  "Other",
+];
+
 export const documentsRouter = router({
   list: publicProcedure
     .input(
@@ -394,8 +408,48 @@ export const documentsRouter = router({
   // BE trial_documents table).
   getCategories: publicProcedure.query(async () => {
     const db = await getDb();
-    if (!db) return [];
-    return db.select().from(documentCategories).orderBy(documentCategories.name);
+    if (!db) {
+      return DEFAULT_DOCUMENT_CATEGORIES.map((name, index) => ({
+        id: index + 1,
+        name,
+        isDefault: true,
+      }));
+    }
+
+    try {
+      let rows = await db.select().from(documentCategories).orderBy(documentCategories.name);
+
+      if (rows.length === 0) {
+        // Auto-seed default categories if database table is empty
+        await db
+          .insert(documentCategories)
+          .values(
+            DEFAULT_DOCUMENT_CATEGORIES.map((name) => ({
+              name,
+              isDefault: true,
+            }))
+          )
+          .onConflictDoNothing();
+        rows = await db.select().from(documentCategories).orderBy(documentCategories.name);
+      }
+
+      if (rows.length === 0) {
+        return DEFAULT_DOCUMENT_CATEGORIES.map((name, index) => ({
+          id: index + 1,
+          name,
+          isDefault: true,
+        }));
+      }
+
+      return rows;
+    } catch (error) {
+      console.warn("[DocumentsRouter] getCategories error:", error);
+      return DEFAULT_DOCUMENT_CATEGORIES.map((name, index) => ({
+        id: index + 1,
+        name,
+        isDefault: true,
+      }));
+    }
   }),
 
   createCategory: protectedProcedure
