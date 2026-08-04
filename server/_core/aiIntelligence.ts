@@ -609,7 +609,7 @@ export async function buildCrossTrialAnalytics(db: any, mode: DemoMode, persistR
       trialRows.map(async (trial: any) => {
         // Migrated child tables (taskScaffolds, ai_* rollups) are BE-keyed:
         // resolve each FE trial id to its BE trial UUID (or null).
-        const beTrialUuid = await resolveBeTrialIdForRead(db, mode, stripDemoId(String(trial.id)));
+        const beTrialUuid = await resolveBeTrialIdForRead(mode, stripDemoId(String(trial.id)));
         return computeTrialIntelligenceSnapshot(db, trial.id, beTrialUuid);
       })
     )

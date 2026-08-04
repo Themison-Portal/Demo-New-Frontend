@@ -2661,10 +2661,17 @@ const state: CollaborationStore = {
         }
     },
     async createDirectConversationWithMember(trialId, member) {
-        // check if this member has a real profile ID
-        const realProfileId = getDemoProfileId(member.name);
+        // Prefer the real profile id from the BE member list (member.id is now a
+        // profile UUID from GET /api/members/). Fall back to the demo name→id
+        // mapping only when member.id isn't a real UUID.
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const isRealMember = UUID_RE.test(String(member.id));
+        const realProfileId = isRealMember ? String(member.id) : getDemoProfileId(member.name);
+        // Real members always go to the BE; demo-mapped ids keep the prior
+        // building-mode-only behaviour.
+        const shouldUseBackend = isRealMember || state.dataMode === "building";
 
-        if (realProfileId && state.dataMode === "building") {
+        if (realProfileId && shouldUseBackend) {
             try {
                 // create conversation by sending initial empty-ish message
                 await collabApi.sendConversationMessage({

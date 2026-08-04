@@ -165,6 +165,32 @@ function mapDirectMessage(raw: any) {
     };
 }
 
+function mapMember(raw: any) {
+    const fullName =
+        (raw.name && String(raw.name).trim()) ||
+        [raw.first_name, raw.last_name].filter(Boolean).join(" ").trim() ||
+        (raw.email ? String(raw.email).split("@")[0] : "") ||
+        "Member";
+    const initials =
+        fullName
+            .split(/\s+/)
+            .map((p: string) => p[0])
+            .filter(Boolean)
+            .slice(0, 2)
+            .join("")
+            .toUpperCase() || "?";
+    return {
+        // Direct messages are addressed by profile id (BE `recipient_id`
+        // resolves against profiles), so expose profile_id as the member id.
+        id: raw.profile_id ?? raw.id,
+        name: fullName,
+        email: raw.email ?? "",
+        role: raw.default_role ?? "member",
+        initials,
+        appRole: raw.default_role ?? undefined,
+    };
+}
+
 // ─────────────────────────────────────────
 // Core fetch wrapper
 // ─────────────────────────────────────────
@@ -214,6 +240,16 @@ async function apiFetch<T>(
 // ─────────────────────────────────────────
 
 export const collabApi = {
+
+    // ─── Members ──────────────────────────────────────────────────────
+
+    // Real org members from the BE (GET /api/members/). Returned in the
+    // FE TeamMember shape so the collaboration member pickers can use real
+    // users instead of client-side demo state.
+    listMembers: async () => {
+        const rows = await apiFetch<any[]>(`/api/members/`);
+        return (rows ?? []).map(mapMember);
+    },
 
     // ─── Direct Messages ──────────────────────────────────────────────
 

@@ -962,7 +962,7 @@ export const studySetupWizardRouter = router({
       // before any scaffold insert; if there's no BE trial yet, there's nothing
       // to scaffold against — bail without writing a null trialId.
       const wizardDb = await getDb();
-      const beTrialUuid = wizardDb ? await resolveBeTrialIdForRead(wizardDb, mode, trialId) : null;
+      const beTrialUuid = wizardDb ? await resolveBeTrialIdForRead(mode, trialId) : null;
       if (!beTrialUuid) {
         throw new Error("No backend trial found for this trial");
       }

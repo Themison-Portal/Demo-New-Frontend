@@ -17,6 +17,13 @@ export default function AuthCallback() {
     const [, navigate] = useLocation();
 
     useEffect(() => {
+        // Wait for Auth0Provider to finish processing the redirect callback.
+        // handleRedirectCallback runs after an async `createAuth0Client`, so on
+        // first mount isLoading is still true and isAuthenticated false. Calling
+        // navigate("/", {replace:true}) here would strip ?code=&state= from the
+        // URL before the code is exchanged — silently breaking login. Only
+        // navigate once loading has settled.
+        if (isLoading) return;
         if (bootstrapError) return;
         const returnTo =
             typeof appState?.returnTo === "string" && appState.returnTo

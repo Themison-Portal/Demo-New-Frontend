@@ -1851,7 +1851,9 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         persistChatSession(sessionIdForRequest, nextHistoryWithUser);
         setIsTransitioning(false);
         setIsLoading(true);
-        const sessionId = getSessionId();
+        // Send the per-conversation id (not the tab-scoped telemetry id) so the
+        // BE groups all turns of this conversation under one chat_sessions row.
+        const sessionId = sessionIdForRequest;
 
         logEvent({
             eventType: "ai_query_submitted",
