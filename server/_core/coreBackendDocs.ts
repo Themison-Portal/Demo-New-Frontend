@@ -12,7 +12,7 @@ import { type DemoMode } from "./demoMode";
 import type { CoreBackendTrialDocument } from "@shared/coreBackendTypes";
 
 const UUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
@@ -22,8 +22,8 @@ type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
  * fine; a real Auth0 token is forwarded when present on the tRPC context.
  */
 export function authTokenFrom(ctx: unknown): string {
-  const token = (ctx as { authToken?: string } | null)?.authToken;
-  return token || "auth-disabled-bypass";
+    const token = (ctx as { authToken?: string } | null)?.authToken;
+    return token || "auth-disabled-bypass";
 }
 
 /**
@@ -34,15 +34,14 @@ export function authTokenFrom(ctx: unknown): string {
  * signature for the ~11 callers but is no longer used for resolution.
  */
 export async function resolveBeTrialIdForRead(
-  _db: Db,
-  _mode: DemoMode,
-  trialId: string
+    _mode: DemoMode,
+    trialId: string
 ): Promise<string | null> {
-  if (UUID_RE.test(trialId)) return trialId;
-  console.warn(
-    `[coreBackendDocs] Non-UUID trial id "${trialId}" — trials are UUID-only now; ignoring.`
-  );
-  return null;
+    if (UUID_RE.test(trialId)) return trialId;
+    console.warn(
+        `[coreBackendDocs] Non-UUID trial id "${trialId}" — trials are UUID-only now; ignoring.`
+    );
+    return null;
 }
 
 /**
@@ -51,43 +50,43 @@ export async function resolveBeTrialIdForRead(
  * document UUID — the FE document identity post-retirement.
  */
 export function mapBeDoc(d: CoreBackendTrialDocument) {
-  const ingest = d.ingestion_status;
-  const isIndexed = ingest === "ready" || ingest === "complete";
-  const indexStatus: "indexed" | "processing" | "failed" = isIndexed
-    ? "indexed"
-    : ingest === "failed" || ingest === "error"
-      ? "failed"
-      : "processing";
-  return {
-    id: d.id,
-    coreBackendDocumentId: d.id,
-    trialId: d.trial_id,
-    filename: d.document_name,
-    fileUrl: d.document_url,
-    category: d.category ?? d.document_type,
-    documentType: d.document_type,
-    documentVersion: d.document_version,
-    amendmentVersion: d.amendment_version,
-    releaseDate: d.release_date,
-    isCurrent: d.is_current ?? false,
-    archivedAt: d.archived_at,
-    sourceType: d.source_type,
-    sourceReference: d.source_reference,
-    fileSize: d.file_size,
-    uploadedBy: d.uploaded_by,
-    uploaderName: d.uploaded_by_name || "Unknown",
-    description: d.description,
-    createdAt: d.created_at,
-    updatedAt: d.updated_at,
-    ingestionStatus: d.ingestion_status,
-    isIndexed,
-    indexStatus,
-    indexFailureReason:
-      indexStatus === "failed"
-        ? "core-backend ingestion failed. Retry processing."
-        : null,
-    indexUpdatedAt: d.updated_at,
-    contextIndexed: isIndexed,
-    contextChunkCount: 0,
-  };
+    const ingest = d.ingestion_status;
+    const isIndexed = ingest === "ready" || ingest === "complete";
+    const indexStatus: "indexed" | "processing" | "failed" = isIndexed
+        ? "indexed"
+        : ingest === "failed" || ingest === "error"
+            ? "failed"
+            : "processing";
+    return {
+        id: d.id,
+        coreBackendDocumentId: d.id,
+        trialId: d.trial_id,
+        filename: d.document_name,
+        fileUrl: d.document_url,
+        category: d.category ?? d.document_type,
+        documentType: d.document_type,
+        documentVersion: d.document_version,
+        amendmentVersion: d.amendment_version,
+        releaseDate: d.release_date,
+        isCurrent: d.is_current ?? false,
+        archivedAt: d.archived_at,
+        sourceType: d.source_type,
+        sourceReference: d.source_reference,
+        fileSize: d.file_size,
+        uploadedBy: d.uploaded_by,
+        uploaderName: d.uploaded_by_name || "Unknown",
+        description: d.description,
+        createdAt: d.created_at,
+        updatedAt: d.updated_at,
+        ingestionStatus: d.ingestion_status,
+        isIndexed,
+        indexStatus,
+        indexFailureReason:
+            indexStatus === "failed"
+                ? "core-backend ingestion failed. Retry processing."
+                : null,
+        indexUpdatedAt: d.updated_at,
+        contextIndexed: isIndexed,
+        contextChunkCount: 0,
+    };
 }
