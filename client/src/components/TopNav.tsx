@@ -39,7 +39,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Check } from "lucide-react";
+import { Check, LogOut } from "lucide-react";
+import { useAuth0 } from "@/auth/auth0Provider";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { useSignedOutState } from "@/lib/authHelpers";
 
 const MODE_SESSION_BOOTSTRAP_KEY_PREFIX = "themison-mode-session-bootstrapped:";
 
@@ -84,6 +87,31 @@ export function TopNav() {
     full: false,
     building: false,
   });
+  const { logout: auth0Logout, isAuthenticated: isAuth0Authenticated } = useAuth0();
+  const { logout: tRPCLogout } = useAuth();
+  const [signedOutState, setSignedOutState] = useSignedOutState();
+
+  const handleSignOut = async () => {
+    try {
+      toast.loading("Signing out...", { id: "signout-toast" });
+      await tRPCLogout().catch(() => {});
+      setSignedOutState(true);
+      toast.success("Signed out successfully", { id: "signout-toast" });
+      if (isAuth0Authenticated) {
+        await auth0Logout();
+      } else {
+        navigate("/");
+      }
+    } catch (error) {
+      console.error("Sign out error:", error);
+      toast.error("Failed to sign out", { id: "signout-toast" });
+    }
+  };
+
+  const handleSignIn = () => {
+    setSignedOutState(false);
+    navigate("/");
+  };
 
   const runtimeUser = useMemo(() => {
     if (typeof window === "undefined") {
@@ -439,99 +467,111 @@ export function TopNav() {
             <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
           </Button>
 
-          {/* User Profile Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="flex items-center gap-2 h-9 px-2">
-                <Avatar className="h-7 w-7 rounded-md">
-                  <AvatarImage src={displayAvatar} alt={displayName} className="rounded-md object-cover" />
-                  <AvatarFallback className="rounded-md bg-primary text-primary-foreground text-xs" style={{backgroundColor: '#e6e7eb'}}>
-                    <User className="h-4 w-4 text-gray-600" />
-                  </AvatarFallback>
-                </Avatar>
-                <span className="text-xs font-medium hidden md:inline">{displayName}</span>
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>
-                <div className="flex flex-col">
-                  <span className="font-medium">{displayName}</span>
-                  <span className="text-xs text-muted-foreground font-normal">
-                    {displayEmail}
-                  </span>
-                </div>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => toast.info("Profile feature coming soon")}>
-                Profile
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => toast.info("Settings feature coming soon")}>
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <span>Demo Controls</span>
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuItem 
-                    onClick={() => setConfirmDialog({ open: true, type: 'sample' })}
-                    className="flex items-center justify-between"
-                  >
-                    <span>Load Sample Data</span>
-                    {currentDataMode === 'sample' && <Check className="h-4 w-4 ml-4" />}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    onClick={() => setConfirmDialog({ open: true, type: 'full' })}
-                    className="flex items-center justify-between"
-                  >
-                    <span>Load Full Dataset</span>
-                    {currentDataMode === 'full' && <Check className="h-4 w-4 ml-4" />}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    className="flex items-center justify-between"
-                    onClick={() => setConfirmDialog({ open: true, type: 'building' })}
-                  >
-                    <span>Building Mode</span>
-                    {currentDataMode === 'building' && <Check className="h-4 w-4 ml-4" />}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={async () => {
-                      toast.loading("Saving mode default...", { id: "save-mode-default" });
-                      try {
-                        await saveModeDefaultMutation.mutateAsync({ mode: currentDataMode });
-                        saveCurrentModeAsDefault();
-                        toast.success(`Saved ${currentDataMode} mode as default`, { id: "save-mode-default" });
-                      } catch (error) {
-                        console.error(error);
-                        toast.error("Failed to save mode default", { id: "save-mode-default" });
-                      }
-                    }}
-                  >
-                    Save Current Mode as Default
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem 
-                    onClick={() => setConfirmDialog({ open: true, type: 'reset' })}
-                    className="flex items-center justify-between"
-                  >
-                    <span>Reset to Empty</span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    onClick={() => setConfirmDialog({ open: true, type: 'full-reset' })}
-                    className="flex items-center justify-between"
-                  >
-                    <span>Full Reset</span>
-                  </DropdownMenuItem>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => toast.info("Sign out feature coming soon")}>
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* User Profile / Sign in */}
+          {signedOutState ? (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-8 px-3 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-md"
+              onClick={handleSignIn}
+            >
+              Sign in
+            </Button>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="flex items-center gap-2 h-9 px-2">
+                  <Avatar className="h-7 w-7 rounded-md">
+                    <AvatarImage src={displayAvatar} alt={displayName} className="rounded-md object-cover" />
+                    <AvatarFallback className="rounded-md bg-primary text-primary-foreground text-xs" style={{backgroundColor: '#e6e7eb'}}>
+                      <User className="h-4 w-4 text-gray-600" />
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="text-xs font-medium hidden md:inline">{displayName}</span>
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>
+                  <div className="flex flex-col">
+                    <span className="font-medium">{displayName}</span>
+                    <span className="text-xs text-muted-foreground font-normal">
+                      {displayEmail}
+                    </span>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => toast.info("Profile feature coming soon")}>
+                  Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigate("/settings")}>
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <span>Demo Controls</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem 
+                      onClick={() => setConfirmDialog({ open: true, type: 'sample' })}
+                      className="flex items-center justify-between"
+                    >
+                      <span>Load Sample Data</span>
+                      {currentDataMode === 'sample' && <Check className="h-4 w-4 ml-4" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      onClick={() => setConfirmDialog({ open: true, type: 'full' })}
+                      className="flex items-center justify-between"
+                    >
+                      <span>Load Full Dataset</span>
+                      {currentDataMode === 'full' && <Check className="h-4 w-4 ml-4" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      className="flex items-center justify-between"
+                      onClick={() => setConfirmDialog({ open: true, type: 'building' })}
+                    >
+                      <span>Building Mode</span>
+                      {currentDataMode === 'building' && <Check className="h-4 w-4 ml-4" />}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={async () => {
+                        toast.loading("Saving mode default...", { id: "save-mode-default" });
+                        try {
+                          await saveModeDefaultMutation.mutateAsync({ mode: currentDataMode });
+                          saveCurrentModeAsDefault();
+                          toast.success(`Saved ${currentDataMode} mode as default`, { id: "save-mode-default" });
+                        } catch (error) {
+                          console.error(error);
+                          toast.error("Failed to save mode default", { id: "save-mode-default" });
+                        }
+                      }}
+                    >
+                      Save Current Mode as Default
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem 
+                      onClick={() => setConfirmDialog({ open: true, type: 'reset' })}
+                      className="flex items-center justify-between"
+                    >
+                      <span>Reset to Empty</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      onClick={() => setConfirmDialog({ open: true, type: 'full-reset' })}
+                      className="flex items-center justify-between"
+                    >
+                      <span>Full Reset</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleSignOut} className="text-red-600 focus:text-red-600 cursor-pointer flex items-center gap-2">
+                  <LogOut className="h-4 w-4" />
+                  <span>Sign out</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </header>
 

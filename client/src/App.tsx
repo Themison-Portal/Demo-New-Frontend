@@ -36,6 +36,8 @@ import Organization from "./pages/Organization";
 import Integrations from "./pages/Integrations";
 import Notifications from "./pages/Notifications";
 import Settings from "./pages/Settings";
+import { SignInScreen } from "./components/SignInScreen";
+import { useSignedOutState } from "./lib/authHelpers";
 import { logEvent } from "./lib/telemetry";
 
 // Icon mapping for each route - matches sidebar navigation icons exactly
@@ -155,6 +157,8 @@ function Router() {
         lastTimestampRef.current = now;
     }, [location]);
 
+    const [isSignedOut, setSignedOutState] = useSignedOutState();
+
     const isEmbeddedTaskModal =
         locationPath === "/tasks" &&
         typeof window !== "undefined" &&
@@ -211,6 +215,14 @@ function Router() {
             ];
             breadcrumbIcon = TrialElements;
         }
+    }
+
+    if (isSignedOut) {
+        return (
+            <DashboardLayout breadcrumbs={[{ label: "Sign In Required" }]} breadcrumbIcon={Home}>
+                <SignInScreen onSignIn={() => setSignedOutState(false)} />
+            </DashboardLayout>
+        );
     }
 
     return (
@@ -275,13 +287,6 @@ function App() {
                         <DemoStateProvider>
                             <TooltipProvider>
                                 <Toaster />
-                                {/*
-                 * Minimum viable Auth0 login surface — fixed-position
-                 * banner showing Sign in / Sign out + user email. Move
-                 * into the Sidebar/Topbar in a follow-up when those
-                 * components get touched.
-                 */}
-                                {!hideBanner && <AuthBanner />}
                                 <Router />
                             </TooltipProvider>
                         </DemoStateProvider>
