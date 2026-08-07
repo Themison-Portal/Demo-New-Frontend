@@ -105,7 +105,7 @@ export default function Home3() {
     const matchedByName = state.teamMembers.find(
       (member) => member.name.toLowerCase() === normalizedRuntimeName
     );
-    return matchedByName ?? state.teamMembers[0] ?? null;
+    return matchedByName ?? null;
   }, [runtimeUser.email, runtimeUser.name, state.teamMembers]);
 
   const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });

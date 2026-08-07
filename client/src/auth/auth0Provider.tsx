@@ -151,6 +151,19 @@ export function Auth0Provider({ children }: { children: ReactNode }) {
                 const authed = await next.isAuthenticated();
                 const u = authed ? await next.getUser() : undefined;
 
+                if (authed && u && u.email && typeof window !== "undefined") {
+                    try {
+                        const name = u.name || u.nickname || u.email.split("@")[0];
+                        window.localStorage.setItem(
+                            "manus-runtime-user-info",
+                            JSON.stringify({ name, email: u.email })
+                        );
+                        window.localStorage.removeItem("themison_signed_out");
+                    } catch {
+                        // ignore
+                    }
+                }
+
                 if (cancelled) return;
                 // Stash on the module-level ref so non-React callers (e.g.,
                 // the queryClient subscription handler in main.tsx) can

@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useDemoState } from "@/contexts/DemoStateContext";
+import { useAuth0 } from "@/auth/auth0Provider";
+import { useAuth } from "@/_core/hooks/useAuth";
 import { logEvent } from "@/lib/telemetry";
 
 type WorkspaceTask = {
@@ -192,35 +194,41 @@ export default function Home4() {
   const pulseCardRef = useRef<HTMLElement | null>(null);
   const [topRowHeight, setTopRowHeight] = useState<number | null>(null);
 
+  const { user: auth0User } = useAuth0();
+  const { user: trpcUser } = useAuth();
+
   const runtimeUser = useMemo(() => {
     if (typeof window === "undefined") {
-      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      return { name: "Clinical Coordinator", email: "user@themison.com" };
     }
     try {
       const raw = window.localStorage.getItem("manus-runtime-user-info");
-      if (!raw) return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      if (!raw) return { name: "Clinical Coordinator", email: "user@themison.com" };
       const parsed = JSON.parse(raw) as { name?: unknown; email?: unknown };
       return {
-        name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Kaleb Sanders",
-        email: typeof parsed.email === "string" && parsed.email.trim() ? parsed.email.trim() : "kaleb.s@azorg.be",
+        name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Clinical Coordinator",
+        email: typeof parsed.email === "string" && parsed.email.trim() ? parsed.email.trim() : "user@themison.com",
       };
     } catch {
-      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      return { name: "Clinical Coordinator", email: "user@themison.com" };
     }
   }, []);
 
+  const activeEmail = auth0User?.email || (trpcUser as any)?.email || runtimeUser.email;
+  const activeName = auth0User?.name || auth0User?.nickname || (trpcUser as any)?.name || runtimeUser.name;
+
   const currentMember = useMemo(() => {
-    const normalizedRuntimeEmail = runtimeUser.email.toLowerCase();
-    const normalizedRuntimeName = runtimeUser.name.toLowerCase();
+    const normalizedEmail = activeEmail.toLowerCase();
+    const normalizedName = activeName.toLowerCase();
     const matchedByEmail = state.teamMembers.find(
-      (member) => member.email.toLowerCase() === normalizedRuntimeEmail
+      (member) => member.email.toLowerCase() === normalizedEmail
     );
     if (matchedByEmail) return matchedByEmail;
     const matchedByName = state.teamMembers.find(
-      (member) => member.name.toLowerCase() === normalizedRuntimeName
+      (member) => member.name.toLowerCase() === normalizedName
     );
-    return matchedByName ?? state.teamMembers[0] ?? null;
-  }, [runtimeUser.email, runtimeUser.name, state.teamMembers]);
+    return matchedByName ?? null;
+  }, [activeEmail, activeName, state.teamMembers]);
 
   const { data: trials = [] } = trpc.trials.list.useQuery({ demoMode: currentDataMode });
 
@@ -555,7 +563,7 @@ export default function Home4() {
       <div className="sticky top-0 z-30 bg-[#F7F8FB] pb-3 pt-4">
         <div>
           <h1 className="text-[30px] font-semibold leading-[1.05] tracking-tight text-foreground">
-            Welcome back, {firstName(currentMember?.name || runtimeUser.name)}
+            Welcome back, {firstName(currentMember?.name || activeName)}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Quick glance at what matters most today and fast ways to take action.

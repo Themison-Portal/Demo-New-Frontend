@@ -87,8 +87,8 @@ export function TopNav() {
     full: false,
     building: false,
   });
-  const { logout: auth0Logout, isAuthenticated: isAuth0Authenticated } = useAuth0();
-  const { logout: tRPCLogout } = useAuth();
+  const { logout: auth0Logout, isAuthenticated: isAuth0Authenticated, user: auth0User } = useAuth0();
+  const { logout: tRPCLogout, user: trpcUser } = useAuth();
   const [signedOutState, setSignedOutState] = useSignedOutState();
 
   const handleSignOut = async () => {
@@ -115,36 +115,39 @@ export function TopNav() {
 
   const runtimeUser = useMemo(() => {
     if (typeof window === "undefined") {
-      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      return { name: "Clinical Coordinator", email: "user@themison.com" };
     }
     try {
       const raw = window.localStorage.getItem("manus-runtime-user-info");
-      if (!raw) return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      if (!raw) return { name: "Clinical Coordinator", email: "user@themison.com" };
       const parsed = JSON.parse(raw) as { name?: unknown; email?: unknown };
       return {
-        name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Kaleb Sanders",
-        email: typeof parsed.email === "string" && parsed.email.trim() ? parsed.email.trim() : "kaleb.s@azorg.be",
+        name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Clinical Coordinator",
+        email: typeof parsed.email === "string" && parsed.email.trim() ? parsed.email.trim() : "user@themison.com",
       };
     } catch {
-      return { name: "Kaleb Sanders", email: "kaleb.s@azorg.be" };
+      return { name: "Clinical Coordinator", email: "user@themison.com" };
     }
   }, []);
 
+  const activeEmail = auth0User?.email || (trpcUser as any)?.email || runtimeUser.email;
+  const activeName = auth0User?.name || auth0User?.nickname || (trpcUser as any)?.name || runtimeUser.name;
+
   const currentMember = useMemo(() => {
-    const normalizedRuntimeEmail = runtimeUser.email.toLowerCase();
-    const normalizedRuntimeName = runtimeUser.name.toLowerCase();
+    const normalizedEmail = activeEmail.toLowerCase();
+    const normalizedName = activeName.toLowerCase();
     const matchedByEmail = state.teamMembers.find(
-      (member) => member.email.toLowerCase() === normalizedRuntimeEmail
+      (member) => member.email.toLowerCase() === normalizedEmail
     );
     if (matchedByEmail) return matchedByEmail;
     const matchedByName = state.teamMembers.find(
-      (member) => member.name.toLowerCase() === normalizedRuntimeName
+      (member) => member.name.toLowerCase() === normalizedName
     );
-    return matchedByName ?? state.teamMembers[0] ?? null;
-  }, [runtimeUser.email, runtimeUser.name, state.teamMembers]);
+    return matchedByName ?? null;
+  }, [activeEmail, activeName, state.teamMembers]);
 
-  const displayName = currentMember?.name || runtimeUser.name;
-  const displayEmail = currentMember?.email || runtimeUser.email;
+  const displayName = currentMember?.name || activeName;
+  const displayEmail = currentMember?.email || activeEmail;
   const displayAvatar = currentMember?.avatar || "";
   
   // Fetch trials from database for breadcrumb display

@@ -159,13 +159,21 @@ export default function Overview() {
   ).length;
 
   const currentUserFirstName = useMemo(() => {
-    const member =
-      state.teamMembers.find((entry) =>
-        String(entry.name || "").toLowerCase().includes("kaleb")
-      ) || state.teamMembers[0];
-    const fullName = String(member?.name || "Kaleb Sanders").trim();
-    return fullName.split(" ")[0] || "Kaleb";
-  }, [state.teamMembers]);
+    let name = "";
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem("manus-runtime-user-info");
+        if (raw) {
+          const parsed = JSON.parse(raw) as { name?: unknown };
+          if (typeof parsed?.name === "string" && parsed.name.trim()) {
+            name = parsed.name.trim();
+          }
+        }
+      } catch {}
+    }
+    const fullName = String(name || "Coordinator").trim();
+    return fullName.split(" ")[0] || "Coordinator";
+  }, []);
 
   const workspaceRows = useMemo(
     () => ((workspaceMapQuery.data as WorkspaceRow[] | undefined) ?? []).filter(Boolean),
