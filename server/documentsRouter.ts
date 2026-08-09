@@ -133,9 +133,6 @@ export const documentsRouter = router({
             })
         )
         .mutation(async ({ input, ctx }) => {
-            const db = await getDb();
-            if (!db) throw new Error("Database not available");
-
             const mode = (input.demoMode ?? "sample") as DemoMode;
 
             const buffer = Buffer.from(input.fileData, "base64");
