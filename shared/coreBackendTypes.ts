@@ -17,43 +17,43 @@
 // The document column is set to queued/processing/ready/failed, but the RAG
 // job-status vocabulary (complete/error) can surface here too — accept both.
 export type IngestionStatus =
-  | "queued"
-  | "processing"
-  | "ready"
-  | "complete"
-  | "failed"
-  | "error"
-  | null;
+    | "queued"
+    | "processing"
+    | "ready"
+    | "complete"
+    | "failed"
+    | "error"
+    | null;
 
 export interface CoreBackendTrialDocument {
-  id: string;                            // UUID
-  document_name: string;
-  document_type: string;                 // enum: 'protocol' | 'icf' | etc.
-  document_url: string;                  // GCS blob path (NOT a download URL — call /download-url)
-  trial_id: string | null;               // UUID
-  uploaded_by: string | null;            // UUID (member_id)
-  status: string | null;                 // 'active' | 'archived' | etc.
-  ingestion_status: IngestionStatus;     // RAG pipeline state
-  file_size: number | null;
-  mime_type: string | null;
-  version: number | null;
-  amendment_number: number | null;
-  is_latest: boolean | null;
-  description: string | null;
-  tags: string[] | null;
-  warning: boolean | null;
-  created_at: string;                    // ISO timestamp
-  updated_at: string | null;             // ISO timestamp
-  // FE-only fields migrated from the (retired) FE `protocols` table.
-  category: string | null;               // free-text: 'Protocol' | 'Amendments' | ...
-  document_version: string | null;
-  amendment_version: string | null;
-  release_date: string | null;
-  is_current: boolean | null;
-  archived_at: string | null;            // ISO timestamp
-  source_type: string | null;            // manual | integration | system
-  source_reference: string | null;
-  uploaded_by_name: string | null;       // derived (joined members.name)
+    id: string;                            // UUID
+    document_name: string;
+    document_type: string;                 // enum: 'protocol' | 'icf' | etc.
+    document_url: string;                  // GCS blob path (NOT a download URL — call /download-url)
+    trial_id: string | null;               // UUID
+    uploaded_by: string | null;            // UUID (member_id)
+    status: string | null;                 // 'active' | 'archived' | etc.
+    ingestion_status: IngestionStatus;     // RAG pipeline state
+    file_size: number | null;
+    mime_type: string | null;
+    version: number | null;
+    amendment_number: number | null;
+    is_latest: boolean | null;
+    description: string | null;
+    tags: string[] | null;
+    warning: boolean | null;
+    created_at: string;                    // ISO timestamp
+    updated_at: string | null;             // ISO timestamp
+    // FE-only fields migrated from the (retired) FE `protocols` table.
+    category: string | null;               // free-text: 'Protocol' | 'Amendments' | ...
+    document_version: string | null;
+    amendment_version: string | null;
+    release_date: string | null;
+    is_current: boolean | null;
+    archived_at: string | null;            // ISO timestamp
+    source_type: string | null;            // manual | integration | system
+    source_reference: string | null;
+    uploaded_by_name: string | null;       // derived (joined members.name)
 }
 
 // ---------------------------------------------------------------------------
@@ -61,9 +61,9 @@ export interface CoreBackendTrialDocument {
 // ---------------------------------------------------------------------------
 
 export interface CoreBackendQueryRequest {
-  query: string;
-  document_id: string;
-  document_name: string;
+    query: string;
+    document_id: string;
+    document_name: string;
 }
 
 /**
@@ -72,31 +72,31 @@ export interface CoreBackendQueryRequest {
  * leave the rest open. Refine as the FE consumes more of it.
  */
 export interface CoreBackendQuerySource {
-  name: string;
-  page: number;
-  section?: string;
-  /**
-   * Verbatim quote from the chunk. Core-backend returns it as camelCase
-   * `exactText` (the LLM is instructed to emit JSON with that exact
-   * field name; see core-backend `rag_generation_service.py` SYSTEM_PROMPT).
-   */
-  exactText?: string;
-  bboxes?: number[][];
-  relevance?: "high" | "medium" | "low" | string;
-  [key: string]: unknown;
+    name: string;
+    page: number;
+    section?: string;
+    /**
+     * Verbatim quote from the chunk. Core-backend returns it as camelCase
+     * `exactText` (the LLM is instructed to emit JSON with that exact
+     * field name; see core-backend `rag_generation_service.py` SYSTEM_PROMPT).
+     */
+    exactText?: string;
+    bboxes?: number[][];
+    relevance?: "high" | "medium" | "low" | string;
+    [key: string]: unknown;
 }
 
 export interface CoreBackendQueryResponse {
-  /**
-   * The generated answer text. Core-backend returns this as `response`
-   * (NOT `answer`) — the field name comes from the JSON schema the
-   * Claude SYSTEM_PROMPT pins in `rag_generation_service.py` and the
-   * `DoclingRagStructuredResponse` Pydantic model.
-   */
-  response: string;
-  sources: CoreBackendQuerySource[];
-  // Other fields the response may include (timing, metadata) — leave open.
-  [key: string]: unknown;
+    /**
+     * The generated answer text. Core-backend returns this as `response`
+     * (NOT `answer`) — the field name comes from the JSON schema the
+     * Claude SYSTEM_PROMPT pins in `rag_generation_service.py` and the
+     * `DoclingRagStructuredResponse` Pydantic model.
+     */
+    response: string;
+    sources: CoreBackendQuerySource[];
+    // Other fields the response may include (timing, metadata) — leave open.
+    [key: string]: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,16 +104,17 @@ export interface CoreBackendQueryResponse {
 // ---------------------------------------------------------------------------
 
 export interface CoreBackendUploadPdfRequest {
-  document_url: string;                  // GCS blob path or absolute HTTP(S) URL
-  document_id: string;                   // must already exist in trial_documents
-  chunk_size?: number;                   // default 750
+    document_url: string;                  // GCS blob path or absolute HTTP(S) URL
+    document_id: string;
+    organization_id: string;                  // must already exist in trial_documents
+    chunk_size?: number;                   // default 750
 }
 
 export interface CoreBackendUploadJobResponse {
-  job_id: string;
-  document_id: string;
-  status: "queued" | string;
-  message: string;
+    job_id: string;
+    document_id: string;
+    status: "queued" | string;
+    message: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,21 +122,21 @@ export interface CoreBackendUploadJobResponse {
 // ---------------------------------------------------------------------------
 
 export type CoreBackendJobStatusValue =
-  | "queued"
-  | "processing"
-  | "complete"
-  | "error"
-  | string;
+    | "queued"
+    | "processing"
+    | "complete"
+    | "error"
+    | string;
 
 export interface CoreBackendJobStatus {
-  job_id: string;
-  document_id: string;
-  status: CoreBackendJobStatusValue;
-  progress_percent: number;
-  current_stage: string;                 // e.g. 'parsing', 'embedding', 'storing'
-  message: string;
-  result: Record<string, unknown> | null;
-  error: string | null;
+    job_id: string;
+    document_id: string;
+    status: CoreBackendJobStatusValue;
+    progress_percent: number;
+    current_stage: string;                 // e.g. 'parsing', 'embedding', 'storing'
+    message: string;
+    result: Record<string, unknown> | null;
+    error: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,8 +144,8 @@ export interface CoreBackendJobStatus {
 // ---------------------------------------------------------------------------
 
 export interface CoreBackendDownloadUrl {
-  url: string;
-  expires_in_seconds: number;
+    url: string;
+    expires_in_seconds: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -152,22 +153,22 @@ export interface CoreBackendDownloadUrl {
 // ---------------------------------------------------------------------------
 
 export interface CoreBackendMultipartUploadInput {
-  /** PDF bytes. Either a Buffer (Node) or a Blob/File (browser). */
-  file: Blob | Uint8Array | Buffer;
-  /** Filename used for the multipart `file` field. */
-  filename: string;
-  trial_id: string;                      // UUID
-  document_name: string;
-  document_type?: string;                // default 'other' on the BE side
-  description?: string;
-  // FE-only fields persisted on the BE document.
-  category?: string;
-  document_version?: string;
-  amendment_version?: string;
-  release_date?: string;
-  is_current?: boolean;
-  source_type?: string;
-  source_reference?: string;
+    /** PDF bytes. Either a Buffer (Node) or a Blob/File (browser). */
+    file: Blob | Uint8Array | Buffer;
+    /** Filename used for the multipart `file` field. */
+    filename: string;
+    trial_id: string;                      // UUID
+    document_name: string;
+    document_type?: string;                // default 'other' on the BE side
+    description?: string;
+    // FE-only fields persisted on the BE document.
+    category?: string;
+    document_version?: string;
+    amendment_version?: string;
+    release_date?: string;
+    is_current?: boolean;
+    source_type?: string;
+    source_reference?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,19 +176,19 @@ export interface CoreBackendMultipartUploadInput {
 // ---------------------------------------------------------------------------
 
 export interface CoreBackendDocumentUpdate {
-  document_name?: string;
-  document_type?: string;
-  status?: string;
-  ingestion_status?: string;
-  description?: string;
-  category?: string;
-  document_version?: string;
-  amendment_version?: string;
-  release_date?: string;
-  is_current?: boolean;
-  archived_at?: string | null;
-  source_type?: string;
-  source_reference?: string;
+    document_name?: string;
+    document_type?: string;
+    status?: string;
+    ingestion_status?: string;
+    description?: string;
+    category?: string;
+    document_version?: string;
+    amendment_version?: string;
+    release_date?: string;
+    is_current?: boolean;
+    archived_at?: string | null;
+    source_type?: string;
+    source_reference?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,20 +196,20 @@ export interface CoreBackendDocumentUpdate {
 // ---------------------------------------------------------------------------
 
 export class CoreBackendError extends Error {
-  readonly status: number;
-  readonly path: string;
-  readonly detail: unknown;
+    readonly status: number;
+    readonly path: string;
+    readonly detail: unknown;
 
-  constructor(path: string, status: number, detail: unknown) {
-    const message = typeof detail === "string"
-      ? detail
-      : (detail && typeof detail === "object" && "detail" in detail
-          ? String((detail as { detail: unknown }).detail)
-          : `core-backend ${path} returned ${status}`);
-    super(message);
-    this.name = "CoreBackendError";
-    this.status = status;
-    this.path = path;
-    this.detail = detail;
-  }
+    constructor(path: string, status: number, detail: unknown) {
+        const message = typeof detail === "string"
+            ? detail
+            : (detail && typeof detail === "object" && "detail" in detail
+                ? String((detail as { detail: unknown }).detail)
+                : `core-backend ${path} returned ${status}`);
+        super(message);
+        this.name = "CoreBackendError";
+        this.status = status;
+        this.path = path;
+        this.detail = detail;
+    }
 }
