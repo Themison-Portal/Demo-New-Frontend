@@ -16,6 +16,8 @@ const UUID_RE =
 
 type Db = NonNullable<Awaited<ReturnType<typeof getDb>>>;
 
+import { callBackend } from "./backendClient";
+
 /**
  * Token for the BE's JWT-protected document endpoints. Under AUTH_DISABLED the
  * BE mocks the demo member and never inspects the token, so a placeholder is
@@ -27,19 +29,46 @@ export function authTokenFrom(ctx: unknown): string {
 }
 
 /**
- * Validate a client trial id. Trials are identified solely by their BE UUID
- * now (slugs are gone), so this is an identity check: a well-formed UUID
- * resolves to itself; anything else returns null so read paths return an empty
- * list rather than calling the BE with a bad id. `mode` is retained in the
- * signature for the ~11 callers but is no longer used for resolution.
+ * Validate a client trial id. Accepts both 2-arg (mode, trialId) and 3-arg
+ * (db, mode, trialId) forms for compatibility. A well-formed UUID resolves to
+ * itself; non-UUID slugs/IDs are resolved via the backend by-slug API.
  */
 export async function resolveBeTrialIdForRead(
-    _mode: DemoMode,
-    trialId: string
+    arg1: any,
+    arg2?: any,
+    arg3?: string
 ): Promise<string | null> {
+    let mode: DemoMode = "sample";
+    let trialId = "";
+
+    if (typeof arg3 === "string") {
+        // Called as 3 arguments: (db, mode, trialId)
+        mode = (arg2 ?? "sample") as DemoMode;
+        trialId = arg3;
+    } else if (typeof arg2 === "string") {
+        // Called as 2 arguments: (mode, trialId)
+        mode = (arg1 ?? "sample") as DemoMode;
+        trialId = arg2;
+    } else if (typeof arg1 === "string") {
+        // Called as 1 argument: (trialId)
+        trialId = arg1;
+    }
+
+    if (!trialId) return null;
     if (UUID_RE.test(trialId)) return trialId;
+
+    // Fallback: resolve non-UUID trial slugs/IDs via backend endpoint
+    for (const q of [{ slug: trialId, demo_mode: mode }, { slug: trialId }]) {
+        try {
+            const t = await callBackend<any>(`/api/trials/by-slug`, { query: q });
+            if (t?.id) return t.id;
+        } catch {
+            /* not found for this query */
+        }
+    }
+
     console.warn(
-        `[coreBackendDocs] Non-UUID trial id "${trialId}" — trials are UUID-only now; ignoring.`
+        `[coreBackendDocs] Non-UUID trial id "${trialId}" (mode=${mode}) could not be resolved to BE trial UUID.`
     );
     return null;
 }

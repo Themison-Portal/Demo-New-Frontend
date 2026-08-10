@@ -61,7 +61,7 @@ export const documentsRouter = router({
       if (!db) return [];
 
       const mode = (input.demoMode ?? "sample") as DemoMode;
-      const beTrialId = await resolveBeTrialIdForRead(db, mode, input.trialId);
+      const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
       if (!beTrialId) {
         // resolveBeTrialIdForRead already logged WHY (no mapping). Surface the
         // input so deployed logs tie it to the trial the user is viewing.
@@ -155,7 +155,6 @@ export const documentsRouter = router({
       // trials flow). If there's no BE trial, fail loudly rather than silently
       // provisioning a stray one.
       const beTrialId: string | null = await resolveBeTrialIdForRead(
-        db,
         mode,
         input.trialId
       );
@@ -567,7 +566,7 @@ export const documentsRouter = router({
       const docsByTrial: Record<string, ReturnType<typeof mapBeDoc>[]> = {};
       await Promise.all(
         input.trialIds.map(async (trialId) => {
-          const beTrialId = await resolveBeTrialIdForRead(db, mode, trialId);
+          const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
           if (!beTrialId) {
             docsByTrial[trialId] = [];
             return;
