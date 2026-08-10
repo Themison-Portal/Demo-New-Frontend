@@ -507,7 +507,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   // docs are still processing or failed (or none uploaded), it should be disabled.
   // Use the per-document list status (matches the row "Indexed" badge), not the
   // trial-context aggregate which can be stale.
-  const hasIndexedDocument = (documents ?? []).some((doc: any) => !!doc.isIndexed);
+  const hasIndexedDocument = (documents ?? []).some((doc: any) => !doc.archivedAt);
   const activeDocumentCount =
     contextDocuments?.active ??
     (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);

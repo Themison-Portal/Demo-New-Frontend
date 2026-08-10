@@ -79,13 +79,14 @@ export async function resolveBeTrialIdForRead(
  * document UUID — the FE document identity post-retirement.
  */
 export function mapBeDoc(d: CoreBackendTrialDocument) {
-    const ingest = d.ingestion_status;
-    const isIndexed = ingest === "ready" || ingest === "complete";
-    const indexStatus: "indexed" | "processing" | "failed" = isIndexed
-        ? "indexed"
-        : ingest === "failed" || ingest === "error"
-            ? "failed"
-            : "processing";
+    const ingest = (d.ingestion_status || "ready").toLowerCase();
+    const isFailed = ingest === "failed" || ingest === "error";
+    const isIndexed = !isFailed;
+    const indexStatus: "indexed" | "processing" | "failed" = isFailed
+        ? "failed"
+        : ingest === "processing"
+            ? "processing"
+            : "indexed";
     return {
         id: d.id,
         coreBackendDocumentId: d.id,
