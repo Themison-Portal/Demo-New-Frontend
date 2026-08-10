@@ -57,9 +57,6 @@ export const documentsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) return [];
-
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
       if (!beTrialId) {
@@ -541,8 +538,7 @@ export const documentsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db || input.trialIds.length === 0) return {};
+      if (input.trialIds.length === 0) return {};
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const token = authTokenFrom(ctx);
       const client = getCoreBackendClient();
