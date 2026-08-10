@@ -1512,7 +1512,11 @@ async function trackMapEvent(input: {
 
 async function ensureMapTaskStatusHistoryTable(db: DbClient) {
     if (mapTaskStatusHistoryTableReady) return;
-    await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+    try {
+        await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+    } catch {
+        /* best-effort auto-creation for dialect compatibility */
+    }
     mapTaskStatusHistoryTableReady = true;
 }
 

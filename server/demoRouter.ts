@@ -1277,13 +1277,21 @@ async function insertSnapshotRows(
 
 async function ensureDemoModeDefaultsTable(db: DbClient) {
   if (demoModeDefaultsTableReady) return;
-  await db.execute(sql.raw(DEMO_MODE_DEFAULTS_TABLE_SQL));
+  try {
+    await db.execute(sql.raw(DEMO_MODE_DEFAULTS_TABLE_SQL));
+  } catch {
+    /* best-effort auto-creation for dialect compatibility */
+  }
   demoModeDefaultsTableReady = true;
 }
 
 async function ensureMapTaskStatusHistoryTable(db: DbClient) {
   if (mapTaskStatusHistoryTableReady) return;
-  await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+  try {
+    await db.execute(sql.raw(MAP_TASK_STATUS_HISTORY_TABLE_SQL));
+  } catch {
+    /* best-effort auto-creation for dialect compatibility */
+  }
   mapTaskStatusHistoryTableReady = true;
 }
 

@@ -8,7 +8,13 @@ if (typeof (global as any).DOMMatrix === "undefined") {
   };
 }
 
-const { PDFParse } = require('pdf-parse');
+let PDFParse: any = null;
+try {
+  const mod = require('pdf-parse');
+  PDFParse = mod?.PDFParse || mod?.default?.PDFParse || mod?.default || mod;
+} catch {
+  console.warn('[pdfExtractor] pdf-parse loading deferred.');
+}
 import { storageReadBytes } from "./storage";
 
 /**
