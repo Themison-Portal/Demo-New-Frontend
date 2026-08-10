@@ -49,19 +49,24 @@ const DEFAULT_DOCUMENT_CATEGORIES = [
 export const documentsRouter = router({
   list: publicProcedure
     .input(
-      z.object({
-        trialId: z.string(),
-        demoMode: z.enum(["sample", "full", "building"]).optional(),
-        pageContext: z.string().optional(),
-        emitTelemetry: z.boolean().optional(),
-      })
+      z
+        .object({
+          trialId: z.string().optional(),
+          demoMode: z.enum(["sample", "full", "building"]).optional(),
+          pageContext: z.string().optional(),
+          emitTelemetry: z.boolean().optional(),
+        })
+        .optional()
     )
     .query(async ({ input, ctx }) => {
-      const mode = (input.demoMode ?? "sample") as DemoMode;
-      const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
+      const mode = (input?.demoMode ?? "sample") as DemoMode;
+      const trialId = input?.trialId;
+      if (!trialId) return [];
+
+      const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
       if (!beTrialId) {
         console.warn(
-          `[documents/list] trial="${input.trialId}" mode=${mode} -> no BE trial; returning [].`
+          `[documents/list] trial="${trialId}" mode=${mode} -> no BE trial; returning [].`
         );
         return [];
       }
@@ -532,20 +537,23 @@ export const documentsRouter = router({
 
   listMultipleTrials: publicProcedure
     .input(
-      z.object({
-        trialIds: z.array(z.string()),
-        demoMode: z.enum(["sample", "full", "building"]).optional(),
-      })
+      z
+        .object({
+          trialIds: z.array(z.string()).optional(),
+          demoMode: z.enum(["sample", "full", "building"]).optional(),
+        })
+        .optional()
     )
     .query(async ({ input, ctx }) => {
-      if (input.trialIds.length === 0) return {};
-      const mode = (input.demoMode ?? "sample") as DemoMode;
+      const trialIds = input?.trialIds ?? [];
+      if (trialIds.length === 0) return {};
+      const mode = (input?.demoMode ?? "sample") as DemoMode;
       const token = authTokenFrom(ctx);
       const client = getCoreBackendClient();
 
       const docsByTrial: Record<string, ReturnType<typeof mapBeDoc>[]> = {};
       await Promise.all(
-        input.trialIds.map(async (trialId) => {
+        trialIds.map(async (trialId) => {
           const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
           if (!beTrialId) {
             docsByTrial[trialId] = [];
