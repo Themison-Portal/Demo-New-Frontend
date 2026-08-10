@@ -63,8 +63,6 @@ export const documentsRouter = router({
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
       if (!beTrialId) {
-        // resolveBeTrialIdForRead already logged WHY (no mapping). Surface the
-        // input so deployed logs tie it to the trial the user is viewing.
         console.warn(
           `[documents/list] trial="${input.trialId}" mode=${mode} -> no BE trial; returning [].`
         );
@@ -133,9 +131,6 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const db = await getDb();
-      if (!db) throw new Error("Database not available");
-
       const mode = (input.demoMode ?? "sample") as DemoMode;
 
       const buffer = Buffer.from(input.fileData, "base64");
@@ -149,11 +144,6 @@ export const documentsRouter = router({
         );
       }
 
-      // Resolve the trial the SAME way the read path does (validate the BE
-      // UUID), so uploads land under the trial the Hub lists. Trials are
-      // BE-owned now: they must already exist in the backend (created via the
-      // trials flow). If there's no BE trial, fail loudly rather than silently
-      // provisioning a stray one.
       const beTrialId: string | null = await resolveBeTrialIdForRead(
         mode,
         input.trialId
@@ -164,12 +154,17 @@ export const documentsRouter = router({
         );
       }
 
+      // trial_documents doesn't carry organization_id, but RAG ingestion
+      // (uploadPdf below) requires it - fetch it from the trial itself.
+      const trial = await callBackend<{ id: string; organization_id: string }>(
+        `/api/trials/${encodeURIComponent(beTrialId)}`,
+        { method: "GET", user: ctx.user }
+      );
+
       const isProtocolCategory = input.category.toLowerCase() === "protocol";
       const authToken = authTokenFrom(ctx);
       const client = getCoreBackendClient();
 
-      // Auto-version: compute the next protocol version from the BE's existing
-      // protocol-category documents for this trial.
       let nextAutoVersion = "v1";
       if (isProtocolCategory) {
         try {
@@ -195,8 +190,6 @@ export const documentsRouter = router({
       const docCategory = isProtocolCategory ? "protocol" : input.category.toLowerCase();
 
       try {
-        // BE-first: the multipart upload creates the trial_documents row +
-        // durable storage; the BE enforces the "only one current" invariant.
         const created = await client.uploadTrialDocumentMultipart(
           {
             file: buffer,
@@ -219,6 +212,7 @@ export const documentsRouter = router({
         const job = await client.uploadPdf({
           document_url: created.document_url,
           document_id: created.id,
+          organization_id: trial.organization_id,
           chunk_size: 750,
         });
 
@@ -254,8 +248,8 @@ export const documentsRouter = router({
           error instanceof CoreBackendError
             ? `${error.path} ${error.status}: ${error.message}`
             : error instanceof Error
-              ? error.message
-              : String(error);
+            ? error.message
+            : String(error);
         console.error(`❌ BE upload failed for ${input.filename}: ${reason}`);
         throw new Error(
           `Document could not be registered with the backend: ${reason}`
@@ -263,9 +257,6 @@ export const documentsRouter = router({
       }
     }),
 
-  // Lazily mint a short-lived openable URL for a document. For the demo BE
-  // (local storage) `document_url` is already absolute, but prod/GCS needs a
-  // signed URL — the client should call this right before opening the viewer.
   getDownloadUrl: publicProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ input, ctx }) => {
@@ -317,7 +308,6 @@ export const documentsRouter = router({
 
       if (Object.keys(update).length === 0) return { success: true };
 
-      // The BE enforces the "only one current" invariant on is_current=true.
       await getCoreBackendClient().updateTrialDocument(
         input.id,
         update,
@@ -357,7 +347,6 @@ export const documentsRouter = router({
   retryProcessing: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      // `id` is the BE document UUID (coreBackendDocumentId).
       try {
         const retry = await callBackend<{
           jobId: string;
@@ -403,8 +392,6 @@ export const documentsRouter = router({
       }
     }),
 
-  // Category catalog stays FE-owned (a free-text pick-list, independent of the
-  // BE trial_documents table).
   getCategories: publicProcedure.query(async () => {
     const db = await getDb();
     if (!db) {
@@ -419,7 +406,6 @@ export const documentsRouter = router({
       let rows = await db.select().from(documentCategories).orderBy(documentCategories.name);
 
       if (rows.length === 0) {
-        // Auto-seed default categories if database table is empty
         await db
           .insert(documentCategories)
           .values(
@@ -513,8 +499,6 @@ export const documentsRouter = router({
     .query(async ({ input, ctx }) => {
       const mode = (input?.demoMode ?? "sample") as DemoMode;
 
-      // Trials are BE-owned: list them from the backend (filtered by demo mode)
-      // and keep only those that have at least one document.
       let beTrials: any[] = [];
       try {
         beTrials = await callBackend<any[]>("/api/trials", {
