@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "./_core/trpc";
+import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { callBackend } from "./_core/backendClient";
 
 const USER_AGENT = "ThemisonOrganizationBot/1.0 (+https://themison.ai)";
@@ -327,8 +328,18 @@ export const organizationRouter = router({
      * Returns the real organization the authenticated member belongs to,
      * proxied from GET /api/organizations/me on the FastAPI backend. This
      * replaces the old localStorage-based fake org profile.
+     *
+     * Uses publicProcedure + a manual authToken check (rather than
+     * protectedProcedure) because this BFF's own local `User` DB lookup
+     * (ctx.user) can be unavailable independent of Auth0 login state —
+     * see "[Database] Cannot get user: database not available" in server
+     * logs. The real backend independently validates the Bearer token, so
+     * ctx.authToken alone is sufficient and correct here.
      */
-    getMine: protectedProcedure.query(async ({ ctx }) => {
+    getMine: publicProcedure.query(async ({ ctx }) => {
+        if (!ctx.authToken) {
+            throw new TRPCError({ code: "UNAUTHORIZED", message: "Please log in." });
+        }
         const org = await callBackend<any>(`/api/organizations/me`, {
             user: ctx.user,
             authToken: ctx.authToken,
@@ -337,19 +348,22 @@ export const organizationRouter = router({
     }),
 
     /**
-  * Updates the authenticated member's organization. Proxies to
-  * PUT /api/organizations/me on the FastAPI backend. NOTE: the backend
-  * Organization model currently only persists `name` — other profile
-  * fields on the Organization Overview page (address, website, etc.)
-  * are not yet backed by real storage.
-  */
-    update: protectedProcedure
+     * Updates the authenticated member's organization. Proxies to
+     * PUT /api/organizations/me on the FastAPI backend. NOTE: the backend
+     * Organization model currently only persists `name` — other profile
+     * fields on the Organization Overview page (address, website, etc.)
+     * are not yet backed by real storage.
+     */
+    update: publicProcedure
         .input(
             z.object({
                 name: z.string().optional(),
             })
         )
         .mutation(async ({ input, ctx }) => {
+            if (!ctx.authToken) {
+                throw new TRPCError({ code: "UNAUTHORIZED", message: "Please log in." });
+            }
             const org = await callBackend<any>(`/api/organizations/me`, {
                 method: "PUT",
                 body: { name: input.name },
