@@ -1240,6 +1240,7 @@ export const collaborationRouter = router({
             method: "POST",
             body: { messagesFormatted },
             user: ctx.user,
+            authToken: ctx.authToken,
           });
 
           const drafted = summarizeResponse.summary.trim();
@@ -2092,6 +2093,7 @@ export const collaborationRouter = router({
             body: bodyText,
           },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
 
         const labels = (triageResponse.triage.labels || [])
@@ -2242,6 +2244,7 @@ export const collaborationRouter = router({
           method: "POST",
           body: { messagesFormatted },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
 
         const summary = suggestion.summary.trim();

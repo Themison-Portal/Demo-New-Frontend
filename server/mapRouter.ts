@@ -165,7 +165,7 @@ export const mapRouter = router({
         const beTrialId = await resolveBeTrialIdForRead(mode, input.trialId);
         if (!beTrialId) return null;
 
-        const trial = await callBackend(`/api/trials/${beTrialId}`, { user: ctx.user });
+        const trial = await callBackend(`/api/trials/${beTrialId}`, { user: ctx.user, authToken: ctx.authToken });
         if (!trial) return null;
         return mockMap(input.trialId);
       } catch (err) {
@@ -191,12 +191,13 @@ export const mapRouter = router({
     .query(async (opts) => {
       const { input, ctx } = opts;
       try {
-        const backendTasks = await callBackend<any[]>(`/api/tasks`, { user: ctx.user });
+        const backendTasks = await callBackend<any[]>(`/api/tasks`, { user: ctx.user, authToken: ctx.authToken });
 
         const mode = (input.demoMode ?? "sample") as DemoMode;
         const beTrials = await callBackend<any[]>("/api/trials", {
           query: { demo_mode: mode },
           user: ctx.user,
+          authToken: ctx.authToken,
         }).catch(() => []);
 
         const slugToUuid = new Map<string, string>();
@@ -220,6 +221,7 @@ export const mapRouter = router({
             const deps = await callBackend<any[]>(`/api/task-dependencies`, {
               query: { trial_id: trialUuid },
               user: ctx.user,
+              authToken: ctx.authToken,
             });
             dependenciesByTrial.set(trialUuid, deps);
           } catch (depErr) {
@@ -278,10 +280,12 @@ export const mapRouter = router({
           callBackend<any[]>(`/api/tasks`, {
             query: { trial_id: beTrialId },
             user: ctx.user,
+            authToken: ctx.authToken,
           }),
           callBackend<any[]>(`/api/task-dependencies`, {
             query: { trial_id: beTrialId },
             user: ctx.user,
+            authToken: ctx.authToken,
           }).catch(err => {
             console.error("Failed to load task dependencies:", err);
             return [];
@@ -378,6 +382,7 @@ export const mapRouter = router({
           method: "POST",
           body,
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return mapBackendTaskToClient(createdTask, trialId);
       } catch (err) {
@@ -453,6 +458,7 @@ export const mapRouter = router({
           method: "PATCH",
           body,
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return { success: true };
       } catch (err) {
@@ -478,6 +484,7 @@ export const mapRouter = router({
         await callBackend(`/api/tasks/${input.taskId}`, {
           method: "DELETE",
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return { success: true };
       } catch (err) {
@@ -510,6 +517,7 @@ export const mapRouter = router({
           method: "PATCH",
           body: { status: input.status },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return { success: true };
       } catch (err) {
@@ -547,6 +555,7 @@ export const mapRouter = router({
             category: nextCategory,
           },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return { success: true };
       } catch (err) {
@@ -588,6 +597,7 @@ export const mapRouter = router({
             is_cross_phase: input.isCrossPhase,
           },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return mapBackendDependencyToClient(created);
       } catch (err) {
@@ -617,6 +627,7 @@ export const mapRouter = router({
         await callBackend(`/api/task-dependencies/${input.dependencyId}`, {
           method: "DELETE",
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return { success: true };
       } catch (err) {
