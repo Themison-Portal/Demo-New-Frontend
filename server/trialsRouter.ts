@@ -86,6 +86,7 @@ function normalizeDemoMode(mode: any): "sample" | "full" | "building" | undefine
 async function resolveBeTrial(beUuid: string, _demoMode: string | undefined, ctx: any) {
   return callBackend<any>(`/api/trials/${beUuid}`, {
     user: ctx.user,
+    authToken: ctx.authToken,
   });
 }
 
@@ -95,6 +96,7 @@ async function enrolledCount(beUuid: string, ctx: any): Promise<number> {
     const enr = await callBackend<any[]>(`/api/trial-patients`, {
       query: { trial_id: beUuid },
       user: ctx.user,
+      authToken: ctx.authToken,
     });
     return Array.isArray(enr) ? enr.length : 0;
   } catch {
@@ -644,6 +646,7 @@ export const trialsRouter = router({
         const trials = await callBackend<any[]>(`/api/trials`, {
           query: { demo_mode: demoMode },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return await Promise.all(
           (trials ?? []).map(async (t) => ({
@@ -679,6 +682,7 @@ export const trialsRouter = router({
           method: "POST",
           body,
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return mapBackendTrialToClient(created);
       } catch (err) {
@@ -698,6 +702,7 @@ export const trialsRouter = router({
           method: "PUT",
           body: buildTrialBody(input),
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         return mapBackendTrialToClient(updated);
       } catch (err) {
@@ -716,6 +721,7 @@ export const trialsRouter = router({
         await callBackend(`/api/trials/${input.id}`, {
           method: "DELETE",
           user: ctx.user,
+          authToken: ctx.authToken,
         });
         // Best-effort cascade of FE-owned child data, keyed by the BE trial UUID.
         try {

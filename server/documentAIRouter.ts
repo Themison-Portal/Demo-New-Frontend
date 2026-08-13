@@ -783,7 +783,7 @@ ${contextText}
                     message: string;
                 }>(
                     `/api/document-ai/retry-ingestion/${encodeURIComponent(input.coreBackendDocumentId)}`,
-                    { method: "POST", user: ctx.user }
+                    { method: "POST", user: ctx.user, authToken: ctx.authToken }
                 );
                 return {
                     success: true,
@@ -828,7 +828,7 @@ ${contextText}
                     try {
                         await callBackend<{ jobId: string; status: string; message: string }>(
                             `/api/document-ai/retry-ingestion/${encodeURIComponent(doc.id)}`,
-                            { method: "POST", user: ctx.user }
+                            { method: "POST", user: ctx.user, authToken: ctx.authToken }
                         );
                         successCount++;
                     } catch (error) {

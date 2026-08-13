@@ -800,6 +800,7 @@ export const studySetupWizardRouter = router({
           protocolContent,
         },
         user: ctx.user,
+        authToken: ctx.authToken,
       });
 
       await logTelemetryEvent({
@@ -1092,6 +1093,7 @@ ${chunk.chunkText.slice(0, 1400)}`;
               contextChunksText: contextText || null,
             },
             user: ctx.user,
+            authToken: ctx.authToken,
           });
 
         let response: ScaffoldBackendResponse | undefined;
@@ -1415,6 +1417,7 @@ ${chunk.chunkText.slice(0, 700)}`;
               method: "POST",
               body: payload,
               user: ctx.user,
+              authToken: ctx.authToken,
             });
 
             if (created && created.id) {
@@ -1451,6 +1454,7 @@ ${chunk.chunkText.slice(0, 700)}`;
                 dependency_type: "finish_to_start",
               },
               user: ctx.user,
+              authToken: ctx.authToken,
             });
           } catch (err) {
             console.error(`Failed to create dependency between ${sourceUuid} and ${targetUuid}:`, err);

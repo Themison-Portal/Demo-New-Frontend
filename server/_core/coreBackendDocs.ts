@@ -79,12 +79,26 @@ export async function resolveBeTrialIdForRead(
  * document UUID — the FE document identity post-retirement.
  */
 export function mapBeDoc(d: CoreBackendTrialDocument) {
-    const ingest = (d.ingestion_status || "ready").toLowerCase();
-    const isFailed = ingest === "failed" || ingest === "error";
-    const isIndexed = !isFailed;
+    const rawStatus = (d.ingestion_status ?? "").toLowerCase();
+    const isFailed = rawStatus === "failed" || rawStatus === "error";
+    const isProcessing =
+        rawStatus === "queued" ||
+        rawStatus === "processing" ||
+        rawStatus === "pending" ||
+        rawStatus === "in_progress" ||
+        rawStatus === "extracting" ||
+        rawStatus === "running";
+    // Legacy documents with null/undefined status are treated as ready (indexed).
+    const isIndexed =
+        !isFailed &&
+        !isProcessing &&
+        (rawStatus === "ready" ||
+            rawStatus === "complete" ||
+            rawStatus === "indexed" ||
+            d.ingestion_status == null);
     const indexStatus: "indexed" | "processing" | "failed" = isFailed
         ? "failed"
-        : ingest === "processing"
+        : isProcessing
             ? "processing"
             : "indexed";
     return {
@@ -109,6 +123,7 @@ export function mapBeDoc(d: CoreBackendTrialDocument) {
         createdAt: d.created_at,
         updatedAt: d.updated_at,
         ingestionStatus: d.ingestion_status,
+        coreBackendIngestStatus: d.ingestion_status,
         isIndexed,
         indexStatus,
         indexFailureReason:

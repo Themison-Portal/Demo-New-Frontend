@@ -160,7 +160,7 @@ export const documentsRouter = router({
       // (uploadPdf below) requires it - fetch it from the trial itself.
       const trial = await callBackend<{ id: string; organization_id: string }>(
         `/api/trials/${encodeURIComponent(beTrialId)}`,
-        { method: "GET", user: ctx.user }
+        { method: "GET", user: ctx.user, authToken: ctx.authToken }
       );
 
       const isProtocolCategory = input.category.toLowerCase() === "protocol";
@@ -358,6 +358,7 @@ export const documentsRouter = router({
         }>(`/api/document-ai/retry-ingestion/${encodeURIComponent(input.id)}`, {
           method: "POST",
           user: ctx.user,
+          authToken: ctx.authToken,
         });
 
         await logTelemetryEvent({
@@ -506,6 +507,7 @@ export const documentsRouter = router({
         beTrials = await callBackend<any[]>("/api/trials", {
           query: { demo_mode: mode },
           user: ctx.user,
+          authToken: ctx.authToken,
         });
       } catch (error) {
         console.warn(

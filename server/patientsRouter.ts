@@ -24,6 +24,7 @@ export const patientsRouter = router({
                 const enrollments = await callBackend<any[]>(`/api/trial-patients`, {
                     query: { trial_id: beTrialId },
                     user: ctx.user,
+                    authToken: ctx.authToken,
                 });
                 return enrollments;
             } catch (err) {
@@ -164,6 +165,7 @@ export const patientsRouter = router({
                     method: "POST",
                     body: patientPayload,
                     user: ctx.user,
+                    authToken: ctx.authToken,
                 });
 
                 // Step 2: Enroll patient in trial
@@ -178,6 +180,7 @@ export const patientsRouter = router({
                     method: "POST",
                     body: enrollmentPayload,
                     user: ctx.user,
+                    authToken: ctx.authToken,
                 });
 
                 return enrollment;
@@ -226,6 +229,7 @@ export const patientsRouter = router({
                 const visits = await callBackend<any[]>(`/api/patient-visits/`, {
                     query: { patient_id: input.patientId, trial_id: beTrialId },
                     user: ctx.user,
+                    authToken: ctx.authToken,
                 });
                 return visits;
             } catch (err) {
@@ -326,6 +330,7 @@ export const patientsRouter = router({
                     method: "POST",
                     body: visitPayload,
                     user: ctx.user,
+                    authToken: ctx.authToken,
                 });
 
                 return visit;

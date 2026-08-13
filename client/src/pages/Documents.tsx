@@ -165,11 +165,24 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   }, [loadGeneratedOutputs]);
 
   // Query documents
-  const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery({
-    trialId: trialId,
-    demoMode: currentDataMode,
-    pageContext: "document-hub",
-  });
+  const { data: documents, isLoading, refetch } = trpc.documents.list.useQuery(
+    {
+      trialId: trialId,
+      demoMode: currentDataMode,
+      pageContext: "document-hub",
+    },
+    {
+      refetchInterval: (query) => {
+        const docs = query.state.data as any[] | undefined;
+        if (!docs || docs.length === 0) return false;
+        const hasProcessing = docs.some(
+          (d: any) => !d.isIndexed && d.indexStatus !== "failed"
+        );
+        return hasProcessing ? 2500 : false;
+      },
+      refetchOnMount: "always",
+    }
+  );
 
   const { data: trial } = trpc.trials.getById.useQuery({
     id: trialId,
@@ -507,7 +520,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   // docs are still processing or failed (or none uploaded), it should be disabled.
   // Use the per-document list status (matches the row "Indexed" badge), not the
   // trial-context aggregate which can be stale.
-  const hasIndexedDocument = (documents ?? []).some((doc: any) => !doc.archivedAt);
+  const hasIndexedDocument = (documents ?? []).some((doc: any) => !!doc.isIndexed && !doc.archivedAt);
   const activeDocumentCount =
     contextDocuments?.active ??
     (documents ? documents.filter((doc: any) => !doc.archivedAt).length : 0);
