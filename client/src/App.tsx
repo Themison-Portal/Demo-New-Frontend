@@ -218,11 +218,7 @@ function Router() {
     }
 
     if (isSignedOut) {
-        return (
-            <DashboardLayout breadcrumbs={[{ label: "Sign In Required" }]} breadcrumbIcon={Home}>
-                <SignInScreen onSignIn={() => setSignedOutState(false)} />
-            </DashboardLayout>
-        );
+        return <SignInScreen onSignIn={() => setSignedOutState(false)} />;
     }
 
     return (
