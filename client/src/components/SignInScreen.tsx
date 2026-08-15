@@ -20,7 +20,7 @@ export function SignInScreen({ onSignIn }: SignInScreenProps) {
   };
 
   return (
-    <div className="min-h-[85vh] w-full flex items-center justify-center p-4 bg-slate-50/50 dark:bg-slate-950/50">
+    <div className="min-h-screen w-full flex items-center justify-center p-4 bg-slate-50 dark:bg-slate-950">
       <Card className="max-w-md w-full border-border/60 shadow-xl bg-card">
         <CardHeader className="text-center pb-2">
           <div className="mx-auto w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mb-4 text-primary">
