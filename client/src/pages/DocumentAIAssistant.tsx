@@ -754,6 +754,35 @@ function parseTaskEditorLinkHref(href?: string | null) {
     };
 }
 
+function injectReferenceLinks(content: string): string {
+    return content.replace(
+        /\[Section\s+(.+?)\s*·\s*p\.(\d+)\]/g,
+        (_match, section: string, page: string) =>
+            `[Section ${section} · p.${page}](themison://ref?section=${encodeURIComponent(section)}&page=${page})`
+    );
+}
+
+function parseRefLinkHref(href?: string | null) {
+    const raw = String(href || "").trim();
+    if (!raw) return null;
+    let parsed: URL;
+    try {
+        parsed = new URL(raw, "https://themison.local");
+    } catch {
+        return null;
+    }
+    const isRefLink =
+        parsed.protocol === "themison:" && parsed.hostname === "ref";
+    if (!isRefLink) return null;
+
+    const section = parsed.searchParams.get("section")?.trim() || null;
+    const pageRaw = parsed.searchParams.get("page")?.trim();
+    const page = pageRaw ? parseInt(pageRaw, 10) : null;
+    if (!page) return null;
+
+    return { section, page };
+}
+
 type ArchiveFolderDialogMode = "save" | "move";
 type ArchiveFolderDialogStep = "select" | "create";
 
@@ -1975,6 +2004,22 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             return String(previous?.content || "").trim();
         },
         [chatHistory]
+    );
+
+    const matchReferenceToSource = useCallback(
+        (page: number, section: string | null, sources?: ChatMessage["sources"]) => {
+            if (!sources || sources.length === 0) return null;
+            const normalize = (s: string | null | undefined) =>
+                String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+            const candidates = sources.filter((s) => s.page === page);
+            if (candidates.length === 0) return null;
+            if (candidates.length === 1) return candidates[0];
+            const exact = candidates.find((s) => normalize(s.section) === normalize(section));
+            if (exact) return exact;
+            // Ambiguous - merge bboxes rather than guessing which chunk is right
+            return { ...candidates[0], bboxes: candidates.flatMap((s) => s.bboxes || []) };
+        },
+        []
     );
 
     const getWorksheetSuggestionId = useCallback(
@@ -4627,6 +4672,37 @@ Output rules:
                                                                                         </a>
                                                                                     );
                                                                                 }
+                                                                                const refLink = parseRefLinkHref(href);
+                                                                                if (refLink) {
+                                                                                    const matchedSource = matchReferenceToSource(refLink.page, refLink.section, msg.sources);
+                                                                                    return (
+                                                                                        <span className="inline-flex items-center gap-2 not-italic no-underline align-middle ml-1">
+                                                                                            <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
+                                                                                                Section {refLink.section} · p.{refLink.page}
+                                                                                            </span>
+                                                                                            {matchedSource ? (
+                                                                                                <button
+                                                                                                    type="button"
+                                                                                                    onClick={(e) => {
+                                                                                                        e.preventDefault();
+                                                                                                        handleOpenTaskDocument({
+                                                                                                            filename: matchedSource.filename,
+                                                                                                            section: matchedSource.section,
+                                                                                                            page: matchedSource.page,
+                                                                                                            excerpt: matchedSource.excerpt,
+                                                                                                            highlightUrl: matchedSource.highlightUrl,
+                                                                                                            bboxes: matchedSource.bboxes,
+                                                                                                        });
+                                                                                                    }}
+                                                                                                    className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-0.5 rounded"
+                                                                                                >
+                                                                                                    Open document
+                                                                                                    <ExternalLink className="w-3 h-3" />
+                                                                                                </button>
+                                                                                            ) : null}
+                                                                                        </span>
+                                                                                    );
+                                                                                }
                                                                                 return (
                                                                                     <a
                                                                                         href={href}
@@ -4709,8 +4785,8 @@ Output rules:
                                                             const visibleSources = isExpanded ? dedupedSources : dedupedSources.slice(0, maxVisibleSources);
                                                             const showToggle = dedupedSources.length > maxVisibleSources;
 
-                                                            return (
-                                                                <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                            const evidenceContent = (
+                                                                <>
                                                                     <div className="flex items-center justify-between gap-3">
                                                                         <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase">
                                                                             {taskIntent ? "Related tasks" : "Evidence and linked records"}
@@ -4816,7 +4892,22 @@ Output rules:
                                                                             )}
                                                                         </button>
                                                                     )}
+                                                                </>
+                                                            );
+
+                                                            return taskIntent ? (
+                                                                <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                                    {evidenceContent}
                                                                 </div>
+                                                            ) : (
+                                                                <details className="mt-8 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                                    <summary className="text-xs font-semibold tracking-wide text-gray-500 uppercase cursor-pointer hover:text-gray-700">
+                                                                        Show raw source chunks ({dedupedSources.length})
+                                                                    </summary>
+                                                                    <div className="space-y-3 mt-3">
+                                                                        {evidenceContent}
+                                                                    </div>
+                                                                </details>
                                                             );
                                                         })()}
 
