@@ -2163,17 +2163,14 @@ export const collaborationRouter = router({
       )
       .mutation(async ({ input, ctx }) => {
         const db = await getDb();
-        if (!db) throw new Error("Database not available");
-
         const mode = (input.demoMode ?? "sample") as DemoMode;
         const beTrialUuid = await resolveBeTrialIdForRead(mode, input.trialId);
-        if (!beTrialUuid) throw new Error("No backend trial found for this trial id");
 
         const taskCard = buildTaskCardFromPrompt(input.content);
         const messageText = `Prepared a task draft. Please review and confirm before creation.`;
 
         let messageId: string | null = null;
-        if (input.conversationId || input.threadId) {
+        if (db && (input.conversationId || input.threadId)) {
           messageId = randomUUID();
           await db.insert(messages).values({
             id: messageId,
@@ -2195,18 +2192,20 @@ export const collaborationRouter = router({
           });
         }
 
-        await logCollabEvent(db, {
-          trialId: beTrialUuid,
-          userId: ctx.user.id,
-          layer: input.threadId ? "threads" : "messages",
-          eventType: "ai_task_suggested",
-          aiInvolved: true,
-          aiModel: "gpt-4-turbo",
-          eventData: {
-            sourceMessageId: input.sourceMessageId ?? null,
-            hasConversationContext: Boolean(input.conversationId || input.threadId),
-          },
-        });
+        if (db && beTrialUuid) {
+          await logCollabEvent(db, {
+            trialId: beTrialUuid,
+            userId: ctx.user.id,
+            layer: input.threadId ? "threads" : "messages",
+            eventType: "ai_task_suggested",
+            aiInvolved: true,
+            aiModel: "gpt-4-turbo",
+            eventData: {
+              sourceMessageId: input.sourceMessageId ?? null,
+              hasConversationContext: Boolean(input.conversationId || input.threadId),
+            },
+          });
+        }
 
         return {
           taskCard,

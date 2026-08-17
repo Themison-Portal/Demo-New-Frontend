@@ -7,7 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { ENV } from './env';
 
 // Initialize Google GenAI client
-const client = new GoogleGenAI({ apiKey: ENV.geminiApiKey });
+const client = new GoogleGenAI({ apiKey: ENV.geminiApiKey || "dummy-key" });
 
 /**
  * Create a new File Search Store for a trial

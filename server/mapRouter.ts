@@ -265,8 +265,6 @@ export const mapRouter = router({
     .query(async (opts) => {
       const { input, ctx } = opts;
       try {
-        const db = await getDb();
-        if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
         const mode = (input.demoMode ?? "sample") as DemoMode;
         const beTrialId = await resolveBeTrialIdForRead(mode, input.mapId);
         if (!beTrialId) {
@@ -348,8 +346,6 @@ export const mapRouter = router({
       const trialId = input.mapId;
       const category = input.task.category || getCategoryForPhaseId(input.phaseId);
 
-      const db = await getDb();
-      if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Database not available" });
       const mode = (input.demoMode ?? "sample") as DemoMode;
       const beTrialId = await resolveBeTrialIdForRead(mode, trialId);
       if (!beTrialId) {
