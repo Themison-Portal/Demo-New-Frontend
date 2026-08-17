@@ -768,6 +768,7 @@ function renderTextWithRefs(
     let lastIndex = 0;
     let match: RegExpExecArray | null;
     let idx = 0;
+    let lastRefKey: string | null = null;
     REF_TAG_REGEX.lastIndex = 0;
     while ((match = REF_TAG_REGEX.exec(text)) !== null) {
         const [full, section, pageStr] = match;
@@ -776,10 +777,15 @@ function renderTextWithRefs(
         }
         const page = parseInt(pageStr, 10);
         const matchedSource = matchFn(page, section, sources);
+        const refKey = `${section}-${page}`;
+        const isRepeatOfPrevious = refKey === lastRefKey;
+        lastRefKey = refKey;
+
         nodes.push(
-            <span key={`${keyPrefix}-ref-${idx}`} className="inline-flex items-center gap-2 align-middle ml-1">
-                <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
-                    Section {section} · p.{page}
+            <span key={`${keyPrefix}-ref-${idx}`} className="inline-flex items-center gap-1.5 align-middle ml-1.5">
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-0.5">
+                    <FileText className="w-3 h-3" />
+                    {isRepeatOfPrevious ? `p.${page}` : `${section} · p.${page}`}
                 </span>
                 {matchedSource ? (
                     <button
@@ -794,10 +800,10 @@ function renderTextWithRefs(
                                 bboxes: matchedSource.bboxes,
                             })
                         }
-                        className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-0.5 rounded"
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-2 py-0.5 rounded-full transition-colors"
                     >
-                        Open document
                         <ExternalLink className="w-3 h-3" />
+                        Open Docuement
                     </button>
                 ) : null}
             </span>
@@ -4843,11 +4849,6 @@ Output rules:
                                                                                         </div>
                                                                                     </div>
                                                                                 </div>
-                                                                                <p className="text-xs text-gray-600 italic ml-8 mt-2">
-                                                                                    {source.excerpt
-                                                                                        ? source.excerpt.replace(/【[^】]+】/g, "").trim() || "Excerpt not available."
-                                                                                        : "Excerpt not available."}
-                                                                                </p>
                                                                                 {entry.canOpenTask ? (
                                                                                     <button
                                                                                         onClick={() => {
