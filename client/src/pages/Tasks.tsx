@@ -1034,8 +1034,40 @@ function titleCase(value: string): string {
 
 export default function Tasks() {
   const [location, setLocation] = useLocation();
-  const { getCurrentDataMode, state } = useDemoState();
+  const { getCurrentDataMode, state, addTeamMember } = useDemoState();
   const currentDataMode = getCurrentDataMode();
+
+  // Fetch real organization members from the backend and merge them into the
+  // local demo state so the Assignee dropdown is populated for all users,
+  // not just those who have been manually added via the Add Member panel.
+  const { data: backendMembers } = trpc.members.list.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000, // 5 min — members don't change often
+  });
+
+  useEffect(() => {
+    if (!Array.isArray(backendMembers) || backendMembers.length === 0) return;
+    const existingIds = new Set((state.teamMembers || []).map((m) => String(m.id)));
+    backendMembers.forEach((m: any) => {
+      const id = String(m.id || "").trim();
+      if (!id || existingIds.has(id)) return;
+      const name = [m.first_name, m.last_name].filter(Boolean).join(" ") || m.name || m.email || "Unknown";
+      const initials = name
+        .split(" ")
+        .slice(0, 2)
+        .map((part: string) => part[0]?.toUpperCase() ?? "")
+        .join("");
+      addTeamMember({
+        id,
+        name,
+        email: m.email || "",
+        role: m.default_role || "member",
+        initials: initials || "??",
+        clinicalRole: m.default_role,
+      });
+      existingIds.add(id);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendMembers]);
 
   const params = useMemo(() => {
     if (typeof window !== "undefined") {
