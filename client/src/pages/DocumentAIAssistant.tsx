@@ -4722,7 +4722,7 @@ Output rules:
                                                                             em: ({ children }) => <em className="italic">{children}</em>,
                                                                         }}
                                                                     >
-                                                                        {msg.content.replace(/【[^】]+】/g, "").trim()}
+                                                                        {injectReferenceLinks(msg.content.replace(/【[^】]+】/g, "").trim())}
                                                                     </ReactMarkdown>
                                                                 ) : (
                                                                     <div className="whitespace-pre-wrap break-words leading-relaxed bg-white px-4 py-3 rounded-lg text-sm">
