@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -754,33 +754,77 @@ function parseTaskEditorLinkHref(href?: string | null) {
     };
 }
 
-function injectReferenceLinks(content: string): string {
-    return content.replace(
-        /\[Section\s+(.+?)\s*·\s*p\.(\d+)\]/g,
-        (_match, section: string, page: string) =>
-            `[Section ${section} · p.${page}](themison://ref?section=${encodeURIComponent(section)}&page=${page})`
-    );
+
+const REF_TAG_REGEX = /\[Section\s+(.+?)\s*·\s*p\.(\d+)\]/g;
+
+function renderTextWithRefs(
+    text: string,
+    sources: ChatMessage["sources"],
+    matchFn: (page: number, section: string | null, sources?: ChatMessage["sources"]) => any,
+    openFn: (source: any) => void,
+    keyPrefix: string
+) {
+    const nodes: any[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let idx = 0;
+    REF_TAG_REGEX.lastIndex = 0;
+    while ((match = REF_TAG_REGEX.exec(text)) !== null) {
+        const [full, section, pageStr] = match;
+        if (match.index > lastIndex) {
+            nodes.push(text.slice(lastIndex, match.index));
+        }
+        const page = parseInt(pageStr, 10);
+        const matchedSource = matchFn(page, section, sources);
+        nodes.push(
+            <span key={`${keyPrefix}-ref-${idx}`} className="inline-flex items-center gap-2 align-middle ml-1">
+                <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
+                    Section {section} · p.{page}
+                </span>
+                {matchedSource ? (
+                    <button
+                        type="button"
+                        onClick={() =>
+                            openFn({
+                                filename: matchedSource.filename,
+                                section: matchedSource.section,
+                                page: matchedSource.page,
+                                excerpt: matchedSource.excerpt,
+                                highlightUrl: matchedSource.highlightUrl,
+                                bboxes: matchedSource.bboxes,
+                            })
+                        }
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-0.5 rounded"
+                    >
+                        Open document
+                        <ExternalLink className="w-3 h-3" />
+                    </button>
+                ) : null}
+            </span>
+        );
+        lastIndex = match.index + full.length;
+        idx++;
+    }
+    if (lastIndex < text.length) {
+        nodes.push(text.slice(lastIndex));
+    }
+    return nodes;
 }
 
-function parseRefLinkHref(href?: string | null) {
-    const raw = String(href || "").trim();
-    if (!raw) return null;
-    let parsed: URL;
-    try {
-        parsed = new URL(raw, "https://themison.local");
-    } catch {
-        return null;
-    }
-    const isRefLink =
-        parsed.protocol === "themison:" && parsed.hostname === "ref";
-    if (!isRefLink) return null;
-
-    const section = parsed.searchParams.get("section")?.trim() || null;
-    const pageRaw = parsed.searchParams.get("page")?.trim();
-    const page = pageRaw ? parseInt(pageRaw, 10) : null;
-    if (!page) return null;
-
-    return { section, page };
+function processChildrenForRefs(
+    children: React.ReactNode,
+    sources: ChatMessage["sources"],
+    matchFn: (page: number, section: string | null, sources?: ChatMessage["sources"]) => any,
+    openFn: (source: any) => void,
+    keyPrefix: string
+) {
+    return React.Children.map(children, (child, i) => {
+        if (typeof child === "string") {
+            const processed = renderTextWithRefs(child, sources, matchFn, openFn, `${keyPrefix}-${i}`);
+            return <span key={`${keyPrefix}-wrap-${i}`}>{processed}</span>;
+        }
+        return child;
+    });
 }
 
 type ArchiveFolderDialogMode = "save" | "move";
@@ -4614,16 +4658,17 @@ Output rules:
                                                                             ),
                                                                             p: ({ children, node }) => {
                                                                                 const isFirstParagraph = node?.position?.start?.line === 1;
+                                                                                const processed = processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, `p-${node?.position?.start?.line || 0}`);
                                                                                 if (isFirstParagraph) {
                                                                                     return (
                                                                                         <p className="mb-6 leading-relaxed text-gray-900 text-base font-bold">
-                                                                                            {children}
+                                                                                            {processed}
                                                                                         </p>
                                                                                     );
                                                                                 }
                                                                                 return (
                                                                                     <p className="mb-5 leading-relaxed text-gray-700 text-sm">
-                                                                                        {children}
+                                                                                        {processed}
                                                                                     </p>
                                                                                 );
                                                                             },
@@ -4638,7 +4683,9 @@ Output rules:
                                                                                 </ol>
                                                                             ),
                                                                             li: ({ children }) => (
-                                                                                <li className="leading-relaxed">{children}</li>
+                                                                                <li className="leading-relaxed">
+                                                                                    {processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, "li")}
+                                                                                </li>
                                                                             ),
                                                                             blockquote: ({ children }) => (
                                                                                 <blockquote className="border-l-4 border-blue-500 pl-4 py-2 my-4 italic text-gray-600 bg-blue-50 rounded-r">
@@ -4672,37 +4719,6 @@ Output rules:
                                                                                         </a>
                                                                                     );
                                                                                 }
-                                                                                const refLink = parseRefLinkHref(href);
-                                                                                if (refLink) {
-                                                                                    const matchedSource = matchReferenceToSource(refLink.page, refLink.section, msg.sources);
-                                                                                    return (
-                                                                                        <span className="inline-flex items-center gap-2 not-italic no-underline align-middle ml-1">
-                                                                                            <span className="text-xs text-gray-500 bg-gray-100 rounded px-2 py-0.5">
-                                                                                                Section {refLink.section} · p.{refLink.page}
-                                                                                            </span>
-                                                                                            {matchedSource ? (
-                                                                                                <button
-                                                                                                    type="button"
-                                                                                                    onClick={(e) => {
-                                                                                                        e.preventDefault();
-                                                                                                        handleOpenTaskDocument({
-                                                                                                            filename: matchedSource.filename,
-                                                                                                            section: matchedSource.section,
-                                                                                                            page: matchedSource.page,
-                                                                                                            excerpt: matchedSource.excerpt,
-                                                                                                            highlightUrl: matchedSource.highlightUrl,
-                                                                                                            bboxes: matchedSource.bboxes,
-                                                                                                        });
-                                                                                                    }}
-                                                                                                    className="inline-flex items-center gap-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 px-2 py-0.5 rounded"
-                                                                                                >
-                                                                                                    Open document
-                                                                                                    <ExternalLink className="w-3 h-3" />
-                                                                                                </button>
-                                                                                            ) : null}
-                                                                                        </span>
-                                                                                    );
-                                                                                }
                                                                                 return (
                                                                                     <a
                                                                                         href={href}
@@ -4722,7 +4738,7 @@ Output rules:
                                                                             em: ({ children }) => <em className="italic">{children}</em>,
                                                                         }}
                                                                     >
-                                                                        {injectReferenceLinks(msg.content.replace(/【[^】]+】/g, "").trim())}
+                                                                        {msg.content.replace(/【[^】]+】/g, "").trim()}
                                                                     </ReactMarkdown>
                                                                 ) : (
                                                                     <div className="whitespace-pre-wrap break-words leading-relaxed bg-white px-4 py-3 rounded-lg text-sm">
