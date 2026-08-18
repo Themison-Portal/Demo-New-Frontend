@@ -1,5 +1,5 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import * as schema from './drizzle/schema.ts';
 import dotenv from 'dotenv';
 
@@ -115,29 +115,23 @@ const mockTrials = [
 async function seedTrials() {
   console.log('🌱 Seeding trials...');
   
-  const connection = await mysql.createConnection(process.env.DATABASE_URL);
-  const db = drizzle(connection, { schema, mode: 'default' });
+  const client = postgres(process.env.DATABASE_URL);
+  const db = drizzle(client, { schema });
 
   // Insert trials with a default createdBy user ID (1)
-  // In a real scenario, you'd use an actual user ID from your users table
   for (const trial of mockTrials) {
     try {
       await db.insert(schema.trials).values({
         ...trial,
         createdBy: 1, // Default user ID
-      });
+      }).onConflictDoNothing();
       console.log(`✅ Inserted trial: ${trial.id} - ${trial.title}`);
     } catch (error) {
-      // If trial already exists, update it instead
-      if (error.code === 'ER_DUP_ENTRY') {
-        console.log(`⚠️  Trial ${trial.id} already exists, skipping...`);
-      } else {
-        console.error(`❌ Error inserting trial ${trial.id}:`, error);
-      }
+      console.error(`❌ Error inserting trial ${trial.id}:`, error);
     }
   }
 
-  await connection.end();
+  await client.end();
   console.log('✅ Seeding complete!');
 }
 

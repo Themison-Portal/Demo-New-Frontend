@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
-import mysql from "mysql2/promise";
+import postgres from "postgres";
 
 function loadEnvOnce() {
   const cwdEnvPath = path.resolve(process.cwd(), ".env");
@@ -27,66 +27,39 @@ function redactDatabaseUrl(rawUrl: string) {
   return `${parsed.protocol}//${auth}${parsed.hostname}:${parsed.port}${parsed.pathname}`;
 }
 
-async function tableExists(connection: mysql.Connection, tableName: string) {
-  const [rows] = await connection.query<mysql.RowDataPacket[]>(
-    `
-      SELECT 1
-      FROM information_schema.tables
-      WHERE table_schema = DATABASE()
-        AND table_name = ?
-      LIMIT 1
-    `,
-    [tableName]
-  );
+async function tableExists(sql: postgres.Sql, tableName: string) {
+  const rows = await sql`
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_name = ${tableName}
+    LIMIT 1
+  `;
   return rows.length > 0;
 }
 
 async function summarizeTable(
-  connection: mysql.Connection,
+  sql: postgres.Sql,
   tableName: string,
   updatedAtColumn = "updatedAt"
 ) {
-  if (!(await tableExists(connection, tableName))) {
+  if (!(await tableExists(sql, tableName))) {
     return { table: tableName, exists: false as const };
   }
 
-  const [rows] = await connection.query<mysql.RowDataPacket[]>(
-    `SELECT COUNT(*) AS rowCount, MAX(\`${updatedAtColumn}\`) AS latestUpdatedAt FROM \`${tableName}\``
-  );
-  const row = rows[0] ?? {};
-  return {
-    table: tableName,
-    exists: true as const,
-    rowCount: Number(row.rowCount ?? 0),
-    latestUpdatedAt: row.latestUpdatedAt ?? null,
-  };
-}
-
-async function summarizeTrialModes(connection: mysql.Connection) {
-  if (!(await tableExists(connection, "trials"))) {
-    return null;
+  try {
+    const rows = await sql.unsafe(
+      `SELECT COUNT(*)::int AS "rowCount", MAX("${updatedAtColumn}") AS "latestUpdatedAt" FROM "bff"."${tableName}"`
+    );
+    const row = rows[0] ?? {};
+    return {
+      table: tableName,
+      exists: true as const,
+      rowCount: Number(row.rowCount ?? 0),
+      latestUpdatedAt: row.latestUpdatedAt ?? null,
+    };
+  } catch {
+    return { table: tableName, exists: false as const };
   }
-
-  const [rows] = await connection.query<mysql.RowDataPacket[]>(
-    `
-      SELECT
-        CASE
-          WHEN id LIKE 'sample:%' THEN 'sample'
-          WHEN id LIKE 'full:%' THEN 'full'
-          WHEN id LIKE 'building:%' THEN 'building'
-          ELSE 'unprefixed'
-        END AS mode,
-        COUNT(*) AS rowCount
-      FROM \`trials\`
-      GROUP BY 1
-      ORDER BY 1
-    `
-  );
-
-  return rows.map((row) => ({
-    mode: String(row.mode ?? ""),
-    rowCount: Number(row.rowCount ?? 0),
-  }));
 }
 
 async function main() {
@@ -98,37 +71,25 @@ async function main() {
   }
 
   const parsed = new URL(databaseUrl);
-  const connection = await mysql.createConnection(databaseUrl);
+  const sql = postgres(databaseUrl, { max: 1 });
 
   try {
-    const [databaseRows] = await connection.query<mysql.RowDataPacket[]>(
-      "SELECT DATABASE() AS databaseName, @@version AS version"
-    );
+    const databaseRows = await sql`SELECT current_database() AS "databaseName", version() AS version`;
     const databaseInfo = databaseRows[0] ?? {};
 
     const summaries = await Promise.all([
-      summarizeTable(connection, "users"),
-      summarizeTable(connection, "trials"),
-      summarizeTable(connection, "protocols"),
-      summarizeTable(connection, "taskScaffolds"),
-      summarizeTable(connection, "tasks"),
-      summarizeTable(connection, "telemetryEvents"),
+      summarizeTable(sql, "users"),
+      summarizeTable(sql, "trials"),
+      summarizeTable(sql, "protocols"),
+      summarizeTable(sql, "taskScaffolds"),
+      summarizeTable(sql, "tasks"),
+      summarizeTable(sql, "telemetry_events"),
     ]);
-    const trialModes = await summarizeTrialModes(connection);
-
-    const [recentTrialRows] = await connection.query<mysql.RowDataPacket[]>(
-      `
-        SELECT id, title, updatedAt
-        FROM \`trials\`
-        ORDER BY updatedAt DESC
-        LIMIT 5
-      `
-    ).catch(() => [[] as mysql.RowDataPacket[]]);
 
     const output = {
       connectedTo: {
         host: parsed.hostname,
-        port: parsed.port || "3306",
+        port: parsed.port || "5432",
         database: parsed.pathname.replace(/^\//, ""),
         redactedUrl: redactDatabaseUrl(databaseUrl),
       },
@@ -137,19 +98,11 @@ async function main() {
         version: databaseInfo.version ?? null,
       },
       tables: summaries,
-      trialModes,
-      recentTrials: Array.isArray(recentTrialRows)
-        ? recentTrialRows.map((row) => ({
-            id: row.id ?? null,
-            title: row.title ?? null,
-            updatedAt: row.updatedAt ?? null,
-          }))
-        : [],
     };
 
     console.log(JSON.stringify(output, null, 2));
   } finally {
-    await connection.end();
+    await sql.end();
   }
 }
 

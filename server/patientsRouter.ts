@@ -314,10 +314,32 @@ export const patientsRouter = router({
                 if (!beTrialId) {
                     throw new TRPCError({ code: "NOT_FOUND", message: "No backend trial for this id" });
                 }
-                const visitPayload = {
+
+                // Resolve the real logged-in member's UUID to use as doctor_id.
+                // The backend requires a valid member UUID; the hardcoded placeholder
+                // "00000000-0000-0000-0000-000000000001" does not exist and causes failures.
+                let doctorId: string | null = null;
+                try {
+                    const me = await callBackend<{ id: string }>("/api/members/me", {
+                        user: ctx.user,
+                        authToken: ctx.authToken,
+                    });
+                    if (me?.id) doctorId = me.id;
+                } catch {
+                    console.warn("[patientsRouter] Could not resolve current member UUID for doctor_id.");
+                }
+
+                if (!doctorId) {
+                    throw new TRPCError({
+                        code: "UNAUTHORIZED",
+                        message: "Could not identify your member account. Please sign out and sign back in, then try again.",
+                    });
+                }
+
+                const visitPayload: Record<string, unknown> = {
                     patient_id: input.patientId,
                     trial_id: beTrialId,
-                    doctor_id: "00000000-0000-0000-0000-000000000001",
+                    doctor_id: doctorId,
                     visit_date: input.visitDate.split("T")[0],
                     visit_time: input.visitTime || null,
                     visit_type: input.visitType,
@@ -342,7 +364,7 @@ export const patientsRouter = router({
                         id: `mock-visit-${Math.floor(1000 + Math.random() * 9000)}`,
                         patient_id: input.patientId,
                         trial_id: input.trialId,
-                        doctor_id: "00000000-0000-0000-0000-000000000001",
+                        doctor_id: null,
                         doctor_name: "Demo Doctor",
                         visit_date: input.visitDate.split("T")[0],
                         visit_time: input.visitTime || "09:00",
@@ -356,11 +378,16 @@ export const patientsRouter = router({
                     return mockVisit;
                 }
                 if (err instanceof TRPCError) throw err;
+
+                // Surface the backend's own error message (e.g. "Patient is not enrolled in this trial")
+                // rather than replacing it with a generic one.
+                const backendMessage = err instanceof Error ? err.message : undefined;
+                const detail = backendMessage?.match(/:\s*(.+)$/)?.[1]?.trim() || "Failed to schedule patient visit";
                 console.error("Error in createVisit proxy:", err);
                 throw new TRPCError({
-                    code: "INTERNAL_SERVER_ERROR",
-                    message: "Failed to schedule patient visit",
+                    code: "BAD_REQUEST",
+                    message: detail,
                 });
             }
         }),
-});
+});

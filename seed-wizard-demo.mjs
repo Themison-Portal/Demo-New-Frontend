@@ -1,13 +1,13 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
-import * as schema from './drizzle/schema.js';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import * as schema from './drizzle/schema.ts';
 import { eq, desc } from 'drizzle-orm';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const connection = await mysql.createConnection(process.env.DATABASE_URL);
-const db = drizzle(connection, { schema, mode: 'default' });
+const client = postgres(process.env.DATABASE_URL);
+const db = drizzle(client, { schema });
 
 async function seedWizardDemo() {
   console.log('Starting Study Setup Wizard demo seed...');
@@ -260,7 +260,7 @@ async function seedWizardDemo() {
   }
 
   console.log('Demo seed completed successfully!');
-  await connection.end();
+  await client.end();
 }
 
 seedWizardDemo().catch(console.error);

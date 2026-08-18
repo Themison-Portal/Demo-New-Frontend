@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -752,6 +752,85 @@ function parseTaskEditorLinkHref(href?: string | null) {
         mapId,
         taskName,
     };
+}
+
+
+const REF_TAG_REGEX = /\[Section\s+(.+?)\s*·\s*p\.(\d+)\]/g;
+
+function renderTextWithRefs(
+    text: string,
+    sources: ChatMessage["sources"],
+    matchFn: (page: number, section: string | null, sources?: ChatMessage["sources"]) => any,
+    openFn: (source: any) => void,
+    keyPrefix: string
+) {
+    const nodes: any[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    let idx = 0;
+    let lastRefKey: string | null = null;
+    REF_TAG_REGEX.lastIndex = 0;
+    while ((match = REF_TAG_REGEX.exec(text)) !== null) {
+        const [full, section, pageStr] = match;
+        if (match.index > lastIndex) {
+            nodes.push(text.slice(lastIndex, match.index));
+        }
+        const page = parseInt(pageStr, 10);
+        const matchedSource = matchFn(page, section, sources);
+        const refKey = `${section}-${page}`;
+        const isRepeatOfPrevious = refKey === lastRefKey;
+        lastRefKey = refKey;
+
+        nodes.push(
+            <span key={`${keyPrefix}-ref-${idx}`} className="inline-flex items-center gap-1.5 align-middle ml-1.5">
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-0.5">
+                    <FileText className="w-3 h-3" />
+                    {isRepeatOfPrevious ? `p.${page}` : `${section} · p.${page}`}
+                </span>
+                {matchedSource ? (
+                    <button
+                        type="button"
+                        onClick={() =>
+                            openFn({
+                                filename: matchedSource.filename,
+                                section: matchedSource.section,
+                                page: matchedSource.page,
+                                excerpt: matchedSource.excerpt,
+                                highlightUrl: matchedSource.highlightUrl,
+                                bboxes: matchedSource.bboxes,
+                            })
+                        }
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-2 py-0.5 rounded-full transition-colors"
+                    >
+                        <ExternalLink className="w-3 h-3" />
+                        Open Docuement
+                    </button>
+                ) : null}
+            </span>
+        );
+        lastIndex = match.index + full.length;
+        idx++;
+    }
+    if (lastIndex < text.length) {
+        nodes.push(text.slice(lastIndex));
+    }
+    return nodes;
+}
+
+function processChildrenForRefs(
+    children: React.ReactNode,
+    sources: ChatMessage["sources"],
+    matchFn: (page: number, section: string | null, sources?: ChatMessage["sources"]) => any,
+    openFn: (source: any) => void,
+    keyPrefix: string
+) {
+    return React.Children.map(children, (child, i) => {
+        if (typeof child === "string") {
+            const processed = renderTextWithRefs(child, sources, matchFn, openFn, `${keyPrefix}-${i}`);
+            return <span key={`${keyPrefix}-wrap-${i}`}>{processed}</span>;
+        }
+        return child;
+    });
 }
 
 type ArchiveFolderDialogMode = "save" | "move";
@@ -1975,6 +2054,22 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             return String(previous?.content || "").trim();
         },
         [chatHistory]
+    );
+
+    const matchReferenceToSource = useCallback(
+        (page: number, section: string | null, sources?: ChatMessage["sources"]) => {
+            if (!sources || sources.length === 0) return null;
+            const normalize = (s: string | null | undefined) =>
+                String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+            const candidates = sources.filter((s) => s.page === page);
+            if (candidates.length === 0) return null;
+            if (candidates.length === 1) return candidates[0];
+            const exact = candidates.find((s) => normalize(s.section) === normalize(section));
+            if (exact) return exact;
+            // Ambiguous - merge bboxes rather than guessing which chunk is right
+            return { ...candidates[0], bboxes: candidates.flatMap((s) => s.bboxes || []) };
+        },
+        []
     );
 
     const getWorksheetSuggestionId = useCallback(
@@ -4569,16 +4664,17 @@ Output rules:
                                                                             ),
                                                                             p: ({ children, node }) => {
                                                                                 const isFirstParagraph = node?.position?.start?.line === 1;
+                                                                                const processed = processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, `p-${node?.position?.start?.line || 0}`);
                                                                                 if (isFirstParagraph) {
                                                                                     return (
                                                                                         <p className="mb-6 leading-relaxed text-gray-900 text-base font-bold">
-                                                                                            {children}
+                                                                                            {processed}
                                                                                         </p>
                                                                                     );
                                                                                 }
                                                                                 return (
                                                                                     <p className="mb-5 leading-relaxed text-gray-700 text-sm">
-                                                                                        {children}
+                                                                                        {processed}
                                                                                     </p>
                                                                                 );
                                                                             },
@@ -4593,7 +4689,9 @@ Output rules:
                                                                                 </ol>
                                                                             ),
                                                                             li: ({ children }) => (
-                                                                                <li className="leading-relaxed">{children}</li>
+                                                                                <li className="leading-relaxed">
+                                                                                    {processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, "li")}
+                                                                                </li>
                                                                             ),
                                                                             blockquote: ({ children }) => (
                                                                                 <blockquote className="border-l-4 border-blue-500 pl-4 py-2 my-4 italic text-gray-600 bg-blue-50 rounded-r">
@@ -4709,8 +4807,8 @@ Output rules:
                                                             const visibleSources = isExpanded ? dedupedSources : dedupedSources.slice(0, maxVisibleSources);
                                                             const showToggle = dedupedSources.length > maxVisibleSources;
 
-                                                            return (
-                                                                <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                            const evidenceContent = (
+                                                                <>
                                                                     <div className="flex items-center justify-between gap-3">
                                                                         <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase">
                                                                             {taskIntent ? "Related tasks" : "Evidence and linked records"}
@@ -4751,11 +4849,6 @@ Output rules:
                                                                                         </div>
                                                                                     </div>
                                                                                 </div>
-                                                                                <p className="text-xs text-gray-600 italic ml-8 mt-2">
-                                                                                    {source.excerpt
-                                                                                        ? source.excerpt.replace(/【[^】]+】/g, "").trim() || "Excerpt not available."
-                                                                                        : "Excerpt not available."}
-                                                                                </p>
                                                                                 {entry.canOpenTask ? (
                                                                                     <button
                                                                                         onClick={() => {
@@ -4816,7 +4909,22 @@ Output rules:
                                                                             )}
                                                                         </button>
                                                                     )}
+                                                                </>
+                                                            );
+
+                                                            return taskIntent ? (
+                                                                <div className="mt-8 space-y-3 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                                    {evidenceContent}
                                                                 </div>
+                                                            ) : (
+                                                                <details className="mt-8 max-w-4xl mx-auto pt-4 border-t border-gray-200">
+                                                                    <summary className="text-xs font-semibold tracking-wide text-gray-500 uppercase cursor-pointer hover:text-gray-700">
+                                                                        Show raw source chunks ({dedupedSources.length})
+                                                                    </summary>
+                                                                    <div className="space-y-3 mt-3">
+                                                                        {evidenceContent}
+                                                                    </div>
+                                                                </details>
                                                             );
                                                         })()}
 
