@@ -50,10 +50,7 @@ import {
     Copy,
     Check,
     Play,
-    Bookmark,
     MessageSquare,
-    AtSign,
-    Mail,
     Database,
     Users,
     Globe,
@@ -2033,6 +2030,84 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         }
     };
 
+    const handleRegenerate = async (assistantIndex: number) => {
+        if (isLoading) return;
+
+        const historyBeforeAssistant = chatHistory.slice(0, assistantIndex);
+        const lastUserMsgIndex = historyBeforeAssistant.findLastIndex((msg) => msg.role === "user");
+        if (lastUserMsgIndex === -1) {
+            toast.error("Could not find prompt to regenerate");
+            return;
+        }
+
+        const historyForRequest = chatHistory.slice(0, lastUserMsgIndex + 1);
+        const userMessage = historyForRequest[lastUserMsgIndex].content;
+        const sessionIdForRequest = activeChatSessionId || createChatSessionId();
+
+        setChatHistory(historyForRequest);
+        setIsLoading(true);
+
+        logEvent({
+            eventType: "ai_query_submitted",
+            action: "regenerate",
+            entityType: "query",
+            payload: {
+                query: userMessage,
+                trialId,
+                demoMode: currentDataMode,
+                isAllDocumentsMode,
+                selectedDocuments,
+            },
+            aiInvolved: true,
+        });
+
+        try {
+            const response = await chatMutation.mutateAsync({
+                messages: historyForRequest.map((msg) => ({
+                    role: msg.role,
+                    content: msg.content,
+                })),
+                demoMode: currentDataMode,
+                ...(selectedTrialId && selectedTrialId !== "all" ? { trialId: selectedTrialId } : {}),
+                ...(!isAllDocumentsMode && selectedDocuments.length > 0 ? { documentIds: selectedDocuments.map(String) } : {}),
+                sessionId: sessionIdForRequest,
+            });
+
+            const sources = (response as any).sources as Array<any> | undefined;
+            const highlightMeta: Record<string, { highlightUrl?: string; bboxes?: number[][] }> = {};
+            sources?.forEach((s: any) => {
+                const meta = { highlightUrl: s.highlightUrl, bboxes: s.bboxes };
+                if (s.fileId) highlightMeta[s.fileId] = meta;
+                if (s.filename) highlightMeta[s.filename] = meta;
+            });
+            setLiveSourceMeta((prev) => ({ ...prev, ...highlightMeta }));
+
+            const thinking = (response as any).thinking as string | undefined;
+            const assistantMessage: ChatMessage = {
+                role: "assistant",
+                content: response.message,
+                thinking,
+                thoughtsSummary: thinking,
+                sources: sources as ChatMessage["sources"],
+            };
+            const nextHistoryWithAssistant = [...historyForRequest, assistantMessage];
+            setChatHistory(nextHistoryWithAssistant);
+            persistChatSession(sessionIdForRequest, nextHistoryWithAssistant);
+            toast.success("Response regenerated");
+        } catch (error) {
+            console.error("Error regenerating response:", error);
+            const errorMessage: ChatMessage = {
+                role: "assistant",
+                content: "Sorry, I encountered an error while regenerating the response. Please try again.",
+            };
+            const nextHistoryWithError = [...historyForRequest, errorMessage];
+            setChatHistory(nextHistoryWithError);
+            persistChatSession(sessionIdForRequest, nextHistoryWithError);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -3807,7 +3882,7 @@ Output rules:
     };
 
     const handleArchiveDetailAction = (
-        action: "copy" | "move" | "regenerate" | "note" | "conversation" | "thread" | "email",
+        action: "copy" | "move" | "regenerate",
         item: ResponseArchiveItem
     ) => {
         if (action === "copy") {
@@ -3831,14 +3906,12 @@ Output rules:
             return;
         }
 
-        const actionLabels: Record<Exclude<typeof action, "copy" | "move">, string> = {
-            regenerate: "Regenerate",
-            note: "Save to notes",
-            conversation: "Start conversation",
-            thread: "Create thread",
-            email: "Send as email",
-        };
-        toast.info(`${actionLabels[action]} coming soon`);
+        if (action === "regenerate") {
+            setActiveTab("ai-assistant");
+            setMessage(item.question);
+            toast.info("Prompt loaded into chat");
+            return;
+        }
     };
 
     const renderResponseArchivePanel = () => {
@@ -4180,55 +4253,6 @@ Output rules:
                                             </button>
                                             <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
                                                 Regenerate
-                                            </div>
-                                        </div>
-                                        <div className="h-4 w-px bg-gray-200 mx-1" />
-                                        <div className="relative group">
-                                            <button
-                                                className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
-                                                aria-label="Save to notes"
-                                                onClick={() => handleArchiveDetailAction("note", selectedArchiveItem)}
-                                            >
-                                                <Bookmark className="w-4 h-4" />
-                                            </button>
-                                            <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                Save to notes
-                                            </div>
-                                        </div>
-                                        <div className="relative group">
-                                            <button
-                                                className="p-1.5 rounded hover:bg-blue-50 hover:text-blue-600"
-                                                aria-label="Start conversation"
-                                                onClick={() => handleArchiveDetailAction("conversation", selectedArchiveItem)}
-                                            >
-                                                <MessageSquare className="w-4 h-4" />
-                                            </button>
-                                            <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                Start conversation
-                                            </div>
-                                        </div>
-                                        <div className="relative group">
-                                            <button
-                                                className="p-1.5 rounded hover:bg-blue-100 hover:text-blue-600"
-                                                aria-label="Create thread"
-                                                onClick={() => handleArchiveDetailAction("thread", selectedArchiveItem)}
-                                            >
-                                                <AtSign className="w-4 h-4" />
-                                            </button>
-                                            <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                Create thread
-                                            </div>
-                                        </div>
-                                        <div className="relative group">
-                                            <button
-                                                className="p-1.5 rounded hover:bg-blue-100 hover:text-blue-600"
-                                                aria-label="Send as email"
-                                                onClick={() => handleArchiveDetailAction("email", selectedArchiveItem)}
-                                            >
-                                                <Mail className="w-4 h-4" />
-                                            </button>
-                                            <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                Send as email
                                             </div>
                                         </div>
                                     </div>
@@ -5050,6 +5074,8 @@ Output rules:
                                                                         <button
                                                                             className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
                                                                             aria-label="Regenerate"
+                                                                            onClick={() => handleRegenerate(index)}
+                                                                            disabled={isLoading}
                                                                         >
                                                                             <Play className="w-4 h-4" />
                                                                         </button>
@@ -5058,50 +5084,6 @@ Output rules:
                                                                         </div>
                                                                     </div>
                                                                     <div className="h-4 w-px bg-gray-200 mx-1" />
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
-                                                                            aria-label="Save to notes"
-                                                                        >
-                                                                            <Bookmark className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Save to notes
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-blue-50 hover:text-blue-600"
-                                                                            aria-label="Start conversation"
-                                                                        >
-                                                                            <MessageSquare className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Start conversation
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-blue-100 hover:text-blue-600"
-                                                                            aria-label="Create thread"
-                                                                        >
-                                                                            <AtSign className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Create thread
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-blue-100 hover:text-blue-600"
-                                                                            aria-label="Send as email"
-                                                                        >
-                                                                            <Mail className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Send as email
-                                                                        </div>
-                                                                    </div>
                                                                     <div className="relative group">
                                                                         <button
                                                                             className="p-1.5 rounded hover:bg-indigo-50 hover:text-indigo-600"
