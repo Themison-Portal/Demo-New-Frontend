@@ -110,6 +110,7 @@ interface ChatMessage {
         highlightUrl?: string;
         bboxes?: number[][];
     }>;
+    rating?: 'good' | 'bad' | null;
 }
 
 type TaskEditorFormState = {
@@ -2106,6 +2107,40 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const handleRating = (index: number, ratingType: 'good' | 'bad') => {
+        setChatHistory((prev) => {
+            const next = [...prev];
+            const currentMsg = next[index];
+            if (!currentMsg) return prev;
+
+            const newRating = currentMsg.rating === ratingType ? null : ratingType;
+            next[index] = { ...currentMsg, rating: newRating };
+
+            const sessionIdForRequest = activeChatSessionId || createChatSessionId();
+            persistChatSession(sessionIdForRequest, next);
+
+            if (newRating) {
+                logEvent({
+                    eventType: newRating === "good" ? "ai_response_accepted" : "ai_response_rejected",
+                    action: newRating === "good" ? "accepted" : "rejected",
+                    entityType: "response",
+                    entityId: String(index),
+                    aiInvolved: true,
+                    aiOutput: currentMsg.content,
+                });
+                toast.success(
+                    newRating === "good"
+                        ? "Feedback recorded: Good answer (+1 rating point)"
+                        : "Feedback recorded: Bad response (-1 rating point)"
+                );
+            } else {
+                toast.info("Rating feedback cleared");
+            }
+
+            return next;
+        });
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -5030,44 +5065,34 @@ Output rules:
                                                                     </div>
                                                                     <div className="relative group">
                                                                         <button
-                                                                            className="p-1.5 rounded hover:bg-emerald-100 hover:text-emerald-600"
+                                                                            className={`p-1.5 rounded transition-colors ${
+                                                                                msg.rating === "good"
+                                                                                    ? "bg-emerald-100 text-emerald-700 font-semibold ring-1 ring-emerald-400"
+                                                                                    : "hover:bg-emerald-100 hover:text-emerald-600 text-gray-500"
+                                                                            }`}
                                                                             aria-label="Good answer"
-                                                                            onClick={() => {
-                                                                                logEvent({
-                                                                                    eventType: "ai_response_accepted",
-                                                                                    action: "accepted",
-                                                                                    entityType: "response",
-                                                                                    entityId: String(index),
-                                                                                    aiInvolved: true,
-                                                                                    aiOutput: msg.content,
-                                                                                });
-                                                                            }}
+                                                                            onClick={() => handleRating(index, "good")}
                                                                         >
                                                                             <Check className="w-4 h-4" />
                                                                         </button>
                                                                         <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Good answer
+                                                                            {msg.rating === "good" ? "Rated: Good answer (+1)" : "Good answer (+1 point)"}
                                                                         </div>
                                                                     </div>
                                                                     <div className="relative group">
                                                                         <button
-                                                                            className="p-1.5 rounded hover:bg-rose-100 hover:text-rose-600"
+                                                                            className={`p-1.5 rounded transition-colors ${
+                                                                                msg.rating === "bad"
+                                                                                    ? "bg-rose-100 text-rose-700 font-semibold ring-1 ring-rose-400"
+                                                                                    : "hover:bg-rose-100 hover:text-rose-600 text-gray-500"
+                                                                            }`}
                                                                             aria-label="Bad response"
-                                                                            onClick={() => {
-                                                                                logEvent({
-                                                                                    eventType: "ai_response_rejected",
-                                                                                    action: "rejected",
-                                                                                    entityType: "response",
-                                                                                    entityId: String(index),
-                                                                                    aiInvolved: true,
-                                                                                    aiOutput: msg.content,
-                                                                                });
-                                                                            }}
+                                                                            onClick={() => handleRating(index, "bad")}
                                                                         >
                                                                             <X className="w-4 h-4" />
                                                                         </button>
                                                                         <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Bad response
+                                                                            {msg.rating === "bad" ? "Rated: Bad response (-1)" : "Bad response (-1 point)"}
                                                                         </div>
                                                                     </div>
                                                                     <div className="relative group">
