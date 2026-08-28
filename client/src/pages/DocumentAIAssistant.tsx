@@ -49,6 +49,8 @@ import {
     User,
     Copy,
     Check,
+    ThumbsUp,
+    ThumbsDown,
     Play,
     MessageSquare,
     Database,
@@ -5070,13 +5072,13 @@ Output rules:
                                                                                     ? "bg-emerald-100 text-emerald-700 font-semibold ring-1 ring-emerald-400"
                                                                                     : "hover:bg-emerald-100 hover:text-emerald-600 text-gray-500"
                                                                             }`}
-                                                                            aria-label="Good answer"
+                                                                            aria-label="Thumbs up - Good answer"
                                                                             onClick={() => handleRating(index, "good")}
                                                                         >
-                                                                            <Check className="w-4 h-4" />
+                                                                            <ThumbsUp className="w-4 h-4" />
                                                                         </button>
                                                                         <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            {msg.rating === "good" ? "Rated: Good answer (+1)" : "Good answer (+1 point)"}
+                                                                            {msg.rating === "good" ? "Rated: Thumbs Up 👍 (+1)" : "Thumbs Up 👍 (Good answer)"}
                                                                         </div>
                                                                     </div>
                                                                     <div className="relative group">
@@ -5086,13 +5088,13 @@ Output rules:
                                                                                     ? "bg-rose-100 text-rose-700 font-semibold ring-1 ring-rose-400"
                                                                                     : "hover:bg-rose-100 hover:text-rose-600 text-gray-500"
                                                                             }`}
-                                                                            aria-label="Bad response"
+                                                                            aria-label="Thumbs down - Bad response"
                                                                             onClick={() => handleRating(index, "bad")}
                                                                         >
-                                                                            <X className="w-4 h-4" />
+                                                                            <ThumbsDown className="w-4 h-4" />
                                                                         </button>
                                                                         <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            {msg.rating === "bad" ? "Rated: Bad response (-1)" : "Bad response (-1 point)"}
+                                                                            {msg.rating === "bad" ? "Rated: Thumbs Down 👎 (-1)" : "Thumbs Down 👎 (Bad response)"}
                                                                         </div>
                                                                     </div>
                                                                     <div className="relative group">
