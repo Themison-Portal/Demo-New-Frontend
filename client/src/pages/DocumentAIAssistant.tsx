@@ -53,6 +53,7 @@ import {
     ThumbsDown,
     Play,
     MessageSquare,
+    MessageSquareWarning,
     Database,
     Users,
     Globe,
@@ -113,6 +114,7 @@ interface ChatMessage {
         bboxes?: number[][];
     }>;
     rating?: 'good' | 'bad' | null;
+    feedback?: string | null;
 }
 
 type TaskEditorFormState = {
@@ -360,6 +362,7 @@ interface ArchiveFolderGroup {
     folders: Array<{
         id: string;
         label: string;
+        type?: 'saved' | 'feedback' | 'custom';
     }>;
 }
 
@@ -377,6 +380,9 @@ interface ResponseArchiveItem {
     savedAt: string;
     trialLabel: string;
     sources: Array<{ filename: string; section?: string; page?: number; category?: string }>;
+    feedback?: string | null;
+    rating?: 'good' | 'bad' | null;
+    type?: 'saved' | 'feedback';
 }
 
 const RESPONSE_ARCHIVE_STORAGE_KEY = "themison-response-archive:v1";
@@ -944,6 +950,9 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
     } | null>(null);
     const [pendingArchiveSave, setPendingArchiveSave] = useState<{ messageEntry: ChatMessage; messageIndex: number } | null>(null);
     const [pendingArchiveMoveItemId, setPendingArchiveMoveItemId] = useState<string | null>(null);
+    const [activeFeedbackMsgIndex, setActiveFeedbackMsgIndex] = useState<number | null>(null);
+    const [feedbackInputText, setFeedbackInputText] = useState<string>("");
+    const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
     const [activeChatSessionId, setActiveChatSessionId] = useState<string | null>(null);
     const chatEndRef = useRef<HTMLDivElement>(null);
     const archiveSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2143,6 +2152,100 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
             return next;
         });
+    };
+
+    const submitMessageFeedback = async (index: number, msg: ChatMessage) => {
+        const runtimeUser = getCurrentRuntimeUser();
+        const fallbackUser = demoState.teamMembers?.[0]?.name || "Kaleb Sanders";
+        const queriedBy = runtimeUser?.name || fallbackUser;
+        const queriedByEmail = runtimeUser?.email || null;
+        const tagString = feedbackTags.length > 0 ? `[${feedbackTags.join(", ")}] ` : "";
+        const fullFeedbackText = `${tagString}${feedbackInputText.trim()}`.trim() || "Negative response feedback";
+
+        setChatHistory((prev) => {
+            const next = [...prev];
+            if (!next[index]) return prev;
+            next[index] = { ...next[index], rating: "bad", feedback: fullFeedbackText };
+            const sessionIdForRequest = activeChatSessionId || createChatSessionId();
+            persistChatSession(sessionIdForRequest, next);
+            return next;
+        });
+
+        const resolvedTrialId = trialId || (activeTrials.length === 1 ? activeTrials[0] : null) || null;
+        const resolvedTrial = resolvedTrialId
+            ? allTrials.find((t: any) => String(t.id) === String(resolvedTrialId))
+            : null;
+        const groupId = getArchiveGroupIdForTrial(resolvedTrialId);
+        const groupLabel = resolvedTrial
+            ? getArchiveGroupLabelForTrial({
+                title: resolvedTrial.title,
+                investigationalProduct: resolvedTrial.investigationalProduct,
+            })
+            : "NO TRIAL";
+        const feedbackFolderId = getFeedbackArchiveFolderId(groupId);
+
+        ensureArchiveGroupAndFolder(groupLabel, "Feedback", groupId);
+
+        const previousUserQuestion =
+            [...chatHistory]
+                .slice(0, index)
+                .reverse()
+                .find((entry) => entry.role === "user")?.content || "Feedback on Themison AI response";
+
+        const newFeedbackItem: ResponseArchiveItem = {
+            id: `feedback-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            groupId,
+            folderId: feedbackFolderId,
+            trialId: resolvedTrialId,
+            dataMode: currentDataMode,
+            queriedBy,
+            queriedByEmail,
+            question: previousUserQuestion,
+            answer: msg.content,
+            title: `Feedback: ${previousUserQuestion.slice(0, 50)}${previousUserQuestion.length > 50 ? "..." : ""}`,
+            savedAt: new Date().toISOString(),
+            trialLabel: groupLabel,
+            sources: msg.sources || [],
+            feedback: fullFeedbackText,
+            rating: "bad",
+            type: "feedback",
+        };
+
+        setArchiveItems((prev) => [newFeedbackItem, ...prev]);
+
+        try {
+            await fetch("/api/feedback/", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    trialId: resolvedTrialId || "no-trial",
+                    suggestionId: newFeedbackItem.id,
+                    decision: "dismissed",
+                    prompt: previousUserQuestion,
+                    response: msg.content,
+                    correction: fullFeedbackText,
+                    feedback: fullFeedbackText,
+                    userEmail: queriedByEmail,
+                    userName: queriedBy,
+                }),
+            });
+        } catch {
+            // Ignore API network errors, saved locally
+        }
+
+        logEvent({
+            eventType: "ai_response_rejected",
+            action: "rejected",
+            entityType: "response",
+            entityId: String(index),
+            aiInvolved: true,
+            aiOutput: msg.content,
+        });
+
+        setActiveFeedbackMsgIndex(null);
+        setFeedbackInputText("");
+        setFeedbackTags([]);
+        toast.success("Feedback saved to Response Archive!");
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -3537,6 +3640,7 @@ Output rules:
             .toUpperCase();
 
     const getDefaultArchiveFolderId = (groupId: string) => `${groupId}-saved-responses`;
+    const getFeedbackArchiveFolderId = (groupId: string) => `${groupId}-feedback`;
 
     const findGroupByFolderId = (folderId: string | null) => {
         if (!folderId) return null;
@@ -3546,7 +3650,7 @@ Output rules:
     };
 
     const isDefaultArchiveFolderId = (groupId: string, folderId: string) =>
-        folderId === getDefaultArchiveFolderId(groupId);
+        folderId === getDefaultArchiveFolderId(groupId) || folderId === getFeedbackArchiveFolderId(groupId);
 
     const ensureArchiveGroupAndFolder = (
         groupLabelRaw: string,
@@ -3556,10 +3660,12 @@ Output rules:
         const groupLabel = String(groupLabelRaw || "NO TRIAL").trim().toUpperCase();
         const folderLabel = String(folderLabelRaw || "Saved Responses").trim();
         const groupId = preferredGroupId || normalizeArchiveId(groupLabel) || "no-trial";
-        const defaultFolderId = getDefaultArchiveFolderId(groupId);
-        const folderId = folderLabel === "Saved Responses"
-            ? defaultFolderId
-            : normalizeArchiveId(`${groupId}-${folderLabel}`) || defaultFolderId;
+        const defaultFolderId = folderLabel === "Feedback"
+            ? getFeedbackArchiveFolderId(groupId)
+            : folderLabel === "Saved Responses"
+                ? getDefaultArchiveFolderId(groupId)
+                : normalizeArchiveId(`${groupId}-${folderLabel}`) || getDefaultArchiveFolderId(groupId);
+        const folderId = defaultFolderId;
 
         setArchiveGroups((prev) => {
             const groupIndex = prev.findIndex((group) => group.id === groupId);
@@ -3570,7 +3676,13 @@ Output rules:
                         id: groupId,
                         label: groupLabel,
                         expanded: true,
-                        folders: [{ id: folderId, label: folderLabel }],
+                        folders: [
+                            { id: getDefaultArchiveFolderId(groupId), label: "Saved Responses", type: "saved" },
+                            { id: getFeedbackArchiveFolderId(groupId), label: "Feedback", type: "feedback" },
+                            ...(folderLabel !== "Saved Responses" && folderLabel !== "Feedback"
+                                ? [{ id: folderId, label: folderLabel, type: "custom" as const }]
+                                : []),
+                        ],
                     },
                 ];
             }
@@ -3580,7 +3692,9 @@ Output rules:
             next[groupIndex] = {
                 ...group,
                 expanded: true,
-                folders: hasFolder ? group.folders : [...group.folders, { id: folderId, label: folderLabel }],
+                folders: hasFolder
+                    ? group.folders
+                    : [...group.folders, { id: folderId, label: folderLabel, type: folderLabel === "Feedback" ? "feedback" : "custom" }],
             };
             return next;
         });
@@ -3607,7 +3721,10 @@ Output rules:
                 id: groupId,
                 label,
                 expanded: true,
-                folders: [{ id: getDefaultArchiveFolderId(groupId), label: "Saved Responses" }],
+                folders: [
+                    { id: getDefaultArchiveFolderId(groupId), label: "Saved Responses", type: "saved" },
+                    { id: getFeedbackArchiveFolderId(groupId), label: "Feedback", type: "feedback" },
+                ],
             };
         });
 
@@ -3615,7 +3732,10 @@ Output rules:
             id: "no-trial",
             label: "NO TRIAL",
             expanded: true,
-            folders: [{ id: getDefaultArchiveFolderId("no-trial"), label: "Saved Responses" }],
+            folders: [
+                { id: getDefaultArchiveFolderId("no-trial"), label: "Saved Responses", type: "saved" },
+                { id: getFeedbackArchiveFolderId("no-trial"), label: "Feedback", type: "feedback" },
+            ],
         };
 
         const nextBaseGroups = [...trialGroups, noTrialGroup];
@@ -4026,13 +4146,43 @@ Output rules:
                                             <span className="ml-auto text-xs font-medium text-gray-400">{count}</span>
                                         </button>
                                         {group.expanded && (
-                                            <div className="pl-6 space-y-1">
+                                            <div className="pl-6 space-y-1.5 pt-1">
                                                 {group.folders.map((folder) => (
                                                     (() => {
                                                         const folderCount = folderCounts.get(folder.id) || 0;
+                                                        const isFeedback = folder.id.endsWith("-feedback") || folder.label.toLowerCase() === "feedback";
                                                         const isDefaultFolder = isDefaultArchiveFolderId(group.id, folder.id);
                                                         const isRenaming =
                                                             renamingFolder?.groupId === group.id && renamingFolder?.folderId === folder.id;
+                                                        const isSelected = selectedArchiveFolderId === folder.id;
+
+                                                        if (isFeedback) {
+                                                            return (
+                                                                <div key={folder.id} className="pt-0.5 pb-1">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => {
+                                                                            setSelectedArchiveFolderId(folder.id);
+                                                                            setSelectedArchiveItemId(null);
+                                                                        }}
+                                                                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border text-left text-sm font-medium transition-all ${
+                                                                            isSelected
+                                                                                ? "border-blue-500 bg-blue-50/90 text-blue-700 shadow-sm ring-1 ring-blue-400"
+                                                                                : "border-blue-200/90 bg-white text-blue-600 hover:border-blue-300 hover:bg-blue-50/50"
+                                                                        }`}
+                                                                    >
+                                                                        <MessageSquareWarning className={`w-4 h-4 ${isSelected ? "text-blue-600" : "text-blue-500"}`} />
+                                                                        <span className="font-semibold">{folder.label}</span>
+                                                                        <span className={`ml-auto text-xs px-2 py-0.5 rounded-full font-medium ${
+                                                                            isSelected ? "bg-blue-200/80 text-blue-800" : "bg-blue-50 text-blue-600"
+                                                                        }`}>
+                                                                            {folderCount}
+                                                                        </span>
+                                                                    </button>
+                                                                </div>
+                                                            );
+                                                        }
+
                                                         return (
                                                             <div key={folder.id} className="group flex items-center gap-1">
                                                                 <button
@@ -4295,6 +4445,20 @@ Output rules:
                                     </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                                    {selectedArchiveItem.feedback && (
+                                        <section className="rounded-xl border border-rose-200 bg-rose-50/70 p-4 space-y-2 shadow-sm">
+                                            <div className="flex items-center gap-2 text-rose-700 font-semibold text-xs tracking-wider uppercase">
+                                                <MessageSquareWarning className="w-4 h-4 text-rose-600" />
+                                                <span>User Feedback</span>
+                                                <span className="ml-auto text-[11px] font-medium bg-rose-100 text-rose-800 px-2.5 py-0.5 rounded-full">
+                                                    👎 Negative Rating
+                                                </span>
+                                            </div>
+                                            <p className="text-sm font-medium text-slate-800 whitespace-pre-wrap leading-relaxed pt-1">
+                                                "{selectedArchiveItem.feedback}"
+                                            </p>
+                                        </section>
+                                    )}
                                     <section>
                                         <p className="text-xs font-semibold tracking-wide text-gray-500 uppercase mb-2">Question</p>
                                         <p className="text-sm text-gray-800 whitespace-pre-wrap">{selectedArchiveItem.question}</p>
@@ -5027,6 +5191,7 @@ Output rules:
                                                         {msg.role === "assistant" && (
                                                             <div className="max-w-4xl mx-auto mt-6 pt-4 border-t border-gray-200">
                                                                 <div className="flex items-center gap-2 text-gray-500">
+                                                                    {/* Copy */}
                                                                     <div className="relative group">
                                                                         <button
                                                                             className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
@@ -5065,6 +5230,39 @@ Output rules:
                                                                             Copy response
                                                                         </div>
                                                                     </div>
+
+                                                                    {/* Play / Regenerate */}
+                                                                    <div className="relative group">
+                                                                        <button
+                                                                            className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
+                                                                            aria-label="Regenerate"
+                                                                            onClick={() => handleRegenerate(index)}
+                                                                            disabled={isLoading}
+                                                                        >
+                                                                            <Play className="w-4 h-4" />
+                                                                        </button>
+                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
+                                                                            Regenerate
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* Save to Response Archive */}
+                                                                    <div className="relative group">
+                                                                        <button
+                                                                            className="p-1.5 rounded hover:bg-indigo-50 hover:text-indigo-600"
+                                                                            aria-label="Save to QA Repository"
+                                                                            onClick={() => openArchiveFolderDialogForSave(msg, index)}
+                                                                        >
+                                                                            <Database className="w-4 h-4" />
+                                                                        </button>
+                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
+                                                                            Save to QA Repository
+                                                                        </div>
+                                                                    </div>
+
+                                                                    <div className="h-4 w-px bg-gray-200 mx-1" />
+
+                                                                    {/* Thumbs Up */}
                                                                     <div className="relative group">
                                                                         <button
                                                                             className={`p-1.5 rounded transition-colors ${
@@ -5081,49 +5279,118 @@ Output rules:
                                                                             {msg.rating === "good" ? "Rated: Thumbs Up 👍 (+1)" : "Thumbs Up 👍 (Good answer)"}
                                                                         </div>
                                                                     </div>
+
+                                                                    {/* Thumbs Down */}
                                                                     <div className="relative group">
                                                                         <button
                                                                             className={`p-1.5 rounded transition-colors ${
-                                                                                msg.rating === "bad"
+                                                                                msg.rating === "bad" || activeFeedbackMsgIndex === index
                                                                                     ? "bg-rose-100 text-rose-700 font-semibold ring-1 ring-rose-400"
                                                                                     : "hover:bg-rose-100 hover:text-rose-600 text-gray-500"
                                                                             }`}
                                                                             aria-label="Thumbs down - Bad response"
-                                                                            onClick={() => handleRating(index, "bad")}
+                                                                            onClick={() => {
+                                                                                if (activeFeedbackMsgIndex === index) {
+                                                                                    setActiveFeedbackMsgIndex(null);
+                                                                                } else {
+                                                                                    setActiveFeedbackMsgIndex(index);
+                                                                                    setFeedbackInputText(msg.feedback || "");
+                                                                                    setFeedbackTags([]);
+                                                                                }
+                                                                            }}
                                                                         >
                                                                             <ThumbsDown className="w-4 h-4" />
                                                                         </button>
                                                                         <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            {msg.rating === "bad" ? "Rated: Thumbs Down 👎 (-1)" : "Thumbs Down 👎 (Bad response)"}
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-gray-100 hover:text-gray-700"
-                                                                            aria-label="Regenerate"
-                                                                            onClick={() => handleRegenerate(index)}
-                                                                            disabled={isLoading}
-                                                                        >
-                                                                            <Play className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Regenerate
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="h-4 w-px bg-gray-200 mx-1" />
-                                                                    <div className="relative group">
-                                                                        <button
-                                                                            className="p-1.5 rounded hover:bg-indigo-50 hover:text-indigo-600"
-                                                                            aria-label="Save to QA Repository"
-                                                                            onClick={() => openArchiveFolderDialogForSave(msg, index)}
-                                                                        >
-                                                                            <Database className="w-4 h-4" />
-                                                                        </button>
-                                                                        <div className="pointer-events-none absolute left-1/2 -top-8 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                                                            Save to QA Repository
+                                                                            {msg.rating === "bad" ? "Rated: Thumbs Down 👎 (-1)" : "Thumbs Down 👎 (Give feedback)"}
                                                                         </div>
                                                                     </div>
                                                                 </div>
+
+                                                                {/* Recorded Feedback Badge */}
+                                                                {msg.rating === "bad" && msg.feedback && activeFeedbackMsgIndex !== index && (
+                                                                    <div className="mt-2.5 flex items-center gap-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                                                                        <MessageSquareWarning className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                                                                        <span className="font-medium">Feedback recorded:</span>
+                                                                        <span className="truncate text-slate-700">"{msg.feedback}"</span>
+                                                                    </div>
+                                                                )}
+
+                                                                {/* Inline Thumbs Down Feedback Chat Window */}
+                                                                {activeFeedbackMsgIndex === index && (
+                                                                    <div className="mt-3 w-full rounded-xl border border-rose-200 bg-gradient-to-b from-rose-50/90 via-white to-white p-4 shadow-md transition-all animate-in fade-in slide-in-from-top-2 duration-200">
+                                                                        <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-rose-100">
+                                                                            <div className="flex items-center gap-2 text-rose-700 font-semibold text-xs uppercase tracking-wide">
+                                                                                <MessageSquareWarning className="w-4 h-4 text-rose-600" />
+                                                                                <span>Response Feedback</span>
+                                                                            </div>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setActiveFeedbackMsgIndex(null)}
+                                                                                className="text-gray-400 hover:text-gray-600 p-0.5 rounded"
+                                                                            >
+                                                                                <X className="w-4 h-4" />
+                                                                            </button>
+                                                                        </div>
+
+                                                                        <p className="text-xs text-slate-600 mb-2.5">
+                                                                            What could be improved or corrected in this AI response?
+                                                                        </p>
+
+                                                                        {/* Quick Feedback Tags */}
+                                                                        <div className="flex flex-wrap gap-1.5 mb-3">
+                                                                            {["Inaccurate info", "Incomplete answer", "Irrelevant protocol section", "Outdated data", "Confusing formatting"].map((tag) => {
+                                                                                const isSelected = feedbackTags.includes(tag);
+                                                                                return (
+                                                                                    <button
+                                                                                        key={tag}
+                                                                                        type="button"
+                                                                                        onClick={() => {
+                                                                                            setFeedbackTags((prev) =>
+                                                                                                isSelected ? prev.filter((t) => t !== tag) : [...prev, tag]
+                                                                                            );
+                                                                                        }}
+                                                                                        className={`text-xs px-2.5 py-1 rounded-full border transition-all ${
+                                                                                            isSelected
+                                                                                                ? "bg-rose-600 text-white border-rose-600 shadow-sm"
+                                                                                                : "bg-white text-slate-600 border-gray-200 hover:border-rose-300 hover:bg-rose-50/50"
+                                                                                        }`}
+                                                                                    >
+                                                                                        {isSelected ? "✓ " : "+ "}{tag}
+                                                                                    </button>
+                                                                                );
+                                                                            })}
+                                                                        </div>
+
+                                                                        {/* Feedback Text Input */}
+                                                                        <textarea
+                                                                            value={feedbackInputText}
+                                                                            onChange={(e) => setFeedbackInputText(e.target.value)}
+                                                                            placeholder="Provide specific feedback or details for this trial..."
+                                                                            className="w-full text-xs text-slate-800 placeholder:text-gray-400 bg-white border border-gray-200 rounded-lg p-2.5 focus:outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 resize-none min-h-[64px]"
+                                                                            rows={2}
+                                                                        />
+
+                                                                        {/* Action Buttons */}
+                                                                        <div className="flex items-center justify-end gap-2 mt-3">
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => setActiveFeedbackMsgIndex(null)}
+                                                                                className="px-3 py-1.5 rounded-md border border-gray-200 text-xs text-slate-600 hover:bg-gray-50 transition-colors"
+                                                                            >
+                                                                                Cancel
+                                                                            </button>
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => submitMessageFeedback(index, msg)}
+                                                                                className="px-3.5 py-1.5 rounded-md bg-rose-600 text-white text-xs font-medium hover:bg-rose-700 shadow-sm transition-all flex items-center gap-1.5"
+                                                                            >
+                                                                                <Send className="w-3 h-3" />
+                                                                                <span>Submit Feedback</span>
+                                                                            </button>
+                                                                        </div>
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         )}
                                                     </div>
