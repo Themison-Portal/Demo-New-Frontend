@@ -140,6 +140,14 @@ export const documentsRouter = router({
         throw new Error("File size exceeds 50MB limit");
       }
 
+      const lowerFilename = input.filename.toLowerCase();
+      const isPdfExtension = lowerFilename.endsWith(".pdf");
+      const isPdfHeader = buffer.length >= 4 && buffer.toString("ascii", 0, 4) === "%PDF";
+
+      if (!isPdfExtension || !isPdfHeader) {
+        throw new Error("Only PDF files are supported for document upload and indexing.");
+      }
+
       if (!ENV.coreBackendApiUrl) {
         throw new Error(
           "CORE_BACKEND_API_URL is not configured — documents now require the backend."

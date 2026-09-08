@@ -1176,9 +1176,9 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                                                 type="button"
                                                                 onClick={() => {
                                                                     if (selected) {
-                                                                        setSelectedDocuments(selectedDocuments.filter(id => id !== doc.id));
+                                                                        setSelectedDocuments([]);
                                                                     } else {
-                                                                        setSelectedDocuments([...selectedDocuments, doc.id]);
+                                                                        setSelectedDocuments([doc.id]);
                                                                     }
                                                                 }}
                                                                 className={`w-full flex items-start gap-3 px-3 py-3 rounded border-2 transition-all text-left ${selected
@@ -1187,17 +1187,18 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                                                                     }`}
                                                             >
                                                                 <input
-                                                                    type="checkbox"
+                                                                    type="radio"
+                                                                    name="selected-document-radio"
                                                                     checked={selected}
                                                                     onChange={() => {
                                                                         if (selected) {
-                                                                            setSelectedDocuments(selectedDocuments.filter(id => id !== doc.id));
+                                                                            setSelectedDocuments([]);
                                                                         } else {
-                                                                            setSelectedDocuments([...selectedDocuments, doc.id]);
+                                                                            setSelectedDocuments([doc.id]);
                                                                         }
                                                                     }}
                                                                     onClick={(e) => e.stopPropagation()}
-                                                                    className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600"
+                                                                    className="mt-1 h-4 w-4 border-gray-300 text-blue-600 focus:ring-blue-500"
                                                                 />
                                                                 <FileText className="w-5 h-5 text-gray-400 shrink-0 mt-0.5" />
                                                                 <div className="flex-1 min-w-0 space-y-1">
@@ -1262,7 +1263,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
                             setIsAllDocumentsMode(false);
                             setActiveTrials(modalTrialIds);
                             setSourceModalOpen(false);
-                            toast.success(`Now querying ${selectedDocuments.length} selected document(s)`);
+                            toast.success("Now querying selected document");
                         }}
                     >
                         Select
@@ -1647,7 +1648,7 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
 
         setSelectedTrials([trialId]);
         setActiveTrials([trialId]);
-        setSelectedDocuments(indexedDocIds);
+        setSelectedDocuments(indexedDocIds.slice(0, 1));
         setIsAllDocumentsMode(false);
         setAutoScoped(true);
     }, [trialId, sourceDocumentsByTrial, autoScoped]);
@@ -4503,9 +4504,21 @@ Output rules:
     const allScopeSearchLabel = isCrossTrialMode
         ? "Cross-trial documents + operational data"
         : "All Documents";
+    const selectedSingleDoc = useMemo(() => {
+        if (selectedDocuments.length === 0) return null;
+        const targetId = String(selectedDocuments[0]);
+        for (const docs of Object.values(sourceDocumentsByTrial || {})) {
+            if (Array.isArray(docs)) {
+                const found = (docs as Array<Record<string, any>>).find((d) => String(d.id) === targetId);
+                if (found) return found;
+            }
+        }
+        return null;
+    }, [selectedDocuments, sourceDocumentsByTrial]);
+
     const selectedScopeSearchLabel =
         !isAllDocumentsMode && selectedDocuments.length > 0 && (trialId ? true : activeTrials.length > 0)
-            ? `${selectedDocuments.length} selected document(s) from ${trialId ? 1 : activeTrials.length} trial(s)`
+            ? `Selected document: ${selectedSingleDoc?.filename || "1 document"}`
             : allScopeSearchLabel;
     const assistantSubtitle = isCrossTrialMode
         ? "Ask questions across trials using documents and operational data"

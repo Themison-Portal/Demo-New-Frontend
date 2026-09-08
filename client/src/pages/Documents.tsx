@@ -363,6 +363,12 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf");
+      if (!isPdf) {
+        toast.error("Only PDF files are supported for document upload and indexing.");
+        event.target.value = "";
+        return;
+      }
       setSelectedFile(file);
     }
   };
@@ -370,6 +376,12 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
   const handleUpload = async () => {
     if (!selectedFile) {
       toast.error("Please select a file");
+      return;
+    }
+
+    const isPdf = selectedFile.name.toLowerCase().endsWith(".pdf") || selectedFile.type.includes("pdf");
+    if (!isPdf) {
+      toast.error("Only PDF files are supported for document upload and indexing.");
       return;
     }
 
@@ -795,7 +807,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
                       <input
                         type="file"
-                        accept=".pdf,.doc,.docx"
+                        accept=".pdf,application/pdf"
                         onChange={handleFileSelect}
                         className="hidden"
                         id="file-upload"
@@ -820,7 +832,7 @@ export default function Documents({ trialId = '1' }: { trialId?: string } = {}) 
                               Click to upload or drag and drop
                             </p>
                             <p className="text-xs text-gray-500 mt-1">
-                              PDF, DOC, DOCX up to 50MB
+                              PDF up to 50MB
                             </p>
                           </div>
                         )}

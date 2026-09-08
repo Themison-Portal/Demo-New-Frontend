@@ -189,6 +189,12 @@ export function StudySetupWizardEntry({
   });
 
   const uploadFile = async (file: File, category: string) => {
+    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf");
+    if (!isPdf) {
+      toast.error("Only PDF files are supported for document upload and indexing.");
+      return;
+    }
+
     if (file.size > 50 * 1024 * 1024) {
       toast.error("File size exceeds 50MB limit");
       return;
@@ -614,7 +620,7 @@ export function StudySetupWizardEntry({
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,.xml"
+        accept=".pdf,application/pdf"
         onChange={handleFileChange}
         className="hidden"
       />
