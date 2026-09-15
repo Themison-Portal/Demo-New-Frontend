@@ -47,7 +47,7 @@ describe("Documents Router", () => {
   it("should upload a document successfully", async () => {
     if (!backendAvailable) { expect(true).toBe(true); return; }
     const caller = appRouter.createCaller(createTestContext());
-    const testPdfBase64 = Buffer.from("test pdf content").toString("base64");
+    const testPdfBase64 = Buffer.from("%PDF-1.4 test pdf content").toString("base64");
 
     const result = await caller.documents.upload({
       trialId: testTrialId,
@@ -78,10 +78,25 @@ describe("Documents Router", () => {
     expect(uploadedDoc?.trialId).toBe(testTrialId);
   });
 
+  it("should reject non-PDF files", async () => {
+    if (!backendAvailable) { expect(true).toBe(true); return; }
+    const caller = appRouter.createCaller(createTestContext());
+    const docxBase64 = Buffer.from("PK\x03\x04 fake docx content").toString("base64");
+
+    await expect(
+      caller.documents.upload({
+        trialId: testTrialId,
+        filename: "test-protocol.docx",
+        fileData: docxBase64,
+        category: "Protocol",
+      })
+    ).rejects.toThrow("Only PDF files are supported for document upload and indexing.");
+  });
+
   it("should reject files larger than 50MB", async () => {
     if (!backendAvailable) { expect(true).toBe(true); return; }
     const caller = appRouter.createCaller(createTestContext());
-    const largeBuffer = Buffer.alloc(51 * 1024 * 1024);
+    const largeBuffer = Buffer.concat([Buffer.from("%PDF-1.4 "), Buffer.alloc(51 * 1024 * 1024)]);
     const largeFileBase64 = largeBuffer.toString("base64");
 
     await expect(

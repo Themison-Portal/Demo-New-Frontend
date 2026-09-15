@@ -594,7 +594,8 @@ export function TrialWorkspace() {
       setIndexedAnimationInstance(0);
       return;
     }
-    if (!file.type.includes("pdf")) {
+    const isPdf = file.name.toLowerCase().endsWith(".pdf") || file.type.includes("pdf");
+    if (!isPdf) {
       toast.error("Please upload a PDF protocol for extraction.");
       return;
     }
@@ -827,7 +828,7 @@ export function TrialWorkspace() {
                             ? "This can take a moment while Themison analyzes the document."
                             : uploadState === "indexed"
                             ? ""
-                            : "PDF, Excel, CSV, ODM XML, DOCX only. Max 20MB"}
+                            : "PDF files only. Max 20MB"}
                         </p>
                       </div>
                       {protocolFile ? (
@@ -836,6 +837,7 @@ export function TrialWorkspace() {
                     </div>
                     <input
                       type="file"
+                      accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(event) => handleProtocolSelected(event.target.files?.[0] ?? null)}
                     />

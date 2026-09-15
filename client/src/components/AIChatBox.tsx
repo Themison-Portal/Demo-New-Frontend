@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { Loader2, Send, User, Sparkles } from "lucide-react";
+import { Loader2, Send, User, Sparkles, ThumbsUp, ThumbsDown, Copy, Check } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { Streamdown } from "streamdown";
 
@@ -121,6 +121,8 @@ export function AIChatBox({
   suggestedPrompts,
 }: AIChatBoxProps) {
   const [input, setInput] = useState("");
+  const [ratings, setRatings] = useState<Record<number, "good" | "bad" | null>>({});
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputAreaRef = useRef<HTMLFormElement>(null);
@@ -261,8 +263,81 @@ export function AIChatBox({
                       )}
                     >
                       {message.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
-                          <Streamdown>{message.content}</Streamdown>
+                        <div>
+                          <div className="prose prose-sm dark:prose-invert max-w-none">
+                            <Streamdown>{message.content}</Streamdown>
+                          </div>
+                          <div className="mt-2 pt-2 border-t border-border/40 flex items-center gap-1 text-muted-foreground">
+                            <div className="relative group">
+                              <button
+                                type="button"
+                                className="p-1 rounded hover:bg-background/80 hover:text-foreground transition-colors"
+                                aria-label="Copy response"
+                                onClick={() => {
+                                  try {
+                                    navigator.clipboard?.writeText(message.content);
+                                  } catch {}
+                                  setCopiedIndex(index);
+                                  setTimeout(() => setCopiedIndex((c) => (c === index ? null : c)), 1500);
+                                }}
+                              >
+                                {copiedIndex === index ? (
+                                  <Check className="size-3.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="size-3.5" />
+                                )}
+                              </button>
+                              <div className="pointer-events-none absolute left-1/2 -top-7 -translate-x-1/2 whitespace-nowrap rounded bg-popover text-popover-foreground px-2 py-0.5 text-[10px] shadow-sm opacity-0 transition-opacity group-hover:opacity-100">
+                                Copy response
+                              </div>
+                            </div>
+                            <div className="relative group">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "p-1 rounded transition-colors",
+                                  ratings[index] === "good"
+                                    ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium"
+                                    : "hover:bg-background/80 hover:text-foreground"
+                                )}
+                                aria-label="Thumbs up - Good response"
+                                onClick={() =>
+                                  setRatings((prev) => ({
+                                    ...prev,
+                                    [index]: prev[index] === "good" ? null : "good",
+                                  }))
+                                }
+                              >
+                                <ThumbsUp className="size-3.5" />
+                              </button>
+                              <div className="pointer-events-none absolute left-1/2 -top-7 -translate-x-1/2 whitespace-nowrap rounded bg-popover text-popover-foreground px-2 py-0.5 text-[10px] shadow-sm opacity-0 transition-opacity group-hover:opacity-100">
+                                {ratings[index] === "good" ? "Rated: Thumbs Up 👍" : "Thumbs Up 👍"}
+                              </div>
+                            </div>
+                            <div className="relative group">
+                              <button
+                                type="button"
+                                className={cn(
+                                  "p-1 rounded transition-colors",
+                                  ratings[index] === "bad"
+                                    ? "bg-rose-500/20 text-rose-600 dark:text-rose-400 font-medium"
+                                    : "hover:bg-background/80 hover:text-foreground"
+                                )}
+                                aria-label="Thumbs down - Bad response"
+                                onClick={() =>
+                                  setRatings((prev) => ({
+                                    ...prev,
+                                    [index]: prev[index] === "bad" ? null : "bad",
+                                  }))
+                                }
+                              >
+                                <ThumbsDown className="size-3.5" />
+                              </button>
+                              <div className="pointer-events-none absolute left-1/2 -top-7 -translate-x-1/2 whitespace-nowrap rounded bg-popover text-popover-foreground px-2 py-0.5 text-[10px] shadow-sm opacity-0 transition-opacity group-hover:opacity-100">
+                                {ratings[index] === "bad" ? "Rated: Thumbs Down 👎" : "Thumbs Down 👎"}
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       ) : (
                         <p className="whitespace-pre-wrap text-sm">

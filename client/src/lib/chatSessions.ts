@@ -19,6 +19,7 @@ export interface ChatSessionMessage {
   thinking?: string;
   thoughtsSummary?: string;
   sources?: ChatSessionSource[];
+  rating?: "good" | "bad" | null;
 }
 
 export interface ChatSessionRecord {
