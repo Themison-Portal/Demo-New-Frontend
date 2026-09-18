@@ -4940,17 +4940,17 @@ Output rules:
                                                                                 );
                                                                             },
                                                                             ul: ({ children }) => (
-                                                                                <ul className="list-disc list-outside pl-5 mb-4 space-y-2">
+                                                                                <ul className="list-disc list-outside pl-5 mb-4 space-y-2 text-sm text-gray-700 marker:text-gray-600 [&::marker]:text-sm [&::marker]:font-normal">
                                                                                     {children}
                                                                                 </ul>
                                                                             ),
                                                                             ol: ({ children }) => (
-                                                                                <ol className="list-decimal list-outside pl-5 mb-4 space-y-2">
+                                                                                <ol className="list-decimal list-outside pl-5 mb-4 space-y-2 text-sm text-gray-700 marker:text-gray-600 [&::marker]:text-sm [&::marker]:font-normal">
                                                                                     {children}
                                                                                 </ol>
                                                                             ),
                                                                             li: ({ children }) => (
-                                                                                <li className="leading-relaxed pl-1 [&>p]:inline [&>p]:mb-0 [&>p]:leading-relaxed">
+                                                                                <li className="leading-relaxed pl-1 text-sm text-gray-700 font-normal [&>p]:inline [&>p]:mb-0 [&>p]:leading-relaxed [&>p]:text-sm [&>p]:font-normal">
                                                                                     {processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, "li")}
                                                                                 </li>
                                                                             ),
