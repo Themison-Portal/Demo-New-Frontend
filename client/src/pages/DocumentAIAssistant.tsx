@@ -761,7 +761,7 @@ function parseTaskEditorLinkHref(href?: string | null) {
 }
 
 
-const REF_TAG_REGEX = /\[Section\s+(.+?)\s*·\s*p\.(\d+)\]/g;
+const REF_TAG_REGEX = /\[\s*(?:Section:?\s+)?(.+?)(?:\s*[·\-,\s]\s*|\s+)(?:p\.|pp\.|page)?\s*(\d+)\s*\](?:\s*\[Open Docu?ement\])?/gi;
 
 function renderTextWithRefs(
     text: string,
@@ -777,42 +777,54 @@ function renderTextWithRefs(
     let lastRefKey: string | null = null;
     REF_TAG_REGEX.lastIndex = 0;
     while ((match = REF_TAG_REGEX.exec(text)) !== null) {
-        const [full, section, pageStr] = match;
+        const [full, rawSection, pageStr] = match;
+        const section = rawSection ? rawSection.trim() : "";
         if (match.index > lastIndex) {
             nodes.push(text.slice(lastIndex, match.index));
         }
         const page = parseInt(pageStr, 10);
         const matchedSource = matchFn(page, section, sources);
+        const fallbackSource = sources && sources.length > 0 ? sources[0] : null;
+        const effectiveSource = matchedSource || fallbackSource;
         const refKey = `${section}-${page}`;
         const isRepeatOfPrevious = refKey === lastRefKey;
         lastRefKey = refKey;
 
         nodes.push(
-            <span key={`${keyPrefix}-ref-${idx}`} className="inline-flex items-center gap-1.5 align-middle ml-1.5">
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-100 rounded-full px-2.5 py-0.5">
-                    <FileText className="w-3 h-3" />
-                    {isRepeatOfPrevious ? `p.${page}` : `${section} · p.${page}`}
+            effectiveSource ? (
+                <button
+                    key={`${keyPrefix}-ref-${idx}`}
+                    type="button"
+                    onClick={() =>
+                        openFn({
+                            filename: effectiveSource.filename,
+                            section: effectiveSource.section || section,
+                            page: effectiveSource.page || page,
+                            excerpt: effectiveSource.excerpt,
+                            highlightUrl: effectiveSource.highlightUrl,
+                            bboxes: effectiveSource.bboxes,
+                        })
+                    }
+                    className="inline-flex items-center gap-1.5 align-middle mx-1 my-0.5 px-2.5 py-0.5 rounded-full border border-blue-200/90 bg-blue-50/90 hover:bg-blue-100 hover:border-blue-300 text-blue-700 hover:text-blue-900 shadow-xs transition-all text-[11px] font-semibold group cursor-pointer select-none"
+                    title={`Open ${effectiveSource.filename || "document"} at page ${page}`}
+                >
+                    <FileText className="w-3.5 h-3.5 text-blue-600 group-hover:scale-110 transition-transform shrink-0" />
+                    <span className="truncate max-w-[240px]">
+                        {isRepeatOfPrevious ? `p.${page}` : `${section} · p.${page}`}
+                    </span>
+                    <ExternalLink className="w-3 h-3 text-blue-500/80 group-hover:text-blue-700 shrink-0 ml-0.5" />
+                </button>
+            ) : (
+                <span
+                    key={`${keyPrefix}-ref-${idx}`}
+                    className="inline-flex items-center gap-1.5 align-middle mx-1 my-0.5 px-2.5 py-0.5 rounded-full border border-gray-200 bg-gray-50 text-gray-700 text-[11px] font-medium select-none"
+                >
+                    <FileText className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                    <span className="truncate max-w-[240px]">
+                        {isRepeatOfPrevious ? `p.${page}` : `${section} · p.${page}`}
+                    </span>
                 </span>
-                {matchedSource ? (
-                    <button
-                        type="button"
-                        onClick={() =>
-                            openFn({
-                                filename: matchedSource.filename,
-                                section: matchedSource.section,
-                                page: matchedSource.page,
-                                excerpt: matchedSource.excerpt,
-                                highlightUrl: matchedSource.highlightUrl,
-                                bboxes: matchedSource.bboxes,
-                            })
-                        }
-                        className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700 hover:bg-blue-50 px-2 py-0.5 rounded-full transition-colors"
-                    >
-                        <ExternalLink className="w-3 h-3" />
-                        Open Docuement
-                    </button>
-                ) : null}
-            </span>
+            )
         );
         lastIndex = match.index + full.length;
         idx++;
@@ -2277,13 +2289,24 @@ export default function DocumentAIAssistant({ trialId }: DocumentAIAssistantProp
             if (!sources || sources.length === 0) return null;
             const normalize = (s: string | null | undefined) =>
                 String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+            const normSection = normalize(section);
+
             const candidates = sources.filter((s) => s.page === page);
-            if (candidates.length === 0) return null;
             if (candidates.length === 1) return candidates[0];
-            const exact = candidates.find((s) => normalize(s.section) === normalize(section));
-            if (exact) return exact;
-            // Ambiguous - merge bboxes rather than guessing which chunk is right
-            return { ...candidates[0], bboxes: candidates.flatMap((s) => s.bboxes || []) };
+            if (candidates.length > 1) {
+                const exact = candidates.find((s) => normalize(s.section) === normSection);
+                if (exact) return exact;
+                return { ...candidates[0], bboxes: candidates.flatMap((s) => s.bboxes || []) };
+            }
+
+            if (normSection) {
+                const candidateBySection = sources.find((s) =>
+                    normalize(s.section).includes(normSection) || normSection.includes(normalize(s.section))
+                );
+                if (candidateBySection) return candidateBySection;
+            }
+
+            return sources[0];
         },
         []
     );
@@ -4917,17 +4940,17 @@ Output rules:
                                                                                 );
                                                                             },
                                                                             ul: ({ children }) => (
-                                                                                <ul className="list-disc list-inside mb-4 space-y-2">
+                                                                                <ul className="list-disc list-outside pl-5 mb-4 space-y-2">
                                                                                     {children}
                                                                                 </ul>
                                                                             ),
                                                                             ol: ({ children }) => (
-                                                                                <ol className="list-decimal list-inside mb-4 space-y-2">
+                                                                                <ol className="list-decimal list-outside pl-5 mb-4 space-y-2">
                                                                                     {children}
                                                                                 </ol>
                                                                             ),
                                                                             li: ({ children }) => (
-                                                                                <li className="leading-relaxed">
+                                                                                <li className="leading-relaxed pl-1 [&>p]:inline [&>p]:mb-0 [&>p]:leading-relaxed">
                                                                                     {processChildrenForRefs(children, msg.sources, matchReferenceToSource, handleOpenTaskDocument, "li")}
                                                                                 </li>
                                                                             ),
