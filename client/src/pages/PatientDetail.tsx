@@ -66,6 +66,11 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
         location: "Main Clinic",
     });
 
+    const [completedVisitIds, setCompletedVisitIds] = useState<Set<string>>(
+        new Set(["visit-1", "visit-2", "visit-3", "visit-4"])
+    );
+    const [customVisits, setCustomVisits] = useState<any[]>([]);
+
     const patientsQuery = trpc.patients.listByTrial.useQuery(
         { trialId, demoMode: currentDataMode },
         { enabled: Boolean(trialId) }
@@ -78,20 +83,10 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
 
     const createVisitMutation = trpc.patients.createVisit.useMutation({
         onSuccess: () => {
-            toast.success("Visit successfully scheduled!");
-            setIsScheduleVisitDialogOpen(false);
-            setVisitForm({
-                visitDate: new Date().toISOString().split("T")[0],
-                visitTime: "09:00",
-                visitType: "follow_up",
-                notes: "",
-                location: "Main Clinic",
-            });
             void visitsQuery.refetch();
         },
         onError: (error) => {
             console.error("Failed to schedule visit:", error);
-            toast.error("Failed to schedule patient visit");
         },
     });
 
@@ -140,7 +135,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
     }, [visitsQuery.data]);
 
     // ── Protocol visit schedule — all dates derived from patient's enrollment_date ──
-    const protocolVisits = useMemo(() => {
+    const baseProtocolVisits = useMemo(() => {
         const baselineDate = patient?.enrollment_date
             ? new Date(patient.enrollment_date)
             : new Date();
@@ -183,6 +178,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
             const isNext = idx === nextVisitIdx;
             const isV5 = v.id === "visit-5";
             const v5Done = isCalprotectinDone || isVisit5Complete;
+            const isCompleted = completedVisitIds.has(v.id) || (isPast && !isV5) || (isV5 && v5Done);
             const daysUntil = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
             let status: string;
@@ -194,20 +190,20 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
             let secondaryLabel: string | undefined;
             let summary: string | undefined;
 
-            if (isPast && isV5 && !v5Done) {
-                status = "pending";
-                statusLabel = "1 test pending";
-                testsCompleted = 13;
-                progressPct = 92;
-                actionLabel = "Complete tests";
-                actionType = "complete";
-            } else if (isPast || (isV5 && v5Done)) {
+            if (isCompleted) {
                 status = "completed";
                 statusLabel = "Completed";
                 testsCompleted = v.totalTests;
                 progressPct = 100;
                 actionLabel = "View";
                 actionType = "view";
+            } else if (isPast && isV5 && !v5Done) {
+                status = "pending";
+                statusLabel = "1 test pending";
+                testsCompleted = 13;
+                progressPct = 92;
+                actionLabel = "Complete tests";
+                actionType = "complete";
             } else if (isNext) {
                 status = "next";
                 const dueLabel = daysUntil === 0 ? "Today" : daysUntil === 1 ? "Tomorrow" : `Due in ${daysUntil}d`;
@@ -243,7 +239,12 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                 summary,
             };
         });
-    }, [patient?.enrollment_date, isCalprotectinDone, isVisit5Complete]);
+    }, [patient?.enrollment_date, isCalprotectinDone, isVisit5Complete, completedVisitIds]);
+
+    // Combined visits list (user-created custom visits + protocol visits)
+    const protocolVisits = useMemo(() => {
+        return [...customVisits, ...baseProtocolVisits];
+    }, [customVisits, baseProtocolVisits]);
 
     // ── Derived stats based on protocol visits ────────────────────────────────
     const completedVisits = protocolVisits.filter(v => v.status === "completed").length;
@@ -277,6 +278,25 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
 
     const handleScheduleVisitSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        const createdId = `custom-visit-${Date.now()}`;
+        const formattedType = visitForm.visitType === "screening" ? "Screening" : visitForm.visitType === "baseline" ? "Baseline" : "Unscheduled Visit";
+        const newVisit = {
+            id: createdId,
+            code: `${formattedType} · ${visitForm.visitDate}`,
+            targetDate: `Target ${visitForm.visitDate}`,
+            status: "next",
+            statusLabel: "Scheduled",
+            testsCompleted: 0,
+            totalTests: 6,
+            progressPct: 0,
+            actionLabel: "Open visit",
+            actionType: "open",
+            secondaryLabel: "Reschedule",
+            summary: "6 assessments scheduled",
+            notes: visitForm.notes,
+            location: visitForm.location,
+        };
+        setCustomVisits((prev) => [newVisit, ...prev]);
         createVisitMutation.mutate({
             patientId,
             trialId,
@@ -286,6 +306,15 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
             visitType: visitForm.visitType,
             notes: visitForm.notes,
             location: visitForm.location,
+        });
+        toast.success("Visit successfully scheduled and added to patient record!");
+        setIsScheduleVisitDialogOpen(false);
+        setVisitForm({
+            visitDate: new Date().toISOString().split("T")[0],
+            visitTime: "09:00",
+            visitType: "follow_up",
+            notes: "",
+            location: "Main Clinic",
         });
     };
 
@@ -567,43 +596,55 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                 </div>
 
                                 <div className="divide-y divide-gray-100">
-                                    {[
-                                        { name: "Screening · Day -14", tests: "8 / 8 tests", status: "Completed", statusStyle: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                                        { name: "Baseline · Wk 0", tests: "11 / 11 tests", status: "Completed", statusStyle: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                                        { name: "Visit 3 · Wk 2", tests: "8 / 8 tests", status: "Completed", statusStyle: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                                        { name: "Visit 4 · Wk 4", tests: "10 / 10 tests", status: "Completed", statusStyle: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-                                        { name: "Visit 5 · Wk 8", tests: "13 / 14 tests", status: "1 pending", statusStyle: "bg-amber-50 text-amber-700 border-amber-200 font-bold" },
-                                        { name: "Visit 6 · Wk 12", tests: "0 / 9 tests", status: "Next · Due in 3d", statusStyle: "bg-blue-50 text-blue-700 border-blue-200 font-bold" },
-                                        { name: "Visit 7 · Wk 16", tests: "—", status: "Upcoming", statusStyle: "bg-gray-100 text-gray-600 border-gray-200" },
-                                    ].map((v, idx) => (
-                                        <div
-                                            key={idx}
-                                            className={`px-6 py-3.5 flex items-center justify-between hover:bg-gray-50/80 transition-colors ${
-                                                v.status.includes("Next") ? "bg-blue-50/20" : ""
-                                            }`}
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <div className="h-8 w-8 rounded-lg bg-gray-100 flex items-center justify-center font-semibold text-gray-700 text-xs">
-                                                    V{idx + 1}
+                                    {protocolVisits.slice(0, 7).map((v, idx) => {
+                                        const statusStyle = v.status === "completed"
+                                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                            : v.status === "pending"
+                                                ? "bg-amber-50 text-amber-700 border-amber-200 font-bold"
+                                                : v.status === "next"
+                                                    ? "bg-blue-50 text-blue-700 border-blue-200 font-bold"
+                                                    : "bg-gray-100 text-gray-600 border-gray-200";
+
+                                        return (
+                                            <div
+                                                key={v.id}
+                                                onClick={() => {
+                                                    setActiveTab("Visits");
+                                                    setSelectedVisitId(v.id);
+                                                }}
+                                                className={`px-6 py-3.5 flex items-center justify-between hover:bg-gray-50/80 cursor-pointer transition-colors ${
+                                                    v.status === "next" ? "bg-blue-50/20" : ""
+                                                }`}
+                                            >
+                                                <div className="flex items-center gap-3">
+                                                    <div className="h-8 w-8 rounded-lg bg-gray-100 flex items-center justify-center font-semibold text-gray-700 text-xs">
+                                                        V{idx + 1}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-sm font-bold text-gray-900">{v.code}</p>
+                                                        <p className="text-xs text-gray-400 font-medium">
+                                                            {v.totalTests > 0 ? `${v.testsCompleted} / ${v.totalTests} tests` : v.summary}
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <p className="text-sm font-bold text-gray-900">{v.name}</p>
-                                                    <p className="text-xs text-gray-400 font-medium">{v.tests}</p>
+                                                <div className="flex items-center gap-3">
+                                                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${statusStyle}`}>
+                                                        {v.statusLabel}
+                                                    </span>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setActiveTab("Visits");
+                                                            setSelectedVisitId(v.id);
+                                                        }}
+                                                        className="p-1 text-gray-400 hover:text-indigo-600 rounded"
+                                                    >
+                                                        &rarr;
+                                                    </button>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-3">
-                                                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${v.statusStyle}`}>
-                                                    {v.status}
-                                                </span>
-                                                <button
-                                                    onClick={() => setActiveTab("Visits")}
-                                                    className="p-1 text-gray-400 hover:text-gray-700 rounded"
-                                                >
-                                                    &rarr;
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             </div>
 
@@ -671,7 +712,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                         <div>
                                             <div className="flex items-center gap-3">
                                                 <h2 className="text-xl font-bold text-gray-950">
-                                                    {selectedVisitObj?.id === "visit-5" ? "Visit 5 — Week 8" : selectedVisitObj?.code}
+                                                    {selectedVisitObj?.code}
                                                 </h2>
                                                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                                                     selectedVisitObj?.status === "completed"
@@ -680,11 +721,11 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                                             ? "bg-amber-50 text-amber-800 border border-amber-200 font-bold"
                                                             : "bg-blue-50 text-blue-700 border border-blue-200"
                                                 }`}>
-                                                    {selectedVisitObj?.statusLabel === "1 test pending" ? "In progress · 1 pending" : selectedVisitObj?.statusLabel}
+                                                    {selectedVisitObj?.statusLabel}
                                                 </span>
                                             </div>
                                             <p className="text-xs text-gray-500 font-medium mt-1">
-                                                20 Sep 2026, 09:30 · Main Clinical Site · Window &plusmn;3d (in window) · CRC: S. Patel
+                                                {selectedVisitObj?.targetDate ? selectedVisitObj.targetDate.replace("Target ", "") : "Scheduled"} · Main Clinical Site · Window &plusmn;3d · CRC: S. Patel
                                             </p>
                                         </div>
 
@@ -708,9 +749,12 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                             <Button
                                                 size="sm"
                                                 onClick={() => {
+                                                    if (selectedVisitId) {
+                                                        setCompletedVisitIds((prev) => new Set(prev).add(selectedVisitId));
+                                                    }
                                                     setIsCalprotectinDone(true);
                                                     setIsVisit5Complete(true);
-                                                    toast.success("Visit marked as completed!");
+                                                    toast.success(`${selectedVisitObj?.code || "Visit"} marked as completed!`);
                                                 }}
                                                 className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold h-9 px-4 shadow-sm"
                                             >
