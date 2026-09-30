@@ -66,25 +66,6 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
         location: "Main Clinic",
     });
 
-    // Protocol visits matching Figma spec (13 visits total)
-    const protocolVisits = useMemo(() => {
-        const v5Done = isCalprotectinDone || isVisit5Complete;
-        return [
-            { id: "visit-1", code: "Screening · Wk -2", targetDate: "Target 29 Aug 2026", status: "completed", statusLabel: "Completed", testsCompleted: 8, totalTests: 8, progressPct: 100, actionLabel: "View", actionType: "view" },
-            { id: "visit-2", code: "Baseline · Wk 0", targetDate: "Target 12 Sep 2026", status: "completed", statusLabel: "Completed", testsCompleted: 11, totalTests: 11, progressPct: 100, actionLabel: "View", actionType: "view" },
-            { id: "visit-3", code: "Visit 3 · Wk 2", targetDate: "Target 26 Sep 2026", status: "completed", statusLabel: "Completed", testsCompleted: 8, totalTests: 8, progressPct: 100, actionLabel: "View", actionType: "view" },
-            { id: "visit-4", code: "Visit 4 · Wk 4", targetDate: "Target —", status: "completed", statusLabel: "Completed", testsCompleted: 10, totalTests: 10, progressPct: 100, actionLabel: "View", actionType: "view" },
-            { id: "visit-5", code: "Visit 5 · Wk 8", targetDate: "Target 20 Sep 2026", status: v5Done ? "completed" : "pending", statusLabel: v5Done ? "Completed" : "1 test pending", testsCompleted: v5Done ? 14 : 13, totalTests: 14, progressPct: v5Done ? 100 : 92, actionLabel: v5Done ? "View" : "Complete tests", actionType: v5Done ? "view" : "complete" },
-            { id: "visit-6", code: "Visit 6 · Wk 12", targetDate: "Target 05 Oct 2026, 09:00", status: "next", statusLabel: "Next - Due in 3d", testsCompleted: 0, totalTests: 9, progressPct: 0, actionLabel: "Open visit", actionType: "open", secondaryLabel: "Reschedule" },
-            { id: "visit-7", code: "Visit 7 · Wk 16", targetDate: "Target 02 Nov 2026", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 10, summary: "10 assessments scheduled", secondaryLabel: "Reschedule" },
-            { id: "visit-8", code: "Visit 8 · Wk 20", targetDate: "Target 30 Nov 2026", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 7, summary: "7 assessments scheduled", secondaryLabel: "Reschedule" },
-            { id: "visit-9", code: "Visit 9 · Wk 24", targetDate: "Target 28 Dec 2026", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 9, summary: "9 assessments scheduled", secondaryLabel: "Reschedule" },
-            { id: "visit-10", code: "Visit 10 · Wk 32", targetDate: "Target 22 Feb 2027", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 7, summary: "7 assessments scheduled", secondaryLabel: "Reschedule" },
-            { id: "visit-11", code: "Visit 11 · Wk 40", targetDate: "Target 19 Apr 2027", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 9, summary: "9 assessments scheduled", secondaryLabel: "Reschedule" },
-            { id: "visit-12", code: "Visit 12 · Wk 48", targetDate: "Target 14 Jun 2027", status: "upcoming", statusLabel: "Upcoming", testsCompleted: 0, totalTests: 7, summary: "7 assessments scheduled", secondaryLabel: "Reschedule" },
-        ];
-    }, [isCalprotectinDone, isVisit5Complete]);
-
     const patientsQuery = trpc.patients.listByTrial.useQuery(
         { trialId, demoMode: currentDataMode },
         { enabled: Boolean(trialId) }
@@ -114,27 +95,37 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
         },
     });
 
+    // ── Dynamic patient computation with unique details per patient ID ────────
     const patient = useMemo(() => {
         if (patientsQuery.data && patientsQuery.data.length > 0) {
-            const found = patientsQuery.data.find((p) => p.patient_id === patientId || p.patient_code === patientId);
+            const found = patientsQuery.data.find(
+                (p) => p.patient_id === patientId || p.patient_code === patientId || String(p.id) === patientId
+            );
             if (found) return found;
         }
-        // Fallback demo patient matching Figma spec (PAT-08385 / John Doe)
+        // Dynamic fallback so every patient workspace shows distinct details
+        const cleanId = patientId || "PAT-08385";
+        const numHash = cleanId.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const firstNames = ["John", "Sarah", "Michael", "Elena", "David", "Emma", "Robert", "Maria"];
+        const lastNames = ["Doe", "Smith", "Johnson", "Vargas", "Chen", "Taylor", "Miller", "Garcia"];
+        const firstName = firstNames[numHash % firstNames.length];
+        const lastName = lastNames[(numHash * 3) % lastNames.length];
+
         return {
-            id: 1,
-            patient_id: patientId || "PAT-08385",
-            patient_code: patientId || "PAT-08385",
-            patient_first_name: "John",
-            patient_last_name: "Doe",
+            id: numHash,
+            patient_id: cleanId,
+            patient_code: cleanId,
+            patient_first_name: firstName,
+            patient_last_name: lastName,
             status: "active",
             trial_id: trialId || "1",
             enrollment_date: "2026-09-21",
-            notes: "Patient tolerating Arm A therapy well. Next visit requires fasting and stool sample collection.",
+            notes: `Participant ${cleanId} tolerating protocol therapy well. Protocol adherence on track.`,
             patient_data: {
                 date_of_birth: "1972-04-12",
-                gender: "male",
-                screening_notes: "Arm A (Sym004 + FOLFIRI) · Site 01",
-                email: "j.doe@example.com",
+                gender: numHash % 2 === 0 ? "male" : "female",
+                screening_notes: `Arm A (Sym004 + FOLFIRI) · Site 0${(numHash % 4) + 1}`,
+                email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`,
                 phone_number: "+1 (555) 234-5678",
                 consent_date: "2026-09-20",
             },
@@ -147,6 +138,142 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
         const completed = visits.filter((v) => v.status === "completed" || v.status === "done").length;
         return { total: visits.length, scheduled, completed };
     }, [visitsQuery.data]);
+
+    // ── Protocol visit schedule — all dates derived from patient's enrollment_date ──
+    const protocolVisits = useMemo(() => {
+        const baselineDate = patient?.enrollment_date
+            ? new Date(patient.enrollment_date)
+            : new Date();
+
+        const addDays = (date: Date, days: number): Date => {
+            const d = new Date(date);
+            d.setDate(d.getDate() + days);
+            return d;
+        };
+
+        const fmtDate = (d: Date) =>
+            d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Week offsets (in days) for each protocol visit
+        const protocolSchedule = [
+            { id: "visit-1", code: "Screening · Wk -2",  wkOffset: -14, totalTests: 8,  label: "Screening" },
+            { id: "visit-2", code: "Baseline · Wk 0",    wkOffset: 0,   totalTests: 11, label: "Baseline" },
+            { id: "visit-3", code: "Visit 3 · Wk 2",     wkOffset: 14,  totalTests: 8,  label: "Visit 3" },
+            { id: "visit-4", code: "Visit 4 · Wk 4",     wkOffset: 28,  totalTests: 10, label: "Visit 4" },
+            { id: "visit-5", code: "Visit 5 · Wk 8",     wkOffset: 56,  totalTests: 14, label: "Visit 5" },
+            { id: "visit-6", code: "Visit 6 · Wk 12",    wkOffset: 84,  totalTests: 9,  label: "Visit 6" },
+            { id: "visit-7", code: "Visit 7 · Wk 16",    wkOffset: 112, totalTests: 10, label: "Visit 7" },
+            { id: "visit-8", code: "Visit 8 · Wk 20",    wkOffset: 140, totalTests: 7,  label: "Visit 8" },
+            { id: "visit-9", code: "Visit 9 · Wk 24",    wkOffset: 168, totalTests: 9,  label: "Visit 9" },
+            { id: "visit-10", code: "Visit 10 · Wk 32",  wkOffset: 224, totalTests: 7,  label: "Visit 10" },
+            { id: "visit-11", code: "Visit 11 · Wk 40",  wkOffset: 280, totalTests: 9,  label: "Visit 11" },
+            { id: "visit-12", code: "Visit 12 · Wk 48",  wkOffset: 336, totalTests: 7,  label: "Visit 12" },
+        ];
+
+        const targetDates = protocolSchedule.map(v => addDays(baselineDate, v.wkOffset));
+        let nextVisitIdx = targetDates.findIndex(d => d > today);
+        if (nextVisitIdx === -1) nextVisitIdx = protocolSchedule.length;
+
+        return protocolSchedule.map((v, idx) => {
+            const targetDate = targetDates[idx];
+            const isPast = targetDate <= today;
+            const isNext = idx === nextVisitIdx;
+            const isV5 = v.id === "visit-5";
+            const v5Done = isCalprotectinDone || isVisit5Complete;
+            const daysUntil = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+            let status: string;
+            let statusLabel: string;
+            let testsCompleted: number;
+            let progressPct: number;
+            let actionLabel: string | undefined;
+            let actionType: string | undefined;
+            let secondaryLabel: string | undefined;
+            let summary: string | undefined;
+
+            if (isPast && isV5 && !v5Done) {
+                status = "pending";
+                statusLabel = "1 test pending";
+                testsCompleted = 13;
+                progressPct = 92;
+                actionLabel = "Complete tests";
+                actionType = "complete";
+            } else if (isPast || (isV5 && v5Done)) {
+                status = "completed";
+                statusLabel = "Completed";
+                testsCompleted = v.totalTests;
+                progressPct = 100;
+                actionLabel = "View";
+                actionType = "view";
+            } else if (isNext) {
+                status = "next";
+                const dueLabel = daysUntil === 0 ? "Today" : daysUntil === 1 ? "Tomorrow" : `Due in ${daysUntil}d`;
+                statusLabel = `Next · ${dueLabel}`;
+                testsCompleted = 0;
+                progressPct = 0;
+                actionLabel = "Open visit";
+                actionType = "open";
+                secondaryLabel = "Reschedule";
+            } else {
+                status = "upcoming";
+                statusLabel = "Upcoming";
+                testsCompleted = 0;
+                progressPct = 0;
+                summary = `${v.totalTests} assessments scheduled`;
+                secondaryLabel = "Reschedule";
+            }
+
+            const targetDisplay = `Target ${fmtDate(targetDate)}`;
+
+            return {
+                id: v.id,
+                code: v.code,
+                targetDate: targetDisplay,
+                status,
+                statusLabel,
+                testsCompleted,
+                totalTests: v.totalTests,
+                progressPct,
+                actionLabel,
+                actionType,
+                secondaryLabel,
+                summary,
+            };
+        });
+    }, [patient?.enrollment_date, isCalprotectinDone, isVisit5Complete]);
+
+    // ── Derived stats based on protocol visits ────────────────────────────────
+    const completedVisits = protocolVisits.filter(v => v.status === "completed").length;
+    const pendingVisits = protocolVisits.filter(v => v.status === "pending").length;
+    const upcomingVisits = protocolVisits.filter(v => v.status === "upcoming").length;
+    const totalVisits = protocolVisits.length;
+    const visitProgressPct = Math.round((completedVisits / totalVisits) * 100);
+    const hasPendingAssessment = protocolVisits.some(v => v.status === "pending");
+    const nextVisit = protocolVisits.find(v => v.status === "next");
+    const nextVisitLabel = nextVisit ? `${nextVisit.code.split(" · ")[0]} — ${nextVisit.code.split(" · ")[1]}` : "None scheduled";
+    const selectedVisitObj = selectedVisitId ? protocolVisits.find(v => v.id === selectedVisitId) ?? null : null;
+
+    // Compute "week of study" based on enrollment date
+    const enrollmentDateObj = patient?.enrollment_date ? new Date(patient.enrollment_date) : null;
+    const weekOfStudy = enrollmentDateObj
+        ? Math.max(0, Math.round((Date.now() - enrollmentDateObj.getTime()) / (1000 * 60 * 60 * 24 * 7)))
+        : 0;
+
+    // Patient meta display values
+    const initials = `${patient.patient_first_name?.[0] || ""}${patient.patient_last_name?.[0] || ""}`;
+    const enrollmentDate = patient.enrollment_date
+        ? new Date(patient.enrollment_date).toLocaleDateString("en-GB", {
+            day: "2-digit", month: "2-digit", year: "numeric",
+        })
+        : "N/A";
+    const patientAge = patient.patient_data?.date_of_birth
+        ? new Date().getFullYear() - new Date(patient.patient_data.date_of_birth).getFullYear()
+        : null;
+    const patientGender = patient.patient_data?.gender?.charAt(0).toUpperCase() ?? "—";
+    const trialArm = patient.patient_data?.screening_notes || "—";
 
     const handleScheduleVisitSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -188,19 +315,6 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
             </div>
         );
     }
-
-    const initials = `${patient.patient_first_name?.[0] || ""}${patient.patient_last_name?.[0] || ""}`;
-    const enrollmentDate = patient.enrollment_date
-        ? new Date(patient.enrollment_date).toLocaleDateString("en-GB", {
-            day: "2-digit", month: "2-digit", year: "numeric",
-        })
-        : "N/A";
-
-    // Visit progress — total visits from visits data
-    const completedVisits = isVisit5Complete || isCalprotectinDone ? 5 : 4;
-    const totalVisits = 13;
-    const visitProgressPct = Math.round((completedVisits / totalVisits) * 100);
-    const selectedVisitObj = selectedVisitId ? protocolVisits.find(v => v.id === selectedVisitId) || protocolVisits[4] : null;
 
     return (
         <div className="min-h-full bg-gray-50/40 pb-12">
