@@ -35,7 +35,7 @@ interface PatientDetailProps {
     patientId: string;
 }
 
-const TABS = ["Overview", "Visits", "Costs", "Medical", "Documents", "Safety & AEs"] as const;
+const TABS = ["Overview", "Visits", "Costs", "Medical", "Documents", "Messaging", "Safety & AEs"] as const;
 type Tab = (typeof TABS)[number];
 
 export default function PatientDetail({ trialId, patientId }: PatientDetailProps) {
@@ -307,7 +307,8 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                 </div>
             </div>
 
-            {/* ── Pending Alert Banner ─────────────────────────────────────── */}
+            {/* ── Pending Alert Banner (only shown when pending & not in visit detail) ── */}
+            {!isCalprotectinDone && !isVisit5Complete && !selectedVisitId && (
             <div className="px-6 pt-4">
                 <div className="bg-amber-50/90 border border-amber-200/80 rounded-xl px-4 py-3 flex items-center justify-between text-xs text-amber-900 shadow-sm">
                     <div className="flex items-center gap-2.5">
@@ -317,13 +318,14 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                         </span>
                     </div>
                     <button
-                        onClick={() => setActiveTab("Visits")}
+                        onClick={() => { setActiveTab("Visits"); setSelectedVisitId("visit-5"); }}
                         className="font-semibold text-indigo-700 hover:text-indigo-900 hover:underline flex items-center gap-1 shrink-0 ml-4"
                     >
                         View visit &rarr;
                     </button>
                 </div>
             </div>
+            )}
 
             {/* ── Main Dashboard Body ──────────────────────────────────────── */}
             <div className="px-6 pt-4">
@@ -541,6 +543,14 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                         {/* SCENARIO A: SINGLE VISIT DETAIL VIEW (Matching Figma Image 3) */}
                         {selectedVisitId ? (
                             <div className="space-y-5">
+                                {/* Back to visits breadcrumb */}
+                                <button
+                                    onClick={() => setSelectedVisitId(null)}
+                                    className="inline-flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800 font-semibold transition-colors"
+                                >
+                                    <ArrowLeft className="h-4 w-4" /> Back to visits
+                                </button>
+
                                 {/* Sub-header Banner Card for Selected Visit */}
                                 <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -869,7 +879,12 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                             {/* Left: Code & Date */}
                                             <div className="min-w-[200px]">
                                                 <div className="flex items-center gap-2">
-                                                    <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                                                    <span className={`h-2 w-2 rounded-full shrink-0 ${
+                                                        v.status === "completed" ? "bg-emerald-500"
+                                                        : v.status === "pending" ? "bg-amber-500"
+                                                        : v.status === "next" ? "bg-blue-500"
+                                                        : "bg-gray-300"
+                                                    }`} />
                                                     <span className="text-sm font-bold text-gray-950">{v.code}</span>
                                                 </div>
                                                 <p className="text-xs text-gray-400 font-medium ml-4 mt-0.5">{v.targetDate}</p>
@@ -1233,6 +1248,89 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                                     </button>
                                                 </>
                                             )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* MESSAGING TAB (PT - 7 Patient Messaging Hub) */}
+                {activeTab === "Messaging" && (
+                    <div className="space-y-5">
+                        {/* Compose Message Bar */}
+                        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+                            <h3 className="text-sm font-bold text-gray-950 mb-3 flex items-center gap-2">
+                                <MessageCircle className="h-4 w-4 text-indigo-600" />
+                                Send Message
+                            </h3>
+                            <div className="flex gap-3">
+                                <Textarea
+                                    placeholder="Type a message to the patient or care team..."
+                                    className="text-xs border-gray-200 rounded-lg min-h-[70px] flex-1 focus:ring-1 focus:ring-indigo-500"
+                                />
+                                <div className="flex flex-col gap-2 shrink-0">
+                                    <Button
+                                        size="sm"
+                                        onClick={() => toast.success("Message sent to patient via SMS & App!")}
+                                        className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold h-9 px-4 rounded-lg"
+                                    >
+                                        Send to Patient
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => toast.success("Message sent to coordinator!")}
+                                        className="border-gray-200 text-gray-700 text-xs font-semibold h-9 px-4 rounded-lg"
+                                    >
+                                        Send to Team
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Message Thread */}
+                        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                <div>
+                                    <h3 className="text-base font-bold text-gray-950">Message History</h3>
+                                    <p className="text-xs text-gray-400 font-medium mt-0.5">All communications with {patient.patient_first_name} {patient.patient_last_name} and the study team</p>
+                                </div>
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                    5 messages
+                                </span>
+                            </div>
+
+                            <div className="divide-y divide-gray-100">
+                                {[
+                                    { from: "System", role: "Automated Alert", time: "05 Oct 2026, 08:00", msg: "Visit 6 reminder sent to patient: Upcoming visit on 05 Oct at 09:00. Please fast from midnight and bring your stool diary.", type: "alert" },
+                                    { from: patient.patient_first_name + " " + patient.patient_last_name, role: "Patient", time: "03 Oct 2026, 17:32", msg: "Hi, just wanted to confirm my appointment for Thursday. Do I need to bring anything special?", type: "patient" },
+                                    { from: "Dr. S. Connor", role: "Principal Investigator", time: "03 Oct 2026, 18:10", msg: "Yes, please bring your study diary and remember to fast from midnight on Wednesday. The bowel prep instructions were already sent to your app.", type: "team" },
+                                    { from: "S. Patel", role: "Clinical Research Coordinator", time: "29 Sep 2026, 11:00", msg: "Calprotectin sample from Visit 5 has been received by the lab. Results expected within 48–72 hours.", type: "team" },
+                                    { from: "System", role: "Automated Reminder", time: "14 Sep 2026, 09:00", msg: "Bowel prep instructions sent to patient for Visit 5. Study drug diary reminder also sent.", type: "alert" },
+                                ].map((msg, idx) => (
+                                    <div key={idx} className={`px-6 py-4 flex items-start gap-4 hover:bg-gray-50/50 transition-colors ${msg.type === "patient" ? "bg-indigo-50/20" : ""}`}>
+                                        <div className={`h-9 w-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+                                            msg.type === "alert" ? "bg-amber-100 text-amber-700"
+                                            : msg.type === "patient" ? "bg-indigo-100 text-indigo-700"
+                                            : "bg-gray-100 text-gray-700"
+                                        }`}>
+                                            {msg.type === "alert" ? "⚡" : msg.from[0]}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                                                <span className="text-xs font-bold text-gray-950">{msg.from}</span>
+                                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                                    msg.type === "alert" ? "bg-amber-50 text-amber-700 border border-amber-100"
+                                                    : msg.type === "patient" ? "bg-indigo-50 text-indigo-700 border border-indigo-100"
+                                                    : "bg-gray-100 text-gray-600 border border-gray-200"
+                                                }`}>
+                                                    {msg.role}
+                                                </span>
+                                                <span className="text-[11px] text-gray-400 font-medium ml-auto">{msg.time}</span>
+                                            </div>
+                                            <p className="text-xs text-gray-700 font-medium leading-relaxed">{msg.msg}</p>
                                         </div>
                                     </div>
                                 ))}
