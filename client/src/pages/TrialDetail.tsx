@@ -2342,7 +2342,7 @@ export default function TrialDetail() {
                                         <div
                                             key={enrollment.id}
                                             className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/60 transition-colors cursor-pointer"
-                                            onClick={() => setSelectedPatientId(enrollment.patient_id)}
+                                            onClick={() => navigate(`/trial/${trialId}/patient/${enrollment.patient_id}`)}
                                         >
                                             {/* Avatar */}
                                             <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm shrink-0">
@@ -2418,7 +2418,7 @@ export default function TrialDetail() {
                                                 className="shrink-0 text-xs border-gray-200 rounded-lg h-8 px-3"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    setSelectedPatientId(enrollment.patient_id);
+                                                    navigate(`/trial/${trialId}/patient/${enrollment.patient_id}`);
                                                 }}
                                             >
                                                 View Details →
