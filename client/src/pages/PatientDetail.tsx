@@ -20,6 +20,7 @@ import {
     FileText,
     Activity,
     Check,
+    RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +70,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
     const [completedVisitIds, setCompletedVisitIds] = useState<Set<string>>(
         new Set(["visit-1", "visit-2", "visit-3", "visit-4"])
     );
+    const [uncompletedVisitIds, setUncompletedVisitIds] = useState<Set<string>>(new Set());
     const [customVisits, setCustomVisits] = useState<any[]>([]);
 
     const patientsQuery = trpc.patients.listByTrial.useQuery(
@@ -178,7 +180,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
             const isNext = idx === nextVisitIdx;
             const isV5 = v.id === "visit-5";
             const v5Done = isCalprotectinDone || isVisit5Complete;
-            const isCompleted = completedVisitIds.has(v.id) || (isPast && !isV5) || (isV5 && v5Done);
+            const isCompleted = !uncompletedVisitIds.has(v.id) && (completedVisitIds.has(v.id) || (isPast && !isV5) || (isV5 && v5Done));
             const daysUntil = Math.round((targetDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
             let status: string;
@@ -239,7 +241,7 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                 summary,
             };
         });
-    }, [patient?.enrollment_date, isCalprotectinDone, isVisit5Complete, completedVisitIds]);
+    }, [patient?.enrollment_date, isCalprotectinDone, isVisit5Complete, completedVisitIds, uncompletedVisitIds]);
 
     // Combined visits list (user-created custom visits + protocol visits)
     const protocolVisits = useMemo(() => {
@@ -746,20 +748,47 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                             >
                                                 Send reminder
                                             </Button>
-                                            <Button
-                                                size="sm"
-                                                onClick={() => {
-                                                    if (selectedVisitId) {
-                                                        setCompletedVisitIds((prev) => new Set(prev).add(selectedVisitId));
-                                                    }
-                                                    setIsCalprotectinDone(true);
-                                                    setIsVisit5Complete(true);
-                                                    toast.success(`${selectedVisitObj?.code || "Visit"} marked as completed!`);
-                                                }}
-                                                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold h-9 px-4 shadow-sm"
-                                            >
-                                                Mark visit complete
-                                            </Button>
+                                            {selectedVisitObj?.status === "completed" ? (
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        const vId = selectedVisitId || "visit-3";
+                                                        setCompletedVisitIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            next.delete(vId);
+                                                            return next;
+                                                        });
+                                                        setUncompletedVisitIds((prev) => new Set(prev).add(vId));
+                                                        setIsCalprotectinDone(false);
+                                                        setIsVisit5Complete(false);
+                                                        toast.info(`${selectedVisitObj?.code || "Visit"} reopened (completion undone)`);
+                                                    }}
+                                                    className="border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-semibold h-9 px-4 shadow-sm flex items-center gap-1.5"
+                                                >
+                                                    <RotateCcw className="h-3.5 w-3.5 text-amber-700" />
+                                                    Reopen visit (Undo)
+                                                </Button>
+                                            ) : (
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        const vId = selectedVisitId || "visit-3";
+                                                        setUncompletedVisitIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            next.delete(vId);
+                                                            return next;
+                                                        });
+                                                        setCompletedVisitIds((prev) => new Set(prev).add(vId));
+                                                        setIsCalprotectinDone(true);
+                                                        setIsVisit5Complete(true);
+                                                        toast.success(`${selectedVisitObj?.code || "Visit"} marked as completed!`);
+                                                    }}
+                                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold h-9 px-4 shadow-sm"
+                                                >
+                                                    Mark visit complete
+                                                </Button>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
@@ -775,16 +804,44 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                                     {isCalprotectinDone || isVisit5Complete ? "14 of 14 complete" : "13 of 14 complete"}
                                                 </p>
                                             </div>
-                                            <button
-                                                onClick={() => {
-                                                    setIsCalprotectinDone(true);
-                                                    setIsVisit5Complete(true);
-                                                    toast.success("All assessments marked as done!");
-                                                }}
-                                                className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:underline"
-                                            >
-                                                Mark all done
-                                            </button>
+                                            {isCalprotectinDone || isVisit5Complete || selectedVisitObj?.status === "completed" ? (
+                                                <button
+                                                    onClick={() => {
+                                                        const vId = selectedVisitId || "visit-3";
+                                                        setCompletedVisitIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            next.delete(vId);
+                                                            return next;
+                                                        });
+                                                        setUncompletedVisitIds((prev) => new Set(prev).add(vId));
+                                                        setIsCalprotectinDone(false);
+                                                        setIsVisit5Complete(false);
+                                                        toast.info("Assessments reverted to pending!");
+                                                    }}
+                                                    className="text-xs font-semibold text-amber-600 hover:text-amber-800 hover:underline flex items-center gap-1"
+                                                >
+                                                    <RotateCcw className="h-3 w-3" />
+                                                    Revert to pending (Undo)
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={() => {
+                                                        const vId = selectedVisitId || "visit-3";
+                                                        setUncompletedVisitIds((prev) => {
+                                                            const next = new Set(prev);
+                                                            next.delete(vId);
+                                                            return next;
+                                                        });
+                                                        setCompletedVisitIds((prev) => new Set(prev).add(vId));
+                                                        setIsCalprotectinDone(true);
+                                                        setIsVisit5Complete(true);
+                                                        toast.success("All assessments marked as done!");
+                                                    }}
+                                                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:underline"
+                                                >
+                                                    Mark all done
+                                                </button>
+                                            )}
                                         </div>
 
                                         {/* Overall Progress Bar */}
@@ -863,12 +920,33 @@ export default function PatientDetail({ trialId, patientId }: PatientDetailProps
                                                                         {item.status}
                                                                     </span>
                                                                     {isDone ? (
-                                                                        <button
-                                                                            onClick={() => toast.info(`Viewing ${item.name} record (${fecalCalprotectinValue})`)}
-                                                                            className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
-                                                                        >
-                                                                            View
-                                                                        </button>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <button
+                                                                                onClick={() => toast.info(`Viewing ${item.name} record (${fecalCalprotectinValue})`)}
+                                                                                className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+                                                                            >
+                                                                                View
+                                                                            </button>
+                                                                            {item.name === "Fecal Calprotectin" && (
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        const vId = selectedVisitId || "visit-3";
+                                                                                        setCompletedVisitIds((prev) => {
+                                                                                            const next = new Set(prev);
+                                                                                            next.delete(vId);
+                                                                                            return next;
+                                                                                        });
+                                                                                        setUncompletedVisitIds((prev) => new Set(prev).add(vId));
+                                                                                        setIsCalprotectinDone(false);
+                                                                                        setIsVisit5Complete(false);
+                                                                                        toast.info(`${item.name} marked as pending.`);
+                                                                                    }}
+                                                                                    className="text-xs font-semibold text-amber-600 hover:text-amber-800 hover:underline"
+                                                                                >
+                                                                                    Undo
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
                                                                     ) : (
                                                                         <button
                                                                             onClick={() => setIsEnterResultDialogOpen(true)}
