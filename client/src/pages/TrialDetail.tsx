@@ -102,7 +102,7 @@ const SETUP_TASK_CATEGORY_OPTIONS: TaskCategory[] = [
     "regulatory",
     "custom",
 ];
-const PATIENT_TABS = ["Overview", "Visits", "Costs", "Medical", "Documents"] as const;
+const PATIENT_TABS = ["Overview", "Visits", "Expenses", "Medical", "Documents"] as const;
 const SETUP_ASSIGNED_ROLE_OPTIONS = [
     "pi",
     "sub_i",
@@ -240,7 +240,7 @@ export default function TrialDetail() {
     const [setupDependencyTaskIds, setSetupDependencyTaskIds] = useState<string[]>([]);
     const [isLaunchingExecutionMap, setIsLaunchingExecutionMap] = useState(false);
     const [patientStatusFilter, setPatientStatusFilter] = useState("all");
-    const [patientActiveTab, setPatientActiveTab] = useState<"Overview" | "Visits" | "Costs" | "Medical" | "Documents">("Overview");
+    const [patientActiveTab, setPatientActiveTab] = useState<"Overview" | "Visits" | "Expenses" | "Medical" | "Documents">("Overview");
 
     // Patient and Visit Management States
     const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
@@ -2342,7 +2342,7 @@ export default function TrialDetail() {
                                         <div
                                             key={enrollment.id}
                                             className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50/60 transition-colors cursor-pointer"
-                                            onClick={() => setSelectedPatientId(enrollment.patient_id)}
+                                            onClick={() => navigate(`/trial/${trialId}/patient/${enrollment.patient_id}`)}
                                         >
                                             {/* Avatar */}
                                             <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-semibold text-sm shrink-0">
@@ -2418,7 +2418,7 @@ export default function TrialDetail() {
                                                 className="shrink-0 text-xs border-gray-200 rounded-lg h-8 px-3"
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    setSelectedPatientId(enrollment.patient_id);
+                                                    navigate(`/trial/${trialId}/patient/${enrollment.patient_id}`);
                                                 }}
                                             >
                                                 View Details →
@@ -2675,7 +2675,7 @@ export default function TrialDetail() {
                                             </div>
                                         )}
 
-                                        {(patientActiveTab === "Costs" || patientActiveTab === "Medical" || patientActiveTab === "Documents") && (
+                                        {(patientActiveTab === "Expenses" || patientActiveTab === "Medical" || patientActiveTab === "Documents") && (
                                             <div className="py-12 text-center text-sm text-gray-400">
                                                 {patientActiveTab} data will appear here once configured.
                                             </div>
